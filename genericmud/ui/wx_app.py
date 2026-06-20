@@ -87,15 +87,19 @@ class SessionPanel(wx.Panel):
         self._history: list[str] = []
         self._hist_index = 0
 
-        self.output = wx.TextCtrl(
-            self, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_DONTWRAP | wx.TE_RICH2
-        )
+        # NVDA reads a control's name from a wx.StaticText created immediately
+        # before it plus SetName() (the proven ffn-dl pattern). Both are required.
+        output_label = wx.StaticText(self, label="&Output:")
+        self.output = wx.TextCtrl(self, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_DONTWRAP)
         self.output.SetName(f"{world.name} output")
+        input_label = wx.StaticText(self, label="&Command:")
         self.input = wx.TextCtrl(self, style=wx.TE_PROCESS_ENTER)
         self.input.SetName(f"{world.name} command")
 
         sizer = wx.BoxSizer(wx.VERTICAL)
+        sizer.Add(output_label, 0, wx.LEFT | wx.TOP, 2)
         sizer.Add(self.output, 1, wx.EXPAND | wx.ALL, 2)
+        sizer.Add(input_label, 0, wx.LEFT, 2)
         sizer.Add(self.input, 0, wx.EXPAND | wx.ALL, 2)
         self.SetSizer(sizer)
 
@@ -197,9 +201,9 @@ class ConnectDialog(wx.Dialog):
         self._choice.SetName("Saved worlds")
         self._choice.SetSelection(0)
         self._choice.Bind(wx.EVT_CHOICE, self._on_pick)
-        self._name = self._field()
-        self._host = self._field()
-        self._port = self._field("4000")
+        self._name = self._field("", "World name")
+        self._host = self._field("", "Host")
+        self._port = self._field("4000", "Port")
         self._tls = wx.CheckBox(self)
         self._tls.SetName("Use TLS")
         self._save = wx.CheckBox(self)
@@ -221,8 +225,11 @@ class ConnectDialog(wx.Dialog):
         sizer.Add(self.CreateButtonSizer(wx.OK | wx.CANCEL), 0, wx.EXPAND | wx.ALL, 8)
         self.SetSizerAndFit(sizer)
 
-    def _field(self, value: str = "") -> wx.TextCtrl:
-        return wx.TextCtrl(self, value=value)
+    def _field(self, value: str = "", name: str = "") -> wx.TextCtrl:
+        ctrl = wx.TextCtrl(self, value=value)
+        if name:
+            ctrl.SetName(name)
+        return ctrl
 
     def _on_pick(self, _event: wx.CommandEvent) -> None:
         index = self._choice.GetSelection() - 1
@@ -263,10 +270,18 @@ class GenericMudFrame(wx.Frame):
         file_menu.AppendSeparator()
         quit_item = file_menu.Append(wx.ID_EXIT, "E&xit\tCtrl+Q")
         menubar.Append(file_menu, "&File")
+
+        view_menu = wx.Menu()
+        self._self_voice_item = view_menu.AppendCheckItem(wx.ID_ANY, "Self-&voice\tCtrl+M")
+        self._self_voice_item.Check(True)
+        self._self_voice = True
+        menubar.Append(view_menu, "&View")
+
         self.SetMenuBar(menubar)
         self.Bind(wx.EVT_MENU, self._on_connect, connect_item)
         self.Bind(wx.EVT_MENU, self._on_close_tab, close_item)
         self.Bind(wx.EVT_MENU, lambda _e: self.Close(), quit_item)
+        self.Bind(wx.EVT_MENU, self._on_toggle_self_voice, self._self_voice_item)
 
         self.notebook = wx.Notebook(self)
         self.notebook.Bind(wx.EVT_NOTEBOOK_PAGE_CHANGED, lambda _e: self._update_active())
@@ -294,10 +309,14 @@ class GenericMudFrame(wx.Frame):
             self.notebook.DeletePage(index)
             self._update_active()
 
+    def _on_toggle_self_voice(self, _event: wx.CommandEvent) -> None:
+        self._self_voice = self._self_voice_item.IsChecked()
+        self._update_active()
+
     def _update_active(self) -> None:
         selected = self.notebook.GetSelection()
         for i in range(self.notebook.GetPageCount()):
-            self.notebook.GetPage(i).set_active(i == selected)
+            self.notebook.GetPage(i).set_active(i == selected and self._self_voice)
 
 
 def run(args) -> None:
