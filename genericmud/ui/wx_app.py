@@ -196,39 +196,44 @@ class ConnectDialog(wx.Dialog):
         super().__init__(parent, title="Connect to a MUD")
         self._saved = saved
         grid = wx.FlexGridSizer(0, 2, 6, 6)
+        grid.AddGrowableCol(1)
 
+        # Each StaticText is created (and added) immediately before its control so the
+        # label precedes the control in z-order -- the association NVDA reads on
+        # Windows. Checkboxes carry their own label= as the accessible name.
+        grid.Add(wx.StaticText(self, label="&Saved world:"), 0, wx.ALIGN_CENTER_VERTICAL)
         self._choice = wx.Choice(self, choices=["(new)"] + [w.name for w in saved])
-        self._choice.SetName("Saved worlds")
+        self._choice.SetName("Saved world")
         self._choice.SetSelection(0)
         self._choice.Bind(wx.EVT_CHOICE, self._on_pick)
-        self._name = self._field("", "World name")
-        self._host = self._field("", "Host")
-        self._port = self._field("4000", "Port")
-        self._tls = wx.CheckBox(self)
-        self._tls.SetName("Use TLS")
-        self._save = wx.CheckBox(self)
-        self._save.SetName("Save this world")
+        grid.Add(self._choice, 1, wx.EXPAND)
 
-        for label, ctrl in [
-            ("Saved", self._choice),
-            ("Name", self._name),
-            ("Host", self._host),
-            ("Port", self._port),
-            ("TLS", self._tls),
-            ("Save", self._save),
-        ]:
-            grid.Add(wx.StaticText(self, label=label), 0, wx.ALIGN_CENTER_VERTICAL)
-            grid.Add(ctrl, 1, wx.EXPAND)
+        self._name = self._labeled_text(grid, "&Name:", "Name")
+        self._host = self._labeled_text(grid, "&Host:", "Host")
+        self._port = self._labeled_text(grid, "&Port:", "Port", "4000")
+
+        grid.Add((0, 0))
+        self._tls = wx.CheckBox(self, label="Use &TLS")
+        self._tls.SetName("Use TLS")
+        grid.Add(self._tls, 1, wx.EXPAND)
+
+        grid.Add((0, 0))
+        self._save = wx.CheckBox(self, label="Sa&ve this world")
+        self._save.SetName("Save this world")
+        grid.Add(self._save, 1, wx.EXPAND)
 
         sizer = wx.BoxSizer(wx.VERTICAL)
         sizer.Add(grid, 1, wx.EXPAND | wx.ALL, 8)
         sizer.Add(self.CreateButtonSizer(wx.OK | wx.CANCEL), 0, wx.EXPAND | wx.ALL, 8)
         self.SetSizerAndFit(sizer)
 
-    def _field(self, value: str = "", name: str = "") -> wx.TextCtrl:
+    def _labeled_text(
+        self, grid: wx.FlexGridSizer, label: str, name: str, value: str = ""
+    ) -> wx.TextCtrl:
+        grid.Add(wx.StaticText(self, label=label), 0, wx.ALIGN_CENTER_VERTICAL)
         ctrl = wx.TextCtrl(self, value=value)
-        if name:
-            ctrl.SetName(name)
+        ctrl.SetName(name)
+        grid.Add(ctrl, 1, wx.EXPAND)
         return ctrl
 
     def _on_pick(self, _event: wx.CommandEvent) -> None:
