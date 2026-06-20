@@ -12,6 +12,7 @@ pyinstaller --onefile --name genericMud --console ^
   --add-data "frontend;frontend" ^
   --add-data "genericmud\config\keymaps;genericmud\config\keymaps" ^
   --collect-all webview ^
+  --collect-all accessible_output2 ^
   --hidden-import lupa --hidden-import websockets ^
   --hidden-import win32com.client --hidden-import pythoncom ^
   run_genericmud.py

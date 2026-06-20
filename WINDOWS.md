@@ -28,10 +28,11 @@ Run it from a terminal so you can pass the world: `genericMud.exe host 4000`.
 
 ## Voice
 
-- Speaks via **SAPI5** out of the box (no setup).
-- For your **NVDA voice** instead, drop `nvdaControllerClient.dll` (from the NVDA
-  Controller Client package, 64-bit) next to the exe / in the project folder.
-  The app prefers NVDA when the DLL is present, else SAPI5.
+- Streaming output is spoken through **your running screen reader** — NVDA speaks it
+  in your own voice and settings (via accessible_output2; no DLL to place). It falls
+  back to SAPI5 only if no screen reader is running.
+- **Ctrl+M** toggles self-voice off, so you can read the output with NVDA directly
+  (Tab to the output box, arrow / say-line) instead.
 
 ## Known gaps (this is an early test build)
 

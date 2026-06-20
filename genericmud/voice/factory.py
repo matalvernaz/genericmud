@@ -1,7 +1,8 @@
-"""Pick the best available self-voice backend for the platform.
+"""Pick the best available self-voice backend.
 
-Order on Windows: the user's NVDA (Controller Client) > SAPI5 > console print.
-Constructed on the thread that will use it (SAPI is COM, apartment-bound).
+Order: accessible_output2 (routes to the running screen reader — NVDA speaks in the
+user's own voice/settings) > SAPI5 > console print. Constructed on the thread that
+uses it (SAPI is COM, apartment-bound).
 """
 
 from __future__ import annotations
@@ -20,13 +21,15 @@ class PrintBackend(VoiceBackend):
 
 
 def make_voice_backend() -> VoiceBackend:
-    if sys.platform == "win32":
-        try:
-            from genericmud.voice.backends.nvda import NvdaBackend
+    # accessible_output2 routes to the running screen reader (NVDA → the user's own
+    # voice) and bundles the controller DLLs, so it's preferred over raw SAPI.
+    try:
+        from genericmud.voice.backends.ao2 import Ao2Backend
 
-            return NvdaBackend()
-        except Exception:  # DLL absent / NVDA not running
-            pass
+        return Ao2Backend()
+    except Exception:
+        pass
+    if sys.platform == "win32":
         try:
             from genericmud.voice.backends.sapi import SapiBackend
 
