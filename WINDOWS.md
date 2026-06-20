@@ -11,6 +11,7 @@ Double-click **`run.bat`**, or from a terminal:
 run.bat                 :: connects to 127.0.0.1:4000
 run.bat mud.example.com 4000
 run.bat mud.example.com 4000 --tls
+run.bat mud.example.com 4000 --sounds C:\path\to\sounds
 ```
 
 It creates a venv, installs deps, and launches the window. First run takes a
@@ -35,8 +36,10 @@ Run it from a terminal so you can pass the world: `genericMud.exe host 4000`.
 
 ## Known gaps (this is an early test build)
 
-- **Soundpack audio isn't wired yet** — triggers, gags, speech, review, and
-  status work; sound files won't play until the sound-serving route is added.
+- **Sound:** MSP/server-driven sounds now play — pass `--sounds <dir>` at your
+  sound files. Full script-based pack import is partial: VIPMud `.set` packs load
+  but advanced commands (`#if`/`#math`/`#alarm`) don't run yet; flagship MUSHclient
+  packs don't import (they're full MUSHclient apps).
 - **Unverified on Windows** — first real run may surface issues with the
   WebView2 window or key passthrough; report what NVDA does and I'll adjust.
 - No settings/connect UI yet: pass the world on the command line.

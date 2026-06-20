@@ -43,3 +43,17 @@ def test_missing_file_is_404():
             assert error.code == 404
     finally:
         server.shutdown()
+
+
+def test_serves_sound_from_sound_root(tmp_path):
+    sounds = tmp_path / "snd"
+    sounds.mkdir()
+    (sounds / "hit.ogg").write_bytes(b"OGGDATA")
+    server = serve_static(str(resource_root() / "frontend"), port=0, sound_root=str(sounds))
+    try:
+        _host, port = server.server_address
+        with _get(f"http://127.0.0.1:{port}", "/sounds/hit.ogg") as response:
+            assert response.status == 200
+            assert response.read() == b"OGGDATA"
+    finally:
+        server.shutdown()

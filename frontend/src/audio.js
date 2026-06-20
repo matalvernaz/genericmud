@@ -9,9 +9,14 @@ export class Audio {
     this.channels = new Map();
   }
 
+  _soundUrl(file) {
+    // Sounds are served by the engine's static server under /sounds/.
+    return "/sounds/" + file.split("/").map(encodeURIComponent).join("/");
+  }
+
   async _load(file) {
     if (this.buffers.has(file)) return this.buffers.get(file);
-    const response = await fetch(file);
+    const response = await fetch(this._soundUrl(file));
     const bytes = await response.arrayBuffer();
     const buffer = await this.ctx.decodeAudioData(bytes);
     this.buffers.set(file, buffer);

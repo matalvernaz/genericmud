@@ -15,6 +15,7 @@ from genericmud.automation.engine import AutomationEngine, EngineSink
 from genericmud.bridge import protocol
 from genericmud.model.buffer import Buffer, Line
 from genericmud.protocol import telnet as T
+from genericmud.protocol.msp import parse_msp_line
 from genericmud.protocol.oob import OobMessage, ServerStatus, from_subnegotiation
 from genericmud.review.cursor import ReviewCursor
 from genericmud.voice.router import VoiceRouter
@@ -122,6 +123,14 @@ class EngineApp:
             self._pending = ""
 
     def _emit_line(self, text: str) -> None:
+        text, cues = parse_msp_line(text)
+        for cue in cues:
+            if cue.kind == "music":
+                self._post(protocol.music(cue.file))
+            else:
+                self._post(protocol.sound(cue.file, gain=cue.volume / 100.0))
+        if cues and not text.strip():
+            return  # MSP-only line: play the sounds, nothing to show or speak
         line = Line(text)
         self.engine.process_line(line)
         if not line.gagged:

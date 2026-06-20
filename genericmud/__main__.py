@@ -57,6 +57,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("host", nargs="?", default="127.0.0.1")
     parser.add_argument("port", nargs="?", type=int, default=4000)
     parser.add_argument("--tls", action="store_true")
+    parser.add_argument("--sounds", default=None, help="directory of sound files (MSP/soundpacks)")
     return parser.parse_args(argv)
 
 
@@ -100,7 +101,7 @@ def main(argv: list[str] | None = None) -> None:
     frontend_dir = resource_root() / "frontend"
     if not (frontend_dir / "index.html").is_file():
         print(f"frontend not found at {frontend_dir}", file=sys.stderr)
-    serve_static(str(frontend_dir))
+    serve_static(str(frontend_dir), sound_root=args.sounds)
     webview.create_window("genericMud", url=f"http://{STATIC_HOST}:{STATIC_PORT}/index.html")
     webview.start()
 

@@ -67,3 +67,13 @@ def test_gmcp_subnegotiation_posts_status():
     app, _backend, _sent, posted = _app()
     app.on_telnet_event(Subnegotiation(OPT_GMCP, b'Char.Vitals {"hp":42}'))
     assert any(m["type"] == "status" for m in posted)
+
+
+def test_msp_line_emits_sound_and_strips_tag():
+    app, backend, _sent, posted = _app()
+    app.on_telnet_event(DataReceived(b"A thud !!SOUND(hit.wav V=80)\r\n"))
+    sounds = [m for m in posted if m["type"] == "sound"]
+    assert sounds and sounds[0]["file"] == "hit.wav"
+    assert abs(sounds[0]["gain"] - 0.8) < 1e-9
+    # the !!SOUND tag is stripped from what gets spoken/displayed
+    assert any("A thud" in s and "!!SOUND" not in s for s in backend.spoken)
