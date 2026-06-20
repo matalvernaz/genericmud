@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "genericmud"
+version = "0.1.0.dev0"
+description = "Accessible, cross-platform, self-voicing MUD client"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+authors = [{ name = "Matt Alvernaz" }]
+
+# The engine core (transport, protocol, automation, model) is pure stdlib.
+# Native voice and the webview shell are optional extras so the headless
+# engine and its test suite install and run anywhere, including CI.
+dependencies = []
+
+[project.optional-dependencies]
+# localhost engine<->renderer bridge + webview shell
+gui = [
+  "websockets>=12",
+  "pywebview>=5",
+]
+# self-voicing backends; platform-specific wheels resolve per-OS
+voice = [
+  "accessible_output2>=0.16; platform_system == 'Windows' or platform_system == 'Darwin'",
+  "pywin32>=306; platform_system == 'Windows'",  # SAPI5 fallback voice
+]
+# standalone .exe packaging (run on Windows)
+package = [
+  "pyinstaller>=6",
+]
+dev = [
+  "pytest>=8",
+  "pytest-asyncio>=0.23",
+  "ruff>=0.5",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

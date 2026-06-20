@@ -1,0 +1,28 @@
+# VIPMud-familiar keymap. The frontend sends combos like "ctrl+1", "alt+up", "f11".
+# Ctrl+1-9 recall (the last nine messages) matches VIPMud. Line/word/char review on
+# Alt+arrows is a genericMud enhancement — VIPMud has only the 9-message recall.
+# Rebind freely after testing against NVDA on Windows.
+
+[keys]
+"ctrl+1" = "recall:1"
+"ctrl+2" = "recall:2"
+"ctrl+3" = "recall:3"
+"ctrl+4" = "recall:4"
+"ctrl+5" = "recall:5"
+"ctrl+6" = "recall:6"
+"ctrl+7" = "recall:7"
+"ctrl+8" = "recall:8"
+"ctrl+9" = "recall:9"
+
+"alt+up" = "review:prev_line"
+"alt+down" = "review:next_line"
+"alt+left" = "review:prev_word"
+"alt+right" = "review:next_word"
+"alt+shift+left" = "review:prev_char"
+"alt+shift+right" = "review:next_char"
+"alt+home" = "review:top"
+"alt+end" = "review:bottom"
+
+"f11" = "voice:flush"
+"escape" = "voice:flush"
+"shift+f1" = "soundpack:toggle"

@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>genericMud</title>
+  <link rel="stylesheet" href="src/style.css">
+</head>
+<body>
+  <header><h1>genericMud</h1></header>
+  <main>
+    <!-- Status / gauges (GMCP/MSDP driven). role=meter children, read on demand. -->
+    <section id="status" class="status" aria-label="Status"></section>
+
+    <!-- Output: visual scrollback only. aria-live is OFF by design — the engine
+         self-voices through NVDA, so the screen reader must not also read this.
+         Review (arrows/Ctrl+1-9) is handled engine-side and spoken natively. -->
+    <section class="output-wrap" aria-label="Output">
+      <div id="output" role="log" aria-live="off" tabindex="0" aria-label="MUD output"></div>
+    </section>
+
+    <form id="input-form" class="input-row">
+      <label for="input" class="visually-hidden">Command</label>
+      <input id="input" type="text" autocomplete="off" autocapitalize="off"
+             autocorrect="off" spellcheck="false" aria-label="Command input">
+    </form>
+  </main>
+
+  <!-- Used for connection/system notices and passthrough mode. -->
+  <div id="sr-announce" class="visually-hidden" aria-live="polite"></div>
+
+  <script type="module" src="src/app.js"></script>
+</body>
+</html>

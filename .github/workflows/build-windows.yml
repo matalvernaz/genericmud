@@ -1,0 +1,35 @@
+name: build-windows
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install
+        run: pip install ".[gui,voice,package,dev]"
+      - name: Test
+        run: python -m pytest -q
+      - name: Build exe
+        run: >
+          pyinstaller --onefile --name genericMud --console
+          --add-data "frontend;frontend"
+          --add-data "genericmud/config/keymaps;genericmud/config/keymaps"
+          --collect-all webview
+          --hidden-import lupa --hidden-import websockets
+          --hidden-import win32com.client --hidden-import pythoncom
+          run_genericmud.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: genericMud-windows
+          path: dist/genericMud.exe
