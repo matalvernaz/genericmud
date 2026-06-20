@@ -18,6 +18,7 @@ import threading
 
 from genericmud.app import EngineApp
 from genericmud.bridge import protocol
+from genericmud.bridge.static_server import STATIC_HOST, STATIC_PORT, serve_static
 from genericmud.bridge.ws_server import DEFAULT_PORT, WsBridge
 from genericmud.config.keymap import load_keymap
 from genericmud.resources import resource_root
@@ -96,9 +97,11 @@ def main(argv: list[str] | None = None) -> None:
     threading.Thread(target=run_loop, daemon=True).start()
     ready.wait(timeout=10)
 
-    index = resource_root() / "frontend" / "index.html"
-    url = f"{index.as_uri()}?port={DEFAULT_PORT}"
-    webview.create_window("genericMud", url=url)
+    frontend_dir = resource_root() / "frontend"
+    if not (frontend_dir / "index.html").is_file():
+        print(f"frontend not found at {frontend_dir}", file=sys.stderr)
+    serve_static(str(frontend_dir))
+    webview.create_window("genericMud", url=f"http://{STATIC_HOST}:{STATIC_PORT}/index.html")
     webview.start()
 
 
