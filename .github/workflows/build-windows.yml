@@ -3,10 +3,11 @@ name: build-windows
 on:
   push:
     branches: [ main ]
+    tags: [ 'v*' ]
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write  # needed to publish releases on tags
 
 jobs:
   windows:
@@ -33,3 +34,16 @@ jobs:
         with:
           name: genericMud-windows
           path: dist/genericMud.exe
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" dist/genericMud.exe \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "genericMud $TAG" \
+            --prerelease \
+            --notes "Automated build. Console app: \`genericMud.exe <host> <port> [--tls]\`. Self-voices via SAPI5; drop nvdaControllerClient.dll beside it for the NVDA voice. Early test build — soundpack audio not wired yet, Windows UI unverified." \
+          || gh release upload "$TAG" dist/genericMud.exe --repo "$GITHUB_REPOSITORY" --clobber
