@@ -8,19 +8,18 @@ cross-compile, and the native deps are Windows-only). Build/run it on Windows.
 Double-click **`run.bat`**, or from a terminal:
 
 ```bat
-run.bat                 :: connects to 127.0.0.1:4000
-run.bat mud.example.com 4000
+run.bat                              :: native UI, no auto-connect (File > Connect / Ctrl+N)
+run.bat mud.example.com 4000         :: auto-connect a tab
 run.bat mud.example.com 4000 --tls
-run.bat mud.example.com 4000 --sounds C:\path\to\sounds
+run.bat mud.example.com 4000 --web   :: old web UI instead of native
 ```
 
 It creates a venv, installs deps, and launches the window. First run takes a
-minute (downloads wheels: lupa, pywebview, websockets, pywin32).
+minute (downloads wheels: wxPython, lupa, pywin32, ...).
 
 Requirements:
 - **Python 3.12+** (`py` launcher or `python` on PATH).
-- **Microsoft Edge WebView2 Runtime** — preinstalled on current Windows 10/11;
-  if missing, get the Evergreen runtime from Microsoft.
+- The native UI needs nothing extra. The WebView2 Runtime only matters for `--web`.
 
 ## Make a standalone .exe
 
@@ -36,18 +35,20 @@ Run it from a terminal so you can pass the world: `genericMud.exe host 4000`.
 
 ## Known gaps (this is an early test build)
 
-- **Sound:** MSP/server-driven sounds now play — pass `--sounds <dir>` at your
-  sound files. Full script-based pack import is partial: VIPMud `.set` packs load
-  but advanced commands (`#if`/`#math`/`#alarm`) don't run yet; flagship MUSHclient
-  packs don't import (they're full MUSHclient apps).
-- **Unverified on Windows** — first real run may surface issues with the
-  WebView2 window or key passthrough; report what NVDA does and I'll adjust.
-- No settings/connect UI yet: pass the world on the command line.
+- **Native UI is build-blind** — first run may surface wx/threading issues;
+  tell me what NVDA does and I'll fix.
+- **Sound effects:** not wired in the native UI yet. The `--web` UI plays MSP
+  sounds via `--sounds <dir>`; native audio is the next step.
+- **Script packs:** VIPMud `.set` packs load but advanced commands
+  (`#if`/`#math`/`#alarm`) don't run yet; flagship MUSHclient packs don't import.
 
-## Keys (VIPMud-familiar)
+## Keys (native UI)
 
-- Type a command, **Enter** to send. **Up/Down** = command history.
-- **Ctrl+1..9** = recall the last nine messages.
-- **Alt+Up/Down** = previous/next line; **Alt+Left/Right** = word;
-  **Alt+Shift+Left/Right** = character; **Alt+Home/End** = top/bottom.
-- **F11** or **Esc** = stop/flush speech.
+- **Tab / Shift+Tab** move between the output box and the command box. In the
+  output box, read with NVDA as usual (arrows, say-line, say-all); start typing
+  and you jump straight to the command box.
+- **Enter** sends; **Up/Down** = command history.
+- **Ctrl+N** connect (with saved worlds); **Ctrl+W** close the current MUD tab;
+  each MUD is its own tab (**Ctrl+PageUp/PageDown** to switch).
+- **Ctrl+1..9** recall recent messages; **Alt+arrows** review by line/word/char.
+- **F11** / **Esc** stop speech.

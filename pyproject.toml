@@ -21,8 +21,9 @@ dependencies = [
 [project.optional-dependencies]
 # localhost engine<->renderer bridge + webview shell
 gui = [
-  "websockets>=12",
-  "pywebview>=5",
+  "wxPython>=4.2",       # native UI (default)
+  "websockets>=12",      # web UI bridge (--web)
+  "pywebview>=5",        # web UI shell (--web)
 ]
 # self-voicing backends; platform-specific wheels resolve per-OS
 voice = [
