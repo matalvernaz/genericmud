@@ -67,6 +67,10 @@ def _key_combo(event: wx.KeyEvent) -> str | None:
     return "+".join(mods + [name])
 
 
+_OUTPUT_CAP_LINES = 5000  # keep the native control bounded so NVDA/UIA stays responsive
+_FLUSH_INTERVAL_MS = 50  # batch output appends during floods
+
+
 class SessionPanel(wx.Panel):
     """One MUD: read-only output + command input, wired to its own engine."""
 
@@ -86,6 +90,9 @@ class SessionPanel(wx.Panel):
         self._voice: VoiceRouter | None = None
         self._history: list[str] = []
         self._hist_index = 0
+        self._alive = True
+        self._pending: list[str] = []
+        self._flush_scheduled = False
 
         # NVDA reads a control's name from a wx.StaticText created immediately
         # before it plus SetName() (the proven ffn-dl pattern). Both are required.
@@ -136,17 +143,38 @@ class SessionPanel(wx.Panel):
             pass
 
     def _post(self, message: dict) -> None:
-        wx.CallAfter(self._handle_message, message)
+        if self._alive:
+            wx.CallAfter(self._handle_message, message)
 
     # --- UI updates (main thread) ---
 
     def _handle_message(self, message: dict) -> None:
+        if not self._alive:
+            return
         kind = message.get("type")
         if kind in (protocol.LINE, protocol.ECHO):
             if message.get("gagged") and not message.get("display_when_gagged"):
                 return
-            self.output.AppendText(message["text"] + "\n")
+            self._pending.append(message["text"])
+            if not self._flush_scheduled:
+                self._flush_scheduled = True
+                wx.CallLater(_FLUSH_INTERVAL_MS, self._flush_output)
         # Sound/status messages are ignored here for now (native SFX is a follow-up).
+
+    def _flush_output(self) -> None:
+        self._flush_scheduled = False
+        if not self._alive or not self._pending:
+            return
+        self.output.AppendText("\n".join(self._pending) + "\n")
+        self._pending.clear()
+        self._trim_output()
+
+    def _trim_output(self) -> None:
+        excess = self.output.GetNumberOfLines() - _OUTPUT_CAP_LINES
+        if excess > 0:
+            end = self.output.XYToPosition(0, excess)
+            if end > 0:
+                self.output.Remove(0, end)
 
     def _on_send(self, _event: wx.CommandEvent) -> None:
         text = self.input.GetValue()
@@ -185,10 +213,31 @@ class SessionPanel(wx.Panel):
         value = self._history[self._hist_index] if self._hist_index < len(self._history) else ""
         self.input.SetValue(value)
         self.input.SetInsertionPointEnd()
+        # NVDA doesn't announce a programmatic SetValue, so speak the recalled command.
+        if value:
+            self._loop.call_soon_threadsafe(self._speak_system, value)
+
+    def _speak_system(self, text: str) -> None:  # loop thread
+        if self._voice is not None:
+            self._voice.speak(text, channel="system", interrupt=True)
 
     def set_active(self, active: bool) -> None:
+        self._loop.call_soon_threadsafe(self._apply_active, active)
+
+    def _apply_active(self, active: bool) -> None:  # loop thread
         if self._voice is not None:
             self._voice.set_muted(not active)  # only the foreground MUD self-voices
+
+    def close(self) -> None:
+        """Tear down the session; safe to call from the wx thread on tab close."""
+        self._alive = False
+        self._loop.call_soon_threadsafe(self._teardown)
+
+    def _teardown(self) -> None:  # loop thread
+        if self._voice is not None:
+            self._voice.flush()
+        if self._connection is not None:
+            asyncio.create_task(self._connection.close())
 
 
 class ConnectDialog(wx.Dialog):
@@ -311,6 +360,7 @@ class GenericMudFrame(wx.Frame):
     def _on_close_tab(self, _event: wx.CommandEvent) -> None:
         index = self.notebook.GetSelection()
         if index != wx.NOT_FOUND:
+            self.notebook.GetPage(index).close()  # cancel connection, stop speech
             self.notebook.DeletePage(index)
             self._update_active()
 
