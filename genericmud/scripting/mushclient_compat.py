@@ -20,6 +20,7 @@ import xml.etree.ElementTree as ET
 
 from genericmud.automation.engine import MatchContext
 from genericmud.scripting.api import ScriptApi
+from genericmud.scripting.guard import ScriptGuard
 from genericmud.scripting.lua_runtime import make_sandboxed_runtime
 
 _WILDCARD_RE = re.compile(r"%(\d)")
@@ -30,7 +31,8 @@ _DEFAULT_TRIGGER_SEQUENCE = "100"
 class MushclientPack:
     def __init__(self, api: ScriptApi) -> None:
         self._api = api
-        self._lua = make_sandboxed_runtime()
+        self._lua, install_hook = make_sandboxed_runtime()
+        self._guard = ScriptGuard(install_hook)
         self._install_api()
 
     # --- MUSHclient global API ---
@@ -71,7 +73,7 @@ class MushclientPack:
 
     def _do_after_special(self, delay: float, code: str, sendto: object = _SEND_TO_SCRIPT) -> None:
         deferred = self._compile(str(code))
-        self._api.add_timer(float(delay), deferred)
+        self._api.add_timer(float(delay), lambda: self._guard.run(deferred))
 
     def _compile(self, code: str):
         """Host-side compile of a Lua chunk into a zero-arg callable."""
@@ -87,7 +89,7 @@ class MushclientPack:
         root = ET.fromstring(xml)
         script = "\n".join((el.text or "") for el in root.iter("script"))
         if script.strip():
-            self._lua.execute(script)
+            self._guard.run_strict(self._lua.execute, script)
         for element in root.iter("trigger"):
             self._register(element, is_alias=False)
         for element in root.iter("alias"):
@@ -123,7 +125,8 @@ class MushclientPack:
 
             def call_named(ctx: MatchContext) -> None:
                 if handler is not None:
-                    handler(name, ctx.line.plain_text, lua.table_from(ctx.wildcards[1:]))
+                    wildcards = lua.table_from(ctx.wildcards[1:])
+                    self._guard.run(handler, name, ctx.line.plain_text, wildcards)
 
             return call_named
 
@@ -134,7 +137,7 @@ class MushclientPack:
                 compiled = self._compile(body)
 
                 def call_script(_ctx: MatchContext) -> None:
-                    compiled()
+                    self._guard.run(compiled)
 
                 return call_script
 

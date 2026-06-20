@@ -19,6 +19,7 @@ from lupa import LuaRuntime
 
 from genericmud.automation.engine import MatchContext
 from genericmud.scripting.api import ScriptApi
+from genericmud.scripting.guard import ScriptGuard
 
 # Removed from the sandbox: filesystem, process, dynamic code loading, lupa bridge.
 _SANDBOX_REMOVE = (
@@ -35,19 +36,36 @@ _SANDBOX_REMOVE = (
 )
 
 
-def make_sandboxed_runtime() -> LuaRuntime:
-    """A LuaRuntime with the dangerous globals and lupa's Python bridge removed."""
+def make_sandboxed_runtime() -> tuple[LuaRuntime, object | None]:
+    """A sandboxed LuaRuntime plus an install_hook callable for the script guard.
+
+    install_hook(check, n) registers a Lua debug count-hook (a Lua closure, since
+    lupa rejects a Python hook) that calls ``check`` every n instructions. It's
+    captured before ``debug`` is removed from the sandbox; None if unavailable.
+    """
     lua = LuaRuntime(unpack_returned_tuples=True, register_eval=False, register_builtins=False)
     globals_ = lua.globals()
+    install_hook = None
+    if globals_.debug is not None:
+        # Capture debug.sethook as an upvalue NOW, before `debug` is removed below;
+        # the returned installer sets a Lua count-hook that calls `check`.
+        installer_src = (
+            "(function()"
+            " local sethook = debug.sethook;"
+            " return function(check, n) sethook(function() check() end, '', n) end"
+            " end)()"
+        )
+        install_hook = lua.eval(installer_src)
     for name in _SANDBOX_REMOVE:
         globals_[name] = None
-    return lua
+    return lua, install_hook
 
 
 class LuaPackRuntime:
     def __init__(self, api: ScriptApi) -> None:
         self._api = api
-        self._lua = make_sandboxed_runtime()
+        self._lua, install_hook = make_sandboxed_runtime()
+        self._guard = ScriptGuard(install_hook)
         self._install_mud()
 
     def _install_mud(self) -> None:
@@ -77,7 +95,7 @@ class LuaPackRuntime:
             priority = int(opts["priority"]) if has_opts and opts["priority"] is not None else 0
 
             def py_callback(ctx: MatchContext) -> None:
-                callback(ctx.line.plain_text, lua.table_from(ctx.wildcards[1:]))
+                self._guard.run(callback, ctx.line.plain_text, lua.table_from(ctx.wildcards[1:]))
 
             register(pattern, py_callback, regex=regex, priority=priority)
 
@@ -88,14 +106,14 @@ class LuaPackRuntime:
 
         def factory(key, callback):
             def py_callback(_ctx: MatchContext) -> None:
-                callback()
+                self._guard.run(callback)
 
             api.add_key(key, py_callback)
 
         return factory
 
     def run_source(self, code: str):
-        return self._lua.execute(code)
+        return self._guard.run_strict(self._lua.execute, code)
 
     def run_file(self, path: str):
         with open(path, encoding="utf-8") as handle:
