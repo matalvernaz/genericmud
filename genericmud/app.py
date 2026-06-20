@@ -131,8 +131,8 @@ class EngineApp:
                 self._post(protocol.music(cue.file))
             else:
                 self._post(protocol.sound(cue.file, gain=cue.volume / 100.0))
-        if cues and not text.strip():
-            return  # MSP-only line: play the sounds, nothing to show or speak
+        if not text.strip():
+            return  # blank line: any sound cues already fired; don't show/speak "blank"
         line = Line(text)
         self.engine.process_line(line)
         if not line.gagged:

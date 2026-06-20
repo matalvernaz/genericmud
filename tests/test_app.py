@@ -84,3 +84,11 @@ def test_ansi_stripped_from_output():
     app.on_telnet_event(DataReceived(b"\x1b[1;32mGreen room\x1b[0m\r\n"))
     assert any(m["type"] == "line" and m["text"] == "Green room" for m in posted)
     assert "Green room" in backend.spoken
+
+
+def test_blank_lines_skipped():
+    app, backend, _sent, posted = _app()
+    app.on_telnet_event(DataReceived(b"hello\r\n\r\n   \r\nworld\r\n"))
+    lines = [m["text"] for m in posted if m["type"] == "line"]
+    assert lines == ["hello", "world"]  # blank and whitespace-only lines dropped
+    assert "" not in backend.spoken
