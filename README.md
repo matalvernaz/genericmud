@@ -29,5 +29,5 @@ python3 -m venv .venv
 .venv/bin/pytest -q
 ```
 
-The engine has no runtime dependencies. Install `.[gui]` for the webview/WebSocket
+The engine's only runtime dependency is `lupa` (Lua scripting). Install `.[gui]` for the webview/WebSocket
 shell and `.[voice]` for native self-voicing backends (Windows/macOS).

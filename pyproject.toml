@@ -11,10 +11,12 @@ requires-python = ">=3.12"
 license = "MIT"
 authors = [{ name = "Matt Alvernaz" }]
 
-# The engine core (transport, protocol, automation, model) is pure stdlib.
-# Native voice and the webview shell are optional extras so the headless
-# engine and its test suite install and run anywhere, including CI.
-dependencies = []
+# Lua powers the scripting layer (native + VIPMud + MUSHclient soundpacks), so it's a
+# core runtime dependency. Transport, protocol, and automation are otherwise stdlib.
+# Native voice and the webview shell stay optional extras.
+dependencies = [
+  "lupa>=2.0",
+]
 
 [project.optional-dependencies]
 # localhost engine<->renderer bridge + webview shell
