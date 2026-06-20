@@ -17,6 +17,7 @@ from genericmud.model.buffer import Buffer, Line
 from genericmud.protocol import telnet as T
 from genericmud.protocol.msp import parse_msp_line
 from genericmud.protocol.oob import OobMessage, ServerStatus, from_subnegotiation
+from genericmud.render.ansi import strip_ansi
 from genericmud.review.cursor import ReviewCursor
 from genericmud.voice.router import VoiceRouter
 
@@ -123,6 +124,7 @@ class EngineApp:
             self._pending = ""
 
     def _emit_line(self, text: str) -> None:
+        text = strip_ansi(text)
         text, cues = parse_msp_line(text)
         for cue in cues:
             if cue.kind == "music":

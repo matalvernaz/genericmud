@@ -77,3 +77,10 @@ def test_msp_line_emits_sound_and_strips_tag():
     assert abs(sounds[0]["gain"] - 0.8) < 1e-9
     # the !!SOUND tag is stripped from what gets spoken/displayed
     assert any("A thud" in s and "!!SOUND" not in s for s in backend.spoken)
+
+
+def test_ansi_stripped_from_output():
+    app, backend, _sent, posted = _app()
+    app.on_telnet_event(DataReceived(b"\x1b[1;32mGreen room\x1b[0m\r\n"))
+    assert any(m["type"] == "line" and m["text"] == "Green room" for m in posted)
+    assert "Green room" in backend.spoken
