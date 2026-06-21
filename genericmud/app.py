@@ -15,6 +15,7 @@ from genericmud.automation.channels import ChannelPolicy
 from genericmud.automation.engine import AutomationEngine, EngineSink
 from genericmud.bridge import protocol
 from genericmud.model.buffer import Buffer, Line
+from genericmud.packs import ActivationResult, PackStore, activate_world
 from genericmud.protocol import telnet as T
 from genericmud.protocol.msp import parse_msp_line
 from genericmud.protocol.oob import OobMessage, ServerStatus, from_subnegotiation
@@ -105,9 +106,11 @@ class EngineApp:
         post: Callable[[dict], None] | None = None,
         schedule: Callable[[float, Callable[[], None]], None] | None = None,
         keymap: dict[str, str] | None = None,
+        packs: PackStore | None = None,
     ) -> None:
         self.buffer = Buffer()
         self.voice = voice
+        self.packs = packs
         self._send = send or (lambda _text: None)
         self._post = post or (lambda _message: None)
         self.sound = SoundBus(_PostSoundBackend(self._post))  # per-category mixing + flush
@@ -128,6 +131,35 @@ class EngineApp:
         self.keymap = keymap or {}
         self._pending = ""
         self._gauges: dict[str, object] = {}
+
+    # --- soundpacks ---
+
+    def activate_packs(self, world: str) -> ActivationResult | None:
+        """Load the packs enabled for ``world`` and announce the outcome aloud.
+
+        Call after constructing the app and before connecting, so triggers are
+        armed when data arrives. No-op (returns None) when no store is wired.
+        """
+        if self.packs is None:
+            return None
+        result = activate_world(self.packs, world, self.engine)
+        self._announce_activation(result)
+        return result
+
+    def _announce_activation(self, result: ActivationResult) -> None:
+        parts: list[str] = []
+        if result.loaded:
+            parts.append(f"{len(result.loaded)} soundpack{'s' if len(result.loaded) != 1 else ''}")
+        for pack_id, error in result.failed.items():
+            parts.append(f"{pack_id} failed to load: {error}")
+        for conflict in result.conflicts:
+            who = " and ".join(conflict.sources)
+            parts.append(f"{conflict.kind} {conflict.token} bound by {who}")
+        if not parts:
+            return
+        summary = "; ".join(parts)
+        self.voice.speak(summary, channel="system", interrupt=False)
+        self._post(protocol.echo(f"* {summary}"))
 
     # --- inbound from the MUD (telnet events) ---
 

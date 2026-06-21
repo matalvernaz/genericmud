@@ -25,7 +25,8 @@ import wx
 from genericmud.app import EngineApp
 from genericmud.bridge import protocol
 from genericmud.config.keymap import load_keymap
-from genericmud.config.worlds import World, load_worlds, save_worlds
+from genericmud.config.worlds import World, config_dir, load_worlds, save_worlds
+from genericmud.packs import PackStore
 from genericmud.transport.connection import MudConnection
 from genericmud.voice.factory import make_voice_backend
 from genericmud.voice.router import VoiceRouter
@@ -80,11 +81,13 @@ class SessionPanel(wx.Panel):
         loop: asyncio.AbstractEventLoop,
         keymap: dict,
         world: World,
+        packs: PackStore | None = None,
     ):
         super().__init__(parent)
         self._loop = loop
         self._keymap = keymap
         self.world = world
+        self._packs = packs
         self.app: EngineApp | None = None
         self._connection: MudConnection | None = None
         self._voice: VoiceRouter | None = None
@@ -127,8 +130,10 @@ class SessionPanel(wx.Panel):
             post=self._post,
             schedule=self._loop.call_later,
             keymap=self._keymap,
+            packs=self._packs,
         )
         self._connection._on_event = self.app.on_telnet_event
+        self.app.activate_packs(self.world.name)  # arm pack triggers before data arrives
         try:
             await self._connection.connect(self.world.host, self.world.port, tls=self.world.tls)
             self._post(protocol.echo(f"* Connected to {self.world.name}"))
@@ -316,6 +321,7 @@ class GenericMudFrame(wx.Frame):
         super().__init__(None, title="genericMud", size=(900, 600))
         self._loop = loop
         self._keymap = keymap
+        self._packs = PackStore(config_dir() / "soundpacks")
 
         menubar = wx.MenuBar()
         file_menu = wx.Menu()
@@ -341,7 +347,7 @@ class GenericMudFrame(wx.Frame):
         self.notebook.Bind(wx.EVT_NOTEBOOK_PAGE_CHANGED, lambda _e: self._update_active())
 
     def open_session(self, world: World) -> None:
-        panel = SessionPanel(self.notebook, self._loop, self._keymap, world)
+        panel = SessionPanel(self.notebook, self._loop, self._keymap, world, self._packs)
         self.notebook.AddPage(panel, world.name, select=True)
         panel.input.SetFocus()
         self._update_active()
