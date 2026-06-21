@@ -7,6 +7,12 @@ uninstall and per-world enablement; the loader (separate module) activates an
 enabled pack against an engine.
 """
 
+from genericmud.packs.loader import (
+    ActivationResult,
+    Conflict,
+    activate_world,
+    detect_conflicts,
+)
 from genericmud.packs.manifest import (
     DIALECT_BY_SUFFIX,
     MANIFEST_NAME,
@@ -21,12 +27,16 @@ from genericmud.packs.store import PackError, PackExists, PackStore, UnknownPack
 __all__ = [
     "DIALECT_BY_SUFFIX",
     "MANIFEST_NAME",
+    "ActivationResult",
+    "Conflict",
     "PackError",
     "PackExists",
     "PackManifest",
     "PackStore",
     "UnknownDialect",
     "UnknownPack",
+    "activate_world",
+    "detect_conflicts",
     "infer_manifest",
     "load_manifest",
     "slugify",

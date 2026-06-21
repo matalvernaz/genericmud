@@ -94,7 +94,8 @@ class AutomationEngine:
         self.sink = sink or EngineSink()
         self._triggers: list[_Rule] = []
         self._aliases: list[_Rule] = []
-        self._keys: dict[str, Callback] = {}
+        self._keys: dict[str, Callback] = {}  # effective binding (last writer wins)
+        self._key_bindings: list[tuple[str, str]] = []  # (key, source) log for conflict reports
         self._vars: dict[str, str] = {}
         self._gvars: dict[str, str] = {}
         self.channels = ChannelRouter()  # output routing/policy, scriptable via ScriptApi
@@ -149,8 +150,28 @@ class AutomationEngine:
         )
         self._aliases.sort(key=lambda r: -r.priority)
 
-    def add_key(self, key: str, callback: Callback) -> None:
+    def add_key(self, key: str, callback: Callback, *, source: str = "") -> None:
         self._keys[key.lower()] = callback
+        self._key_bindings.append((key.lower(), source))
+
+    def registrations_by_source(self) -> dict[str, dict[str, list[str]]]:
+        """Every trigger/alias/key grouped by the pack that registered it.
+
+        Tokens are the regex/pattern string (triggers/aliases) or the key combo.
+        Drives cross-pack conflict detection; read-only.
+        """
+        reg: dict[str, dict[str, list[str]]] = {}
+
+        def bucket(source: str) -> dict[str, list[str]]:
+            return reg.setdefault(source, {"trigger": [], "alias": [], "key": []})
+
+        for rule in self._triggers:
+            bucket(rule.source)["trigger"].append(rule.pattern.pattern)
+        for rule in self._aliases:
+            bucket(rule.source)["alias"].append(rule.pattern.pattern)
+        for key, source in self._key_bindings:
+            bucket(source)["key"].append(key)
+        return reg
 
     # --- variables ---
 

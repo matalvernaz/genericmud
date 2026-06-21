@@ -70,7 +70,7 @@ class ScriptApi:
         self._engine.add_alias(pattern, callback, **opts)  # type: ignore[arg-type]
 
     def add_key(self, key: str, callback: Callback) -> None:
-        self._engine.add_key(key, callback)
+        self._engine.add_key(key, callback, source=self._source)
 
     def add_timer(self, delay: float, callback: Callable[[], None]) -> None:
         self._engine.sink.schedule(delay, callback)
