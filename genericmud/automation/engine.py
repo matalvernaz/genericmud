@@ -80,6 +80,7 @@ class _Rule:
     gag_but_display: bool = False
     keep_evaluating: bool = True
     source: str = ""
+    channel: str | None = None
 
 
 def _wildcards(match: re.Match[str]) -> list[str]:
@@ -109,6 +110,7 @@ class AutomationEngine:
         gag_but_display: bool = False,
         keep_evaluating: bool = True,
         source: str = "",
+        channel: str | None = None,
     ) -> None:
         self._triggers.append(
             _Rule(
@@ -121,6 +123,7 @@ class AutomationEngine:
                 gag_but_display,
                 keep_evaluating,
                 source,
+                channel,
             )
         )
         self._triggers.sort(key=lambda r: -r.priority)
@@ -169,6 +172,8 @@ class AutomationEngine:
             match = rule.pattern.search(line.plain_text)
             if match is None:
                 continue
+            if rule.channel is not None:
+                line.channel = rule.channel
             if rule.gag or rule.gag_but_display:
                 line.gagged = True
                 line.display_when_gagged = rule.gag_but_display

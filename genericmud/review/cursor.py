@@ -88,14 +88,17 @@ class ReviewCursor:
 
     # --- recall / search / copy ---
 
-    def recall(self, n: int) -> str:
-        """Return the n-th most recent line (1 = newest), or '' if out of range."""
+    def recall(self, n: int, channel: str | None = None) -> str:
+        """Return the n-th most recent line (1 = newest), optionally filtered to a channel."""
         if not (1 <= n <= RECALL_MAX):
             return ""
-        index = len(self._buffer) - n
+        lines = self._buffer.lines()
+        if channel is not None:
+            lines = [line for line in lines if line.channel == channel]
+        index = len(lines) - n
         if index < 0:
             return ""
-        return self._buffer[index].plain_text
+        return lines[index].plain_text
 
     def search(self, term: str, *, forward: bool = False) -> str:
         count = len(self._buffer)

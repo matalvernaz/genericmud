@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 
+from genericmud.automation.channels import ChannelPolicy, ChannelRouter
 from genericmud.automation.engine import AutomationEngine, EngineSink
 from genericmud.bridge import protocol
 from genericmud.model.buffer import Buffer, Line
@@ -98,6 +99,10 @@ class EngineApp:
         )
         self.engine = AutomationEngine(self.sink)
         self.review = ReviewCursor(self.buffer)
+        self.channels = ChannelRouter()
+        # Alerts barge in; everything else stays on the governed 'main' channel by default.
+        self.channels.set_policy("tell", ChannelPolicy(interrupt=True))
+        self.channels.set_policy("system", ChannelPolicy(interrupt=True))
         self.keymap = keymap or {}
         self._pending = ""
         self._gauges: dict[str, object] = {}
@@ -134,10 +139,15 @@ class EngineApp:
         if not text.strip():
             return  # blank line: any sound cues already fired; don't show/speak "blank"
         line = Line(text)
-        self.engine.process_line(line)
-        if not line.gagged:
-            self.voice.speak(line.plain_text)
-        if not (line.gagged and not line.display_when_gagged):
+        self.engine.process_line(line)  # may set line.channel and gag flags
+        policy = self.channels.policy(line.channel)
+        if policy.speak and not line.gagged:
+            self.voice.speak(
+                line.plain_text,
+                channel=(policy.voice or line.channel),
+                interrupt=policy.interrupt,
+            )
+        if policy.display and not (line.gagged and not line.display_when_gagged):
             self.buffer.append(line)
             self._post(
                 protocol.line(
