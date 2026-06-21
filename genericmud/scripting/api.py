@@ -94,6 +94,28 @@ class ScriptApi:
     def mute(self, category: str, muted: bool = True) -> None:
         self._engine.sound.set_muted(category, bool(muted))
 
+    # --- cross-session (multi-character play) ---
+
+    def send_to(self, session: str, text: str) -> bool:
+        if self._engine.hub is None:
+            return False
+        return self._engine.hub.send_to(session, str(text))
+
+    def broadcast(self, text: str) -> int:
+        if self._engine.hub is None:
+            return 0
+        return self._engine.hub.broadcast(str(text), exclude=self._engine.session_name)
+
+    def sessions(self) -> list[str]:
+        return self._engine.hub.sessions() if self._engine.hub is not None else []
+
+    def shared_get(self, key: str) -> str:
+        return self._engine.hub.shared_get(key) if self._engine.hub is not None else ""
+
+    def shared_set(self, key: str, value: object) -> None:
+        if self._engine.hub is not None:
+            self._engine.hub.shared_set(key, value)
+
     def _resolve(self, file: str) -> str:
         if self._base_dir and not os.path.isabs(file):
             return os.path.join(self._base_dir, file)

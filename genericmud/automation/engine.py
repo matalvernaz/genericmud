@@ -16,6 +16,7 @@ from dataclasses import dataclass
 
 from genericmud.automation.channels import ChannelRouter
 from genericmud.model.buffer import Line
+from genericmud.session.hub import SessionHub
 from genericmud.sound.bus import SoundBus
 
 
@@ -100,6 +101,8 @@ class AutomationEngine:
         self._gvars: dict[str, str] = {}
         self.channels = ChannelRouter()  # output routing/policy, scriptable via ScriptApi
         self.sound = sound or SoundBus()  # per-category audio mixing, scriptable via ScriptApi
+        self.hub: SessionHub | None = None  # cross-session bus (set by the app)
+        self.session_name = ""  # this session's name, for broadcast-exclude
 
     # --- registration ---
 

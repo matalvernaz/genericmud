@@ -28,6 +28,7 @@ from genericmud.config.keymap import load_keymap
 from genericmud.config.worlds import World, config_dir, load_worlds, save_worlds
 from genericmud.packs import PackStore
 from genericmud.session.credentials import PlaintextCredentialStore
+from genericmud.session.hub import SessionHub
 from genericmud.sound.pygame_backend import make_pygame_backend
 from genericmud.transport.connection import MudConnection
 from genericmud.voice.factory import make_voice_backend
@@ -85,6 +86,7 @@ class SessionPanel(wx.Panel):
         world: World,
         packs: PackStore | None = None,
         credentials: PlaintextCredentialStore | None = None,
+        hub: SessionHub | None = None,
     ):
         super().__init__(parent)
         self._loop = loop
@@ -92,6 +94,7 @@ class SessionPanel(wx.Panel):
         self.world = world
         self._packs = packs
         self._credentials = credentials
+        self._hub = hub
         self.app: EngineApp | None = None
         self._connection: MudConnection | None = None
         self._voice: VoiceRouter | None = None
@@ -138,6 +141,7 @@ class SessionPanel(wx.Panel):
             sound_backend=make_pygame_backend(),  # native SFX; None -> falls back to post
             name=self.world.name,  # used for the session log filename
             credentials=self._credentials,
+            hub=self._hub,
         )
         self._connection._on_event = self.app.on_telnet_event
         self._connection.auto_reconnect = True
@@ -248,6 +252,8 @@ class SessionPanel(wx.Panel):
         self._loop.call_soon_threadsafe(self._teardown)
 
     def _teardown(self) -> None:  # loop thread
+        if self.app is not None:
+            self.app.shutdown()  # leave the session hub, stop logging
         if self._voice is not None:
             self._voice.flush()
         if self._connection is not None:
@@ -332,6 +338,7 @@ class GenericMudFrame(wx.Frame):
         self._keymap = keymap
         self._packs = PackStore(config_dir() / "soundpacks")
         self._credentials = PlaintextCredentialStore(config_dir() / "credentials.json")
+        self._hub = SessionHub()  # shared across all open sessions for cross-character play
 
         menubar = wx.MenuBar()
         file_menu = wx.Menu()
@@ -358,7 +365,8 @@ class GenericMudFrame(wx.Frame):
 
     def open_session(self, world: World) -> None:
         panel = SessionPanel(
-            self.notebook, self._loop, self._keymap, world, self._packs, self._credentials
+            self.notebook, self._loop, self._keymap, world,
+            self._packs, self._credentials, self._hub,
         )
         self.notebook.AddPage(panel, world.name, select=True)
         panel.input.SetFocus()

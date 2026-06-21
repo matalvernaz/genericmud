@@ -26,6 +26,7 @@ from genericmud.protocol.oob import OobMessage, ServerStatus, from_subnegotiatio
 from genericmud.render.ansi import parse_ansi
 from genericmud.review.cursor import ReviewCursor
 from genericmud.session.credentials import CredentialStore
+from genericmud.session.hub import SessionHub
 from genericmud.session.log import SessionLogger
 from genericmud.session.login import AutoLogin
 from genericmud.sound.bus import SoundBackend, SoundBus
@@ -120,6 +121,7 @@ class EngineApp:
         name: str = "",
         log_dir: Path | None = None,
         credentials: CredentialStore | None = None,
+        hub: SessionHub | None = None,
     ) -> None:
         self.buffer = Buffer()
         self.voice = voice
@@ -138,6 +140,9 @@ class EngineApp:
             sound=self.sound,
         )
         self.engine = AutomationEngine(self.sink, sound=self.sound)
+        self.hub = hub
+        self.engine.hub = hub  # cross-session bus, scriptable via ScriptApi
+        self.engine.session_name = name
         self.review = ReviewCursor(self.buffer)
         self.channels = self.engine.channels  # router lives on the engine (scriptable)
         # Alerts barge in; everything else stays on the governed 'main' channel by default.
@@ -170,10 +175,20 @@ class EngineApp:
         return result
 
     def on_connect(self, world: str) -> ActivationResult | None:
-        """The on-connect sequence: activate enabled packs, then arm auto-login."""
+        """The on-connect sequence: register with the hub, activate packs, arm login."""
+        if self.hub is not None and self.name:
+            self.hub.register(self.name, self._dispatch_command)
         result = self.activate_packs(world)
         self.begin_login(world)
         return result
+
+    def shutdown(self) -> None:
+        """Release session resources on close: leave the hub and stop logging."""
+        if self.hub is not None and self.name:
+            self.hub.unregister(self.name)
+        if self.logger is not None:
+            self.logger.stop()
+            self.logger = None
 
     def begin_login(self, world: str) -> None:
         """Arm auto-login for ``world`` if credentials are stored for it."""

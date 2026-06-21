@@ -82,6 +82,11 @@ class LuaPackRuntime:
         mud.set_var = api.set_var
         mud.set_volume = api.set_volume
         mud.mute = api.mute
+        mud.send_to = api.send_to
+        mud.broadcast = api.broadcast
+        mud.sessions = self._lua_sessions()
+        mud.shared_get = api.shared_get
+        mud.shared_set = api.shared_set
         mud.trigger = self._lua_register(api.add_trigger, routable=True)
         mud.alias = self._lua_register(api.add_alias)
         mud.key = self._lua_register_key()
@@ -123,6 +128,16 @@ class LuaPackRuntime:
                 self._guard.run(callback)
 
             api.add_key(key, py_callback)
+
+        return factory
+
+    def _lua_sessions(self):
+        """mud.sessions() -> a 1-indexed Lua table of concurrent session names."""
+        api = self._api
+        lua = self._lua
+
+        def factory():
+            return lua.table_from(api.sessions())
 
         return factory
 
