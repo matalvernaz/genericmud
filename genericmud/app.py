@@ -18,7 +18,7 @@ from genericmud.automation.engine import AutomationEngine, EngineSink
 from genericmud.bridge import protocol
 from genericmud.config.worlds import config_dir
 from genericmud.model.buffer import Buffer, Line
-from genericmud.navigation import Navigator, expand_speedwalk
+from genericmud.navigation import Navigator, SafeWalk, expand_speedwalk
 from genericmud.packs import ActivationResult, PackStore, activate_world
 from genericmud.protocol import telnet as T
 from genericmud.protocol.msp import parse_msp_line
@@ -33,6 +33,7 @@ from genericmud.voice.router import VoiceRouter
 
 REVIEW_CHANNEL = "review"
 SPEEDWALK_PREFIX = "."  # ".3n2e" expands to n,n,n,e,e (leading char disambiguates)
+SAFE_PREFIX = ".."  # "..3n2e" walks the same route one step at a time, halting if blocked
 _REVIEW_VERBS = frozenset(
     {"prev_line", "next_line", "prev_word", "next_word", "prev_char", "next_char", "top", "bottom"}
 )
@@ -125,12 +126,13 @@ class EngineApp:
         self.packs = packs
         self._send = send or (lambda _text: None)
         self._post = post or (lambda _message: None)
+        self._schedule = schedule or _default_schedule
         # Native (wx) injects a pygame backend; otherwise sounds post to the renderer.
         self.sound = SoundBus(sound_backend or _PostSoundBackend(self._post))
         self.sink = AppSink(
             send=self._send,
             post=self._post,
-            schedule=schedule or _default_schedule,
+            schedule=self._schedule,
             voice=voice,
             buffer=self.buffer,
             sound=self.sound,
@@ -149,6 +151,7 @@ class EngineApp:
         self.logger: SessionLogger | None = None
         self.credentials = credentials
         self._login: AutoLogin | None = None
+        self._walk: SafeWalk | None = None
         self._pending = ""
         self._gauges: dict[str, object] = {}
 
@@ -237,6 +240,8 @@ class EngineApp:
         self._log(line.plain_text)  # full session log, including gagged-from-speech
         if self._login is not None and not self._login.done:
             self._login.feed(line.plain_text)  # answer name/password prompts
+        if self._walk is not None and self._walk.active:
+            self._walk.on_line(line.plain_text)  # halt the walk if a step was blocked
         policy = self.channels.policy(line.channel)
         if policy.speak and not line.gagged:
             self.voice.speak(
@@ -261,7 +266,7 @@ class EngineApp:
                 if isinstance(message, OobMessage):
                     self._gauges[message.name] = message.value
                     if self._is_room_info(message):
-                        self.nav.update_room(message.value)
+                        self._update_room(message.value)
             if result:
                 self._post(protocol.status(self._gauges))
         elif isinstance(result, ServerStatus):
@@ -275,6 +280,12 @@ class EngineApp:
             and message.name.lower() == "room.info"
             and isinstance(message.value, dict)
         )
+
+    def _update_room(self, room: dict) -> None:
+        changed = room != self.nav.room
+        self.nav.update_room(room)
+        if changed and self._walk is not None and self._walk.active:
+            self._walk.on_room_change()  # confirmed move -> advance the safe-walk
 
     # --- inbound from the renderer (WS messages) ---
 
@@ -296,11 +307,29 @@ class EngineApp:
     def _dispatch_command(self, text: str) -> None:
         if text.strip():
             self._log(f"> {text}")
-        if self._speedwalk(text):
+        if self._safe_speedwalk(text) or self._speedwalk(text):
             return
         for line in self.engine.process_input(text):
             self._send(line)
             self.nav.record(line)  # build the breadcrumb trail from manual walking
+
+    def _safe_speedwalk(self, text: str) -> bool:
+        """Walk a "..3n2e" run step-by-step, halting if blocked; False if not one."""
+        if not text.startswith(SAFE_PREFIX):
+            return False
+        steps = expand_speedwalk(text[len(SAFE_PREFIX) :])
+        if not steps:
+            return False
+
+        def send_and_record(direction: str) -> None:
+            self._send(direction)
+            self.nav.record(direction)
+
+        self._walk = SafeWalk(
+            steps, send=send_and_record, schedule=self._schedule, announce=self._speak_system
+        )
+        self._walk.start()
+        return True
 
     def _speedwalk(self, text: str) -> bool:
         """Expand and send a "." speedwalk run (e.g. ".3n2e"); False if not one."""
@@ -355,6 +384,12 @@ class EngineApp:
             self._speak_system(f"retracing {len(path)} steps")
         elif action == "where":
             self._speak_system(self.nav.where())
+        elif action == "stop":
+            if self._walk is not None and self._walk.active:
+                self._walk.cancel()
+                self._speak_system("walk stopped")
+            else:
+                self._speak_system("not walking")
 
     def _speak_review(self, text: str) -> None:
         self.voice.speak(text, channel=REVIEW_CHANNEL, interrupt=True)

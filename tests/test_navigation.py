@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from genericmud.app import EngineApp
 from genericmud.config.keymap import load_keymap
-from genericmud.navigation import Navigator, expand_speedwalk, invert
+from genericmud.navigation import Navigator, expand_speedwalk, invert, simplify_directions
 from genericmud.protocol.telnet import OPT_GMCP, Subnegotiation
 from genericmud.voice.router import VoiceRouter
 from tests.helpers import RecordingBackend
@@ -45,6 +45,29 @@ def test_navigator_retrace_is_reversed_and_inverted():
     assert nav.retrace() == ["w", "s", "s"]
     nav.clear()
     assert nav.trail == []
+
+
+def test_simplify_directions_collapses_backtracks():
+    assert simplify_directions(["n", "s"]) == []
+    assert simplify_directions(["n", "e", "w", "s"]) == []  # out and back to start
+    assert simplify_directions(["n", "n", "s"]) == ["n"]
+    assert simplify_directions(["n", "e"]) == ["n", "e"]  # nothing cancels
+    assert simplify_directions([]) == []
+
+
+def test_retrace_weeds_out_side_trips_by_default():
+    nav = Navigator()
+    for direction in ("n", "e", "w"):  # north, poke east, come straight back
+        nav.record(direction)
+    assert nav.retrace() == ["s"]  # trail simplifies to [n], so the way back is [s]
+
+
+def test_retrace_can_keep_the_raw_path():
+    nav = Navigator()
+    nav.simplify_retrace = False
+    for direction in ("n", "e", "w"):
+        nav.record(direction)
+    assert nav.retrace() == ["e", "w", "s"]  # raw trail reversed + inverted
 
 
 def test_navigator_where_from_room_and_trail():
