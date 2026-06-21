@@ -80,24 +80,36 @@ class LuaPackRuntime:
         mud.music = api.music
         mud.get_var = api.get_var
         mud.set_var = api.set_var
-        mud.trigger = self._lua_register(api.add_trigger)
+        mud.trigger = self._lua_register(api.add_trigger, routable=True)
         mud.alias = self._lua_register(api.add_alias)
         mud.key = self._lua_register_key()
+        mud.set_channel = self._lua_set_channel()
         self._lua.globals().mud = mud
 
-    def _lua_register(self, register: Callable[..., None]):
-        """Build a mud.trigger/mud.alias function that bridges a Lua callback."""
+    def _lua_register(self, register: Callable[..., None], *, routable: bool = False):
+        """Build a mud.trigger/mud.alias function that bridges a Lua callback.
+
+        With opts {regex=, priority=, channel=}; channel only applies to triggers.
+        A nil callback registers a pure routing/policy rule (no script action).
+        """
         lua = self._lua
 
         def factory(pattern, callback, opts=None):
             has_opts = opts is not None
             regex = bool(opts["regex"]) if has_opts and opts["regex"] is not None else False
             priority = int(opts["priority"]) if has_opts and opts["priority"] is not None else 0
+            kwargs: dict = {"regex": regex, "priority": priority}
+            if routable and has_opts and opts["channel"] is not None:
+                kwargs["channel"] = opts["channel"]
+
+            if callback is None:
+                register(pattern, None, **kwargs)
+                return
 
             def py_callback(ctx: MatchContext) -> None:
                 self._guard.run(callback, ctx.line.plain_text, lua.table_from(ctx.wildcards[1:]))
 
-            register(pattern, py_callback, regex=regex, priority=priority)
+            register(pattern, py_callback, **kwargs)
 
         return factory
 
@@ -109,6 +121,24 @@ class LuaPackRuntime:
                 self._guard.run(callback)
 
             api.add_key(key, py_callback)
+
+        return factory
+
+    def _lua_set_channel(self):
+        """mud.set_channel(name, {speak=, display=, interrupt=, voice=}) -> policy."""
+        api = self._api
+
+        def factory(name, opts=None):
+            def opt(key, default):
+                return opts[key] if opts is not None and opts[key] is not None else default
+
+            api.set_channel(
+                name,
+                speak=bool(opt("speak", True)),
+                display=bool(opt("display", True)),
+                interrupt=bool(opt("interrupt", False)),
+                voice=opt("voice", None),
+            )
 
         return factory
 

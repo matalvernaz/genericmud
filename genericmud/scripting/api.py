@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 from collections.abc import Callable
 
+from genericmud.automation.channels import ChannelPolicy
 from genericmud.automation.engine import AutomationEngine, Callback
 
 
@@ -73,6 +74,19 @@ class ScriptApi:
 
     def add_timer(self, delay: float, callback: Callable[[], None]) -> None:
         self._engine.sink.schedule(delay, callback)
+
+    def set_channel(
+        self,
+        name: str,
+        *,
+        speak: bool = True,
+        display: bool = True,
+        interrupt: bool = False,
+        voice: str | None = None,
+    ) -> None:
+        self._engine.channels.set_policy(
+            name, ChannelPolicy(speak=speak, display=display, interrupt=interrupt, voice=voice)
+        )
 
     def _resolve(self, file: str) -> str:
         if self._base_dir and not os.path.isabs(file):

@@ -26,3 +26,9 @@
 "f11" = "voice:flush"
 "escape" = "voice:flush"
 "shift+f1" = "soundpack:toggle"
+
+# Per-channel recall: "recall:<channel>:N" speaks the N-th newest line routed to
+# that channel. Channels are created by triggers (mud.trigger(p, nil, {channel=...}))
+# or mud.set_channel; these bind once the active soundpack defines them.
+"alt+t" = "recall:tell:1"
+"alt+c" = "recall:chat:1"

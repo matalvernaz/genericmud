@@ -14,6 +14,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from genericmud.automation.channels import ChannelRouter
 from genericmud.model.buffer import Line
 
 
@@ -95,6 +96,7 @@ class AutomationEngine:
         self._keys: dict[str, Callback] = {}
         self._vars: dict[str, str] = {}
         self._gvars: dict[str, str] = {}
+        self.channels = ChannelRouter()  # output routing/policy, scriptable via ScriptApi
 
     # --- registration ---
 

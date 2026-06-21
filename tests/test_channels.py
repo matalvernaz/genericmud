@@ -63,3 +63,14 @@ def test_per_channel_recall():
     assert cursor.recall(1) == "you hit the goblin"  # overall newest
     assert cursor.recall(1, channel="tell") == "Bob tells you hi"
     assert cursor.recall(1, channel="main") == "you hit the goblin"
+
+
+def test_per_channel_recall_key_dispatches_to_channel():
+    # vipmud keymap binds "alt+t" -> "recall:tell:1"; the key handler must parse
+    # the channel out and filter recall to it, not treat "tell:1" as a count.
+    app, _backend, _sent, posted = _app()
+    app.buffer.append(Line("room desc", channel="main"))
+    app.buffer.append(Line("Bob tells you hi", channel="tell"))
+    app.buffer.append(Line("you hit the goblin", channel="main"))
+    app._handle_key("alt+t")
+    assert any(m["type"] == "review" and "Bob tells you hi" in m["text"] for m in posted)

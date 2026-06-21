@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 
-from genericmud.automation.channels import ChannelPolicy, ChannelRouter
+from genericmud.automation.channels import ChannelPolicy
 from genericmud.automation.engine import AutomationEngine, EngineSink
 from genericmud.bridge import protocol
 from genericmud.model.buffer import Buffer, Line
@@ -99,7 +99,7 @@ class EngineApp:
         )
         self.engine = AutomationEngine(self.sink)
         self.review = ReviewCursor(self.buffer)
-        self.channels = ChannelRouter()
+        self.channels = self.engine.channels  # router lives on the engine (scriptable)
         # Alerts barge in; everything else stays on the governed 'main' channel by default.
         self.channels.set_policy("tell", ChannelPolicy(interrupt=True))
         self.channels.set_policy("system", ChannelPolicy(interrupt=True))
@@ -186,7 +186,11 @@ class EngineApp:
             return
         namespace, _, argument = action.partition(":")
         if namespace == "recall":
-            self._speak_review(self.review.recall(int(argument)) or "no message")
+            # "recall:N" or "recall:<channel>:N" (channel filters the scrollback).
+            channel, _, count = argument.rpartition(":")
+            self._speak_review(
+                self.review.recall(int(count), channel=channel or None) or "no message"
+            )
         elif namespace == "review" and argument in _REVIEW_VERBS:
             if not self.review.active:
                 self.review.enter()

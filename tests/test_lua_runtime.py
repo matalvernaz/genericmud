@@ -65,3 +65,20 @@ def test_sandbox_removes_dangerous_globals():
     assert runtime.run_source("return require == nil") is True
     with pytest.raises(LuaError):
         runtime.run_source("return os.time()")
+
+
+def test_lua_trigger_routes_to_channel():
+    # A nil callback registers a pure routing rule: it only tags the channel.
+    _sink, engine, runtime = _runtime()
+    runtime.run_source('mud.trigger("tells you", nil, {channel="tell"})')
+    line = engine.process_line(Line("Bob tells you hi"))
+    assert line.channel == "tell"
+
+
+def test_lua_set_channel_policy():
+    _sink, engine, runtime = _runtime()
+    runtime.run_source('mud.set_channel("cosmetic", {speak=false, interrupt=true})')
+    policy = engine.channels.policy("cosmetic")
+    assert policy.speak is False
+    assert policy.interrupt is True
+    assert policy.display is True  # unspecified field falls back to the default
