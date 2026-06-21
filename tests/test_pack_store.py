@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import zipfile
 
 import pytest
 
 from genericmud.packs import (
+    PackError,
     PackExists,
     PackStore,
     UnknownDialect,
@@ -129,6 +131,43 @@ def test_uninstall_removes_content_index_and_enablement(tmp_path):
     assert store.enabled("aardwolf") == []  # dropped from the world's enable list
     with pytest.raises(UnknownPack):
         store.manifest("hunting")
+
+
+def test_install_from_zip_with_wrapper_dir(tmp_path):
+    src = tmp_path / "Cosmic"
+    src.mkdir()
+    (src / "pack.toml").write_text(
+        'name = "Cosmic"\ndialect = "lua"\nentry = "cosmic.lua"\n', encoding="utf-8"
+    )
+    (src / "cosmic.lua").write_text('mud.send("hi")', encoding="utf-8")
+    zip_path = tmp_path / "cosmic.zip"
+    with zipfile.ZipFile(zip_path, "w") as archive:  # laid out as Cosmic/<files>
+        archive.write(src / "pack.toml", "Cosmic/pack.toml")
+        archive.write(src / "cosmic.lua", "Cosmic/cosmic.lua")
+
+    store = PackStore(tmp_path / "store")
+    manifest = store.install(zip_path, world="mud")
+    assert manifest.id == "cosmic"
+    assert store.entry_path("cosmic").read_text(encoding="utf-8") == 'mud.send("hi")'
+    assert store.is_enabled("cosmic", "mud")
+
+
+def test_install_from_flat_zip_single_script(tmp_path):
+    script = tmp_path / "hunt.lua"
+    script.write_text('mud.send("look")', encoding="utf-8")
+    zip_path = tmp_path / "hunt.zip"
+    with zipfile.ZipFile(zip_path, "w") as archive:
+        archive.write(script, "hunt.lua")  # flat: script at the archive root
+
+    manifest = PackStore(tmp_path / "store").install(zip_path)
+    assert manifest.id == "hunt"
+
+
+def test_install_bad_zip_raises_packerror(tmp_path):
+    bad = tmp_path / "broken.zip"
+    bad.write_text("not actually a zip", encoding="utf-8")
+    with pytest.raises(PackError):
+        PackStore(tmp_path / "store").install(bad)
 
 
 def test_enable_unknown_pack_raises(tmp_path):

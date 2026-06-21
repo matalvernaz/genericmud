@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import json
 import shutil
+import tempfile
+import zipfile
 from pathlib import Path
 
 from genericmud.packs.manifest import PackManifest, load_manifest
@@ -44,7 +46,7 @@ class PackStore:
     def install(
         self, source: str | Path, *, world: str | None = None, replace: bool = False
     ) -> PackManifest:
-        """Copy a pack (a dir with ``pack.toml``, a bare script, or a script dir) in.
+        """Install a pack: a dir with ``pack.toml``, a bare script, or a ``.zip``.
 
         ``replace=True`` updates an already-installed pack in place. ``world``
         enables the pack for that MUD as part of the install.
@@ -52,6 +54,19 @@ class PackStore:
         source = Path(source)
         if not source.exists():
             raise PackError(f"no such pack source: {source}")
+        if source.is_file() and source.suffix.lower() == ".zip":
+            with tempfile.TemporaryDirectory() as tmp:
+                try:
+                    with zipfile.ZipFile(source) as archive:
+                        archive.extractall(tmp)  # CPython sanitizes member paths (no zip-slip)
+                except zipfile.BadZipFile as exc:
+                    raise PackError(f"not a valid zip: {source} ({exc})") from exc
+                return self._install_from(_pack_root(Path(tmp)), world=world, replace=replace)
+        return self._install_from(source, world=world, replace=replace)
+
+    def _install_from(
+        self, source: Path, *, world: str | None, replace: bool
+    ) -> PackManifest:
         manifest = load_manifest(source)
         index = self._load_index()
         if manifest.id in index and not replace:
@@ -145,6 +160,22 @@ class PackStore:
 
     def _save_worlds(self, data: dict) -> None:
         _save_json(self._worlds_path, data)
+
+
+def _pack_root(extracted: Path) -> Path:
+    """The real pack root inside an extracted zip: descend lone wrapper dirs.
+
+    Handles the common ``PackName/...`` zip layout as well as a flat zip whose
+    files (or single script) sit at the archive root.
+    """
+    current = extracted
+    while not (current / "pack.toml").is_file():
+        entries = list(current.iterdir())
+        if len(entries) == 1 and entries[0].is_dir():
+            current = entries[0]
+        else:
+            break
+    return current
 
 
 def _load_json(path: Path) -> dict:
