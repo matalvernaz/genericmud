@@ -153,6 +153,12 @@ class AutomationEngine:
         )
         self._aliases.sort(key=lambda r: -r.priority)
 
+    def remove_trigger(self, name: str) -> None:
+        self._triggers = [rule for rule in self._triggers if rule.name != name]
+
+    def remove_alias(self, name: str) -> None:
+        self._aliases = [rule for rule in self._aliases if rule.name != name]
+
     def add_key(self, key: str, callback: Callback, *, source: str = "") -> None:
         self._keys[key.lower()] = callback
         self._key_bindings.append((key.lower(), source))

@@ -9,12 +9,13 @@ the whole glue layer is unit-testable without a socket, a webview, or NVDA.
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
 from genericmud.automation.channels import ChannelPolicy
-from genericmud.automation.engine import AutomationEngine, EngineSink
+from genericmud.automation.engine import AutomationEngine, Callback, EngineSink, MatchContext
 from genericmud.bridge import protocol
 from genericmud.config.worlds import config_dir
 from genericmud.model.buffer import Buffer, Line
@@ -35,6 +36,8 @@ from genericmud.voice.router import VoiceRouter
 REVIEW_CHANNEL = "review"
 SPEEDWALK_PREFIX = "."  # ".3n2e" expands to n,n,n,e,e (leading char disambiguates)
 SAFE_PREFIX = ".."  # "..3n2e" walks the same route one step at a time, halting if blocked
+CLIENT_PREFIX = "/"  # "/alias", "/trigger", ... ; unknown /verbs pass through to the MUD
+MAX_ALIAS_DEPTH = 20  # guard against an alias/trigger that re-fires itself forever
 _REVIEW_VERBS = frozenset(
     {"prev_line", "next_line", "prev_word", "next_word", "prev_char", "next_char", "top", "bottom"}
 )
@@ -157,6 +160,9 @@ class EngineApp:
         self.credentials = credentials
         self._login: AutoLogin | None = None
         self._walk: SafeWalk | None = None
+        self._user_aliases: dict[str, str] = {}  # interactively-made aliases: pattern -> command
+        self._user_triggers: dict[str, str] = {}
+        self._dispatch_depth = 0  # recursion guard for alias/trigger -> command -> alias
         self._pending = ""
         self._gauges: dict[str, object] = {}
 
@@ -307,7 +313,10 @@ class EngineApp:
     def on_ws_message(self, message: dict) -> None:
         kind = message.get("type")
         if kind == protocol.INPUT:
-            for command in self._split_commands(message.get("text", "")):
+            text = message.get("text", "")
+            # A client command ("/alias x = a;b") must not be split on the separator.
+            commands = [text] if text.startswith(CLIENT_PREFIX) else self._split_commands(text)
+            for command in commands:
                 self._dispatch_command(command)
         elif kind == protocol.KEY:
             self._handle_key(message.get("key", ""))
@@ -322,6 +331,8 @@ class EngineApp:
     def _dispatch_command(self, text: str) -> None:
         if text.strip():
             self._log(f"> {text}")
+        if self._client_command(text):
+            return
         if self._safe_speedwalk(text) or self._speedwalk(text):
             return
         for line in self.engine.process_input(text):
@@ -357,6 +368,97 @@ class EngineApp:
             self._send(direction)
             self.nav.record(direction)
         return True
+
+    # --- interactive alias/trigger commands (the no-scripting "easy method") ---
+
+    def _client_command(self, text: str) -> bool:
+        """Handle "/alias", "/trigger", "/to", ...; False = not one (send to the MUD)."""
+        if not text.startswith(CLIENT_PREFIX):
+            return False
+        verb, _, rest = text[len(CLIENT_PREFIX) :].partition(" ")
+        verb, rest = verb.lower(), rest.strip()
+        if verb in ("alias", "trigger"):
+            self._define_user_rule(verb, rest)
+        elif verb == "unalias":
+            self._remove_user_rule("alias", rest)
+        elif verb == "untrigger":
+            self._remove_user_rule("trigger", rest)
+        elif verb == "aliases":
+            self._list_user_rules("alias")
+        elif verb == "triggers":
+            self._list_user_rules("trigger")
+        elif verb == "to":
+            self._send_to_session(rest)
+        else:
+            return False  # unknown /verb -> let the MUD have it (some use slash commands)
+        return True
+
+    def _user_rules(self, kind: str) -> dict[str, str]:
+        return self._user_aliases if kind == "alias" else self._user_triggers
+
+    def _define_user_rule(self, kind: str, rest: str) -> None:
+        pattern, separator, command = rest.partition("=")
+        pattern, command = pattern.strip(), command.strip()
+        if not separator or not pattern or not command:
+            self._speak_system(f"usage: /{kind} <text> = <command>")
+            return
+        self._user_rules(kind)[pattern] = command
+        callback = self._user_rule_callback(command)
+        if kind == "alias":
+            self.engine.remove_alias(pattern)  # replace any existing alias for this text
+            self.engine.add_alias(
+                f"^{re.escape(pattern)}$", callback,
+                regex=True, name=pattern, source="user", keep_evaluating=False,
+            )
+        else:
+            self.engine.remove_trigger(pattern)
+            self.engine.add_trigger(  # (?i): match the MUD's output regardless of case
+                f"(?i){re.escape(pattern)}", callback, regex=True, name=pattern, source="user"
+            )
+        self._speak_system(f"{kind} {pattern} added")
+
+    def _remove_user_rule(self, kind: str, pattern: str) -> None:
+        pattern = pattern.strip()
+        if self._user_rules(kind).pop(pattern, None) is None:
+            self._speak_system(f"no {kind} {pattern}")
+            return
+        if kind == "alias":
+            self.engine.remove_alias(pattern)
+        else:
+            self.engine.remove_trigger(pattern)
+        self._speak_system(f"{kind} {pattern} removed")
+
+    def _list_user_rules(self, kind: str) -> None:
+        rules = self._user_rules(kind)
+        if not rules:
+            self._speak_system("no aliases" if kind == "alias" else "no triggers")
+            return
+        self._speak_system("; ".join(f"{pattern} = {body}" for pattern, body in rules.items()))
+
+    def _send_to_session(self, rest: str) -> None:
+        session, _, command = rest.partition(" ")
+        command = command.strip()
+        if not session or not command:
+            self._speak_system("usage: /to <session> <command>")
+            return
+        if self.hub is None or not self.hub.send_to(session, command):
+            self._speak_system(f"no session {session}")
+
+    def _user_rule_callback(self, command: str) -> Callback:
+        def callback(_ctx: MatchContext) -> None:
+            self._run_user_command(command)
+
+        return callback
+
+    def _run_user_command(self, command: str) -> None:
+        if self._dispatch_depth >= MAX_ALIAS_DEPTH:
+            return  # an alias/trigger looped on itself; stop rather than hang
+        self._dispatch_depth += 1
+        try:
+            for piece in self._split_commands(command):
+                self._dispatch_command(piece)
+        finally:
+            self._dispatch_depth -= 1
 
     def _handle_key(self, combo: str) -> None:
         action = self.keymap.get(combo)
