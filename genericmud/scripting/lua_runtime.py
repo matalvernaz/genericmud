@@ -80,6 +80,8 @@ class LuaPackRuntime:
         mud.music = api.music
         mud.get_var = api.get_var
         mud.set_var = api.set_var
+        mud.set_volume = api.set_volume
+        mud.mute = api.mute
         mud.trigger = self._lua_register(api.add_trigger, routable=True)
         mud.alias = self._lua_register(api.add_alias)
         mud.key = self._lua_register_key()

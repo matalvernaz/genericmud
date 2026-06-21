@@ -50,8 +50,8 @@ def stop_sound(channel: str = "sound") -> dict[str, Any]:
     return {"type": STOP_SOUND, "channel": channel}
 
 
-def music(file: str) -> dict[str, Any]:
-    return {"type": MUSIC, "file": file}
+def music(file: str, channel: str = "music", gain: float = 1.0) -> dict[str, Any]:
+    return {"type": MUSIC, "file": file, "channel": channel, "gain": gain}
 
 
 def status(gauges: dict[str, Any]) -> dict[str, Any]:

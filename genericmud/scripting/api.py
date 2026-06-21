@@ -88,6 +88,12 @@ class ScriptApi:
             name, ChannelPolicy(speak=speak, display=display, interrupt=interrupt, voice=voice)
         )
 
+    def set_volume(self, category: str, gain: float) -> None:
+        self._engine.sound.set_volume(category, float(gain))
+
+    def mute(self, category: str, muted: bool = True) -> None:
+        self._engine.sound.set_muted(category, bool(muted))
+
     def _resolve(self, file: str) -> str:
         if self._base_dir and not os.path.isabs(file):
             return os.path.join(self._base_dir, file)

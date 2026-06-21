@@ -20,6 +20,7 @@ from genericmud.protocol.msp import parse_msp_line
 from genericmud.protocol.oob import OobMessage, ServerStatus, from_subnegotiation
 from genericmud.render.ansi import strip_ansi
 from genericmud.review.cursor import ReviewCursor
+from genericmud.sound.bus import SoundBackend, SoundBus
 from genericmud.voice.router import VoiceRouter
 
 REVIEW_CHANNEL = "review"
@@ -36,15 +37,34 @@ def _default_schedule(delay: float, callback: Callable[[], None]) -> None:
     loop.call_later(delay, callback)
 
 
+class _PostSoundBackend(SoundBackend):
+    """SoundBus backend that posts renderer protocol messages (the Web Audio path)."""
+
+    def __init__(self, post) -> None:
+        self._post = post
+
+    def play(self, file: str, channel: str, gain: float, pan: float, loop: bool) -> None:
+        self._post(protocol.sound(file, channel, gain, pan, loop))
+
+    def music(self, file: str, channel: str, gain: float) -> None:
+        self._post(protocol.music(file, channel, gain))
+
+    def stop(self, channel: str) -> None:
+        self._post(protocol.stop_sound(channel))
+
+
 class AppSink(EngineSink):
     """Routes engine side effects to the MUD, the renderer, and the voice router."""
 
-    def __init__(self, *, send, post, schedule, voice: VoiceRouter, buffer: Buffer) -> None:
+    def __init__(
+        self, *, send, post, schedule, voice: VoiceRouter, buffer: Buffer, sound: SoundBus
+    ) -> None:
         self._send = send
         self._post = post
         self._schedule = schedule
         self._voice = voice
         self._buffer = buffer
+        self._sound = sound
 
     def send(self, text: str) -> None:
         self._send(text)
@@ -64,13 +84,13 @@ class AppSink(EngineSink):
         pan: float = 0.0,
         loop: bool = False,
     ) -> None:
-        self._post(protocol.sound(file, channel, gain, pan, loop))
+        self._sound.play(file, channel, gain, pan, loop)
 
     def stop(self, channel: str) -> None:
-        self._post(protocol.stop_sound(channel))
+        self._sound.stop(channel)
 
     def music(self, file: str, channel: str = "music") -> None:
-        self._post(protocol.music(file))
+        self._sound.music(file, channel)
 
     def schedule(self, delay: float, callback: Callable[[], None]) -> None:
         self._schedule(delay, callback)
@@ -90,14 +110,16 @@ class EngineApp:
         self.voice = voice
         self._send = send or (lambda _text: None)
         self._post = post or (lambda _message: None)
+        self.sound = SoundBus(_PostSoundBackend(self._post))  # per-category mixing + flush
         self.sink = AppSink(
             send=self._send,
             post=self._post,
             schedule=schedule or _default_schedule,
             voice=voice,
             buffer=self.buffer,
+            sound=self.sound,
         )
-        self.engine = AutomationEngine(self.sink)
+        self.engine = AutomationEngine(self.sink, sound=self.sound)
         self.review = ReviewCursor(self.buffer)
         self.channels = self.engine.channels  # router lives on the engine (scriptable)
         # Alerts barge in; everything else stays on the governed 'main' channel by default.
@@ -133,9 +155,9 @@ class EngineApp:
         text, cues = parse_msp_line(text)
         for cue in cues:
             if cue.kind == "music":
-                self._post(protocol.music(cue.file))
+                self.sound.music(cue.file)
             else:
-                self._post(protocol.sound(cue.file, gain=cue.volume / 100.0))
+                self.sound.play(cue.file, gain=cue.volume / 100.0)
         if not text.strip():
             return  # blank line: any sound cues already fired; don't show/speak "blank"
         line = Line(text)
@@ -197,6 +219,8 @@ class EngineApp:
             self._speak_review(getattr(self.review, argument)())
         elif namespace == "voice" and argument == "flush":
             self.voice.flush()
+        elif namespace == "sound" and argument == "flush":
+            self.sound.flush()  # panic key: cut all playing audio (Shift+F11)
         # "soundpack:toggle" and other namespaces are wired as features land.
 
     def _speak_review(self, text: str) -> None:

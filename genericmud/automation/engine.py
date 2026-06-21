@@ -16,6 +16,7 @@ from dataclasses import dataclass
 
 from genericmud.automation.channels import ChannelRouter
 from genericmud.model.buffer import Line
+from genericmud.sound.bus import SoundBus
 
 
 class EngineSink:
@@ -89,7 +90,7 @@ def _wildcards(match: re.Match[str]) -> list[str]:
 
 
 class AutomationEngine:
-    def __init__(self, sink: EngineSink | None = None) -> None:
+    def __init__(self, sink: EngineSink | None = None, *, sound: SoundBus | None = None) -> None:
         self.sink = sink or EngineSink()
         self._triggers: list[_Rule] = []
         self._aliases: list[_Rule] = []
@@ -97,6 +98,7 @@ class AutomationEngine:
         self._vars: dict[str, str] = {}
         self._gvars: dict[str, str] = {}
         self.channels = ChannelRouter()  # output routing/policy, scriptable via ScriptApi
+        self.sound = sound or SoundBus()  # per-category audio mixing, scriptable via ScriptApi
 
     # --- registration ---
 

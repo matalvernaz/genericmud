@@ -25,6 +25,7 @@
 
 "f11" = "voice:flush"
 "escape" = "voice:flush"
+"shift+f11" = "sound:flush"
 "shift+f1" = "soundpack:toggle"
 
 # Per-channel recall: "recall:<channel>:N" speaks the N-th newest line routed to

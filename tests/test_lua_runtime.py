@@ -82,3 +82,13 @@ def test_lua_set_channel_policy():
     assert policy.speak is False
     assert policy.interrupt is True
     assert policy.display is True  # unspecified field falls back to the default
+
+
+def test_lua_set_volume_and_mute():
+    _sink, engine, runtime = _runtime()
+    runtime.run_source('mud.set_volume("ambient", 0.5)')
+    assert engine.sound.effective_gain("ambient") == 0.5
+    runtime.run_source('mud.mute("ambient")')
+    assert engine.sound.effective_gain("ambient") == 0.0
+    runtime.run_source('mud.mute("ambient", false)')
+    assert engine.sound.effective_gain("ambient") == 0.5
