@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import ssl
 from collections.abc import Callable
+from dataclasses import dataclass
 
 from genericmud.protocol import telnet as T
 from genericmud.protocol.telnet import (
@@ -38,6 +39,21 @@ _ACCEPT_REMOTE = frozenset(
 _ENABLE_LOCAL = frozenset({T.OPT_TTYPE, T.OPT_NAWS})
 
 
+@dataclass
+class ReconnectPolicy:
+    """Exponential backoff schedule for auto-reconnect."""
+
+    base_delay: float = 1.0
+    max_delay: float = 30.0
+    max_attempts: int = 6  # 0 = retry forever
+
+    def delay_for(self, attempt: int) -> float | None:
+        """Seconds to wait before ``attempt`` (1-based), or None once exhausted."""
+        if self.max_attempts and attempt > self.max_attempts:
+            return None
+        return min(self.max_delay, self.base_delay * (2 ** (attempt - 1)))
+
+
 class MudConnection:
     """A single live connection to a MUD server.
 
@@ -54,6 +70,12 @@ class MudConnection:
         self._read_task: asyncio.Task[None] | None = None
         self._remote_enabled: set[int] = set()
         self._local_enabled: set[int] = set()
+        # Auto-reconnect (off by default; the UI enables it and wires on_status).
+        self.auto_reconnect = False
+        self.reconnect_policy = ReconnectPolicy()
+        self.on_status: Callable[[str], None] | None = None
+        self._closing = False  # True only on a deliberate disconnect (suppresses reconnect)
+        self._target: tuple[str, int, bool, ssl.SSLContext | None] | None = None
 
     @property
     def parser(self) -> TelnetParser:
@@ -71,6 +93,8 @@ class MudConnection:
         tls: bool = False,
         ssl_context: ssl.SSLContext | None = None,
     ) -> None:
+        self._closing = False
+        self._target = (host, port, tls, ssl_context)
         ctx: ssl.SSLContext | None = None
         if tls or ssl_context is not None:
             ctx = ssl_context or ssl.create_default_context()
@@ -89,7 +113,9 @@ class MudConnection:
         except (asyncio.IncompleteReadError, ConnectionResetError):
             pass
         finally:
-            await self.close()
+            self._teardown()
+            if self._should_reconnect():
+                asyncio.create_task(self._reconnect_loop())  # noqa: RUF006 - fire-and-forget
 
     def _dispatch(self, event: Event) -> None:
         if isinstance(event, Negotiation):
@@ -157,7 +183,42 @@ class MudConnection:
         self._raw_write(data + b"\r\n")
 
     async def close(self) -> None:
+        """Deliberately disconnect; this suppresses auto-reconnect."""
+        self._closing = True
+        if self._read_task is not None:
+            self._read_task.cancel()
+        self._teardown()
+
+    def _teardown(self) -> None:
         if self._writer is not None and not self._writer.is_closing():
             self._writer.close()
         self._writer = None
         self._reader = None
+
+    def _should_reconnect(self) -> bool:
+        return self.auto_reconnect and not self._closing
+
+    def _status(self, message: str) -> None:
+        if self.on_status is not None:
+            self.on_status(message)
+
+    async def _reconnect_loop(self) -> None:
+        assert self._target is not None
+        host, port, tls, ssl_context = self._target
+        attempt = 1
+        while True:
+            delay = self.reconnect_policy.delay_for(attempt)
+            if delay is None:
+                self._status("reconnect failed; giving up")
+                return
+            self._status(f"connection lost; reconnecting in {int(delay)}s (attempt {attempt})")
+            await asyncio.sleep(delay)
+            if self._closing:  # user disconnected during the backoff wait
+                return
+            try:
+                await self.connect(host, port, tls=tls, ssl_context=ssl_context)
+            except OSError:
+                attempt += 1
+                continue
+            self._status("reconnected")
+            return

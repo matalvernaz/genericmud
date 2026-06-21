@@ -364,6 +364,10 @@ class EngineApp:
         self.voice.speak(text, channel="system", interrupt=True)
         self._post(protocol.echo(f"* {text}"))
 
+    def on_connection_status(self, message: str) -> None:
+        """Surface a transport status line (reconnecting, reconnected) to the user."""
+        self._speak_system(message)
+
     def _log(self, text: str) -> None:
         if self.logger is not None and self.logger.active:
             self.logger.log(text)

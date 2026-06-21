@@ -140,6 +140,8 @@ class SessionPanel(wx.Panel):
             credentials=self._credentials,
         )
         self._connection._on_event = self.app.on_telnet_event
+        self._connection.auto_reconnect = True
+        self._connection.on_status = self.app.on_connection_status
         self.app.on_connect(self.world.name)  # activate packs + arm auto-login before data
         try:
             await self._connection.connect(self.world.host, self.world.port, tls=self.world.tls)
