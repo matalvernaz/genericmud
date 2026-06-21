@@ -26,6 +26,32 @@ def test_incoming_line_spoken_buffered_and_posted():
     assert any(m["type"] == "line" and m["text"] == "You see a dragon" for m in posted)
 
 
+def test_command_stacking_splits_on_separator():
+    app, _backend, sent, _posted = _app()
+    app.on_ws_message({"type": "input", "text": "get sword;wield sword;n"})
+    assert sent == ["get sword", "wield sword", "n"]
+
+
+def test_command_stacking_drops_empty_pieces_and_records_walk():
+    app, _backend, sent, _posted = _app()
+    app.on_ws_message({"type": "input", "text": "n;;s;"})
+    assert sent == ["n", "s"]
+    assert app.nav.trail == ["n", "s"]
+
+
+def test_command_stacking_can_be_disabled():
+    app, _backend, sent, _posted = _app()
+    app.command_separator = ""
+    app.on_ws_message({"type": "input", "text": "say hi;bye"})
+    assert sent == ["say hi;bye"]
+
+
+def test_speedwalk_piece_inside_a_stack():
+    app, _backend, sent, _posted = _app()
+    app.on_ws_message({"type": "input", "text": ".2n;look"})
+    assert sent == ["n", "n", "look"]
+
+
 def test_coloured_line_keeps_spans_alongside_plain_text():
     app, _backend, _sent, _posted = _app()
     app.on_telnet_event(DataReceived(b"a \x1b[31mred\x1b[0m word\r\n"))

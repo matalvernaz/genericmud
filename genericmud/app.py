@@ -134,6 +134,7 @@ class EngineApp:
         self.channels.set_policy("system", ChannelPolicy(interrupt=True))
         self.keymap = keymap or {}
         self.nav = Navigator()  # breadcrumb trail + GMCP room for speedwalk/where-am-I
+        self.command_separator = ";"  # stacked input ("n;n;look"); set "" to disable
         self._pending = ""
         self._gauges: dict[str, object] = {}
 
@@ -246,14 +247,24 @@ class EngineApp:
     def on_ws_message(self, message: dict) -> None:
         kind = message.get("type")
         if kind == protocol.INPUT:
-            text = message.get("text", "")
-            if self._speedwalk(text):
-                return
-            for line in self.engine.process_input(text):
-                self._send(line)
-                self.nav.record(line)  # build the breadcrumb trail from manual walking
+            for command in self._split_commands(message.get("text", "")):
+                self._dispatch_command(command)
         elif kind == protocol.KEY:
             self._handle_key(message.get("key", ""))
+
+    def _split_commands(self, text: str) -> list[str]:
+        """Split stacked input on the separator ("n;n;look"); empty separator = off."""
+        separator = self.command_separator
+        if not separator or separator not in text:
+            return [text]
+        return [part for part in text.split(separator) if part != ""]
+
+    def _dispatch_command(self, text: str) -> None:
+        if self._speedwalk(text):
+            return
+        for line in self.engine.process_input(text):
+            self._send(line)
+            self.nav.record(line)  # build the breadcrumb trail from manual walking
 
     def _speedwalk(self, text: str) -> bool:
         """Expand and send a "." speedwalk run (e.g. ".3n2e"); False if not one."""
