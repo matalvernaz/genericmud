@@ -30,6 +30,10 @@ voice = [
   "accessible_output2>=0.16; platform_system == 'Windows' or platform_system == 'Darwin'",
   "pywin32>=306; platform_system == 'Windows'",  # SAPI5 fallback voice
 ]
+# native soundpack audio playback (the SoundBus pygame backend; --web doesn't need it)
+audio = [
+  "pygame>=2.5",
+]
 # standalone .exe packaging (run on Windows)
 package = [
   "pyinstaller>=6",

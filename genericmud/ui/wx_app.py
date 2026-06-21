@@ -27,6 +27,7 @@ from genericmud.bridge import protocol
 from genericmud.config.keymap import load_keymap
 from genericmud.config.worlds import World, config_dir, load_worlds, save_worlds
 from genericmud.packs import PackStore
+from genericmud.sound.pygame_backend import make_pygame_backend
 from genericmud.transport.connection import MudConnection
 from genericmud.voice.factory import make_voice_backend
 from genericmud.voice.router import VoiceRouter
@@ -131,6 +132,7 @@ class SessionPanel(wx.Panel):
             schedule=self._loop.call_later,
             keymap=self._keymap,
             packs=self._packs,
+            sound_backend=make_pygame_backend(),  # native SFX; None -> falls back to post
         )
         self._connection._on_event = self.app.on_telnet_event
         self.app.activate_packs(self.world.name)  # arm pack triggers before data arrives

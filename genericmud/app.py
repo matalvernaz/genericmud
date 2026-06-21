@@ -107,13 +107,15 @@ class EngineApp:
         schedule: Callable[[float, Callable[[], None]], None] | None = None,
         keymap: dict[str, str] | None = None,
         packs: PackStore | None = None,
+        sound_backend: SoundBackend | None = None,
     ) -> None:
         self.buffer = Buffer()
         self.voice = voice
         self.packs = packs
         self._send = send or (lambda _text: None)
         self._post = post or (lambda _message: None)
-        self.sound = SoundBus(_PostSoundBackend(self._post))  # per-category mixing + flush
+        # Native (wx) injects a pygame backend; otherwise sounds post to the renderer.
+        self.sound = SoundBus(sound_backend or _PostSoundBackend(self._post))
         self.sink = AppSink(
             send=self._send,
             post=self._post,
