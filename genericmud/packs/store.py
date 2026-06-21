@@ -40,16 +40,23 @@ class PackStore:
         self.packs_dir = self.root / "packs"
         self._index_path = self.root / "index.json"
         self._worlds_path = self.root / "worlds.json"
+        self._trust_path = self.root / "trust.json"
 
     # --- install / uninstall ---
 
     def install(
-        self, source: str | Path, *, world: str | None = None, replace: bool = False
+        self,
+        source: str | Path,
+        *,
+        world: str | None = None,
+        replace: bool = False,
+        trust: bool = False,
     ) -> PackManifest:
         """Install a pack: a dir with ``pack.toml``, a bare script, or a ``.zip``.
 
         ``replace=True`` updates an already-installed pack in place. ``world``
-        enables the pack for that MUD as part of the install.
+        enables the pack for that MUD. Installs are untrusted by default (held
+        back from auto-load on connect); pass ``trust=True`` to vouch for it now.
         """
         source = Path(source)
         if not source.exists():
@@ -61,11 +68,12 @@ class PackStore:
                         archive.extractall(tmp)  # CPython sanitizes member paths (no zip-slip)
                 except zipfile.BadZipFile as exc:
                     raise PackError(f"not a valid zip: {source} ({exc})") from exc
-                return self._install_from(_pack_root(Path(tmp)), world=world, replace=replace)
-        return self._install_from(source, world=world, replace=replace)
+                root = _pack_root(Path(tmp))
+                return self._install_from(root, world=world, replace=replace, trust=trust)
+        return self._install_from(source, world=world, replace=replace, trust=trust)
 
     def _install_from(
-        self, source: Path, *, world: str | None, replace: bool
+        self, source: Path, *, world: str | None, replace: bool, trust: bool
     ) -> PackManifest:
         manifest = load_manifest(source)
         index = self._load_index()
@@ -86,6 +94,8 @@ class PackStore:
         self._save_index(index)
         if world:
             self.enable(manifest.id, world)
+        if trust:
+            self.trust(manifest.id)
         return manifest
 
     def uninstall(self, pack_id: str) -> None:
@@ -100,6 +110,7 @@ class PackStore:
         worlds = self._load_worlds()
         if any(pack_id in ids for ids in worlds.values()):
             self._save_worlds({w: [i for i in ids if i != pack_id] for w, ids in worlds.items()})
+        self.untrust(pack_id)
 
     # --- enablement (per world) ---
 
@@ -120,6 +131,25 @@ class PackStore:
 
     def is_enabled(self, pack_id: str, world: str) -> bool:
         return pack_id in self._load_worlds().get(world, [])
+
+    # --- trust (auto-load consent; the sandbox already covers execution safety) ---
+
+    def trust(self, pack_id: str) -> None:
+        if pack_id not in self._load_index():
+            raise UnknownPack(pack_id)
+        trusted = self._load_trust()
+        if pack_id not in trusted:
+            trusted.add(pack_id)
+            self._save_trust(trusted)
+
+    def untrust(self, pack_id: str) -> None:
+        trusted = self._load_trust()
+        if pack_id in trusted:
+            trusted.discard(pack_id)
+            self._save_trust(trusted)
+
+    def is_trusted(self, pack_id: str) -> bool:
+        return pack_id in self._load_trust()
 
     # --- queries ---
 
@@ -160,6 +190,12 @@ class PackStore:
 
     def _save_worlds(self, data: dict) -> None:
         _save_json(self._worlds_path, data)
+
+    def _load_trust(self) -> set[str]:
+        return set(_load_json(self._trust_path).get("trusted", []))
+
+    def _save_trust(self, trusted: set[str]) -> None:
+        _save_json(self._trust_path, {"trusted": sorted(trusted)})
 
 
 def _pack_root(extracted: Path) -> Path:

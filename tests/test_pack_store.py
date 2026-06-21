@@ -183,3 +183,37 @@ def test_state_persists_across_store_instances(tmp_path):
     assert [m.id for m in reopened.enabled("mud")] == ["hunting"]
     # index.json is human-readable JSON, not a pickle
     assert "hunting" in json.loads((root / "index.json").read_text(encoding="utf-8"))
+
+
+def test_install_is_untrusted_by_default(tmp_path):
+    store = PackStore(tmp_path / "store")
+    store.install(_bare_pack(tmp_path, "hunting.lua"))
+    assert store.is_trusted("hunting") is False
+
+
+def test_install_with_trust_flag(tmp_path):
+    store = PackStore(tmp_path / "store")
+    store.install(_bare_pack(tmp_path, "hunting.lua"), trust=True)
+    assert store.is_trusted("hunting") is True
+
+
+def test_trust_and_untrust_roundtrip(tmp_path):
+    store = PackStore(tmp_path / "store")
+    store.install(_bare_pack(tmp_path, "hunting.lua"))
+    store.trust("hunting")
+    assert store.is_trusted("hunting")
+    store.untrust("hunting")
+    assert not store.is_trusted("hunting")
+
+
+def test_trust_unknown_pack_raises(tmp_path):
+    with pytest.raises(UnknownPack):
+        PackStore(tmp_path / "store").trust("ghost")
+
+
+def test_uninstall_clears_trust(tmp_path):
+    store = PackStore(tmp_path / "store")
+    store.install(_bare_pack(tmp_path, "hunting.lua"), trust=True)
+    store.uninstall("hunting")
+    store.install(_bare_pack(tmp_path, "hunting.lua"))  # reinstall
+    assert not store.is_trusted("hunting")  # trust didn't linger after uninstall

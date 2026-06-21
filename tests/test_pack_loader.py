@@ -10,10 +10,10 @@ from genericmud.packs import PackStore, activate_world
 from tests.helpers import RecordingSink
 
 
-def _install(store, tmp_path, name, body, *, world="mud"):
+def _install(store, tmp_path, name, body, *, world="mud", trust=True):
     src = tmp_path / name
     src.write_text(body, encoding="utf-8")
-    return store.install(src, world=world)
+    return store.install(src, world=world, trust=trust)
 
 
 def _engine_and_store(tmp_path):
@@ -76,3 +76,28 @@ def test_no_conflict_when_packs_bind_distinct_keys(tmp_path):
     _install(store, tmp_path, "packb.lua", 'mud.key("f2", function() end)')
     result = activate_world(store, "mud", engine)
     assert result.conflicts == []
+
+
+def test_untrusted_enabled_pack_is_skipped(tmp_path):
+    sink, engine, store = _engine_and_store(tmp_path)
+    _install(
+        store, tmp_path, "hunt.lua",
+        'mud.trigger("ping", function() mud.send("pong") end)', trust=False,
+    )
+    result = activate_world(store, "mud", engine)
+    assert result.loaded == []
+    assert result.skipped_untrusted == ["hunt"]
+    engine.process_line(Line("ping"))
+    assert sink.sent == []  # untrusted pack never armed its trigger
+
+
+def test_require_trust_false_loads_untrusted(tmp_path):
+    sink, engine, store = _engine_and_store(tmp_path)
+    _install(
+        store, tmp_path, "hunt.lua",
+        'mud.trigger("ping", function() mud.send("pong") end)', trust=False,
+    )
+    result = activate_world(store, "mud", engine, require_trust=False)
+    assert result.loaded == ["hunt"]
+    engine.process_line(Line("ping"))
+    assert sink.sent == ["pong"]

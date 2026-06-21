@@ -22,21 +22,38 @@ def _store(args: argparse.Namespace) -> PackStore:
 
 
 def _cmd_list(args: argparse.Namespace) -> int:
-    packs = _store(args).installed()
+    store = _store(args)
+    packs = store.installed()
     if not packs:
         print("No soundpacks installed.")
         return 0
     for manifest in sorted(packs, key=lambda p: p.id):
         targets = ", ".join(manifest.worlds) if manifest.worlds else "any"
-        print(f"{manifest.id}  ({manifest.dialect}, v{manifest.version})  "
+        trust = "trusted" if store.is_trusted(manifest.id) else "UNTRUSTED"
+        print(f"{manifest.id}  ({manifest.dialect}, v{manifest.version}, {trust})  "
               f"{manifest.name}  [targets: {targets}]")
     return 0
 
 
 def _cmd_install(args: argparse.Namespace) -> int:
-    manifest = _store(args).install(args.source, world=args.world, replace=args.replace)
+    manifest = _store(args).install(
+        args.source, world=args.world, replace=args.replace, trust=args.trust
+    )
     enabled = f" and enabled for {args.world}" if args.world else ""
-    print(f"Installed {manifest.id} ({manifest.dialect}){enabled}.")
+    trust = " (trusted)" if args.trust else " (untrusted — run 'trust' to auto-load it)"
+    print(f"Installed {manifest.id} ({manifest.dialect}){enabled}{trust}.")
+    return 0
+
+
+def _cmd_trust(args: argparse.Namespace) -> int:
+    _store(args).trust(args.id)
+    print(f"Trusted {args.id}; it will auto-load on connect.")
+    return 0
+
+
+def _cmd_untrust(args: argparse.Namespace) -> int:
+    _store(args).untrust(args.id)
+    print(f"Untrusted {args.id}; it stays installed but won't auto-load.")
     return 0
 
 
@@ -63,6 +80,8 @@ def _cmd_conflicts(args: argparse.Namespace) -> int:
     result = activate_world(store, args.world, AutomationEngine())
     enabled = store.enabled(args.world)
     print(f"{len(enabled)} pack(s) enabled for {args.world}; {len(result.loaded)} loaded clean.")
+    for pack_id in result.skipped_untrusted:
+        print(f"  SKIPPED {pack_id}: not trusted (run 'trust {pack_id}')")
     for pack_id, error in result.failed.items():
         print(f"  FAILED {pack_id}: {error}")
     if not result.conflicts:
@@ -84,6 +103,7 @@ def build_parser() -> argparse.ArgumentParser:
     install.add_argument("source")
     install.add_argument("--world", help="also enable the pack for this MUD")
     install.add_argument("--replace", action="store_true", help="update if already installed")
+    install.add_argument("--trust", action="store_true", help="trust now (auto-load on connect)")
     install.set_defaults(func=_cmd_install)
 
     enable = sub.add_parser("enable", help="enable a pack for a world")
@@ -99,6 +119,14 @@ def build_parser() -> argparse.ArgumentParser:
     uninstall = sub.add_parser("uninstall", help="remove a pack entirely")
     uninstall.add_argument("id")
     uninstall.set_defaults(func=_cmd_uninstall)
+
+    trust = sub.add_parser("trust", help="trust a pack so it auto-loads on connect")
+    trust.add_argument("id")
+    trust.set_defaults(func=_cmd_trust)
+
+    untrust = sub.add_parser("untrust", help="stop a pack auto-loading (keeps it installed)")
+    untrust.add_argument("id")
+    untrust.set_defaults(func=_cmd_untrust)
 
     conflicts = sub.add_parser("conflicts", help="dry-run activate a world; report clashes")
     conflicts.add_argument("world")

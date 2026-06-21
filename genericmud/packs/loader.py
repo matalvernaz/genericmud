@@ -49,6 +49,7 @@ class ActivationResult:
     loaded: list[str] = field(default_factory=list)  # pack ids that loaded cleanly
     failed: dict[str, str] = field(default_factory=dict)  # pack id -> error message
     conflicts: list[Conflict] = field(default_factory=list)
+    skipped_untrusted: list[str] = field(default_factory=list)  # enabled but not trusted
 
 
 def activate_pack(manifest: PackManifest, api: ScriptApi, entry: str) -> None:
@@ -56,10 +57,19 @@ def activate_pack(manifest: PackManifest, api: ScriptApi, entry: str) -> None:
     DIALECT_LOADERS[manifest.dialect](api, entry)
 
 
-def activate_world(store: PackStore, world: str, engine: AutomationEngine) -> ActivationResult:
-    """Load every pack enabled for ``world`` (in order) and report conflicts."""
+def activate_world(
+    store: PackStore, world: str, engine: AutomationEngine, *, require_trust: bool = True
+) -> ActivationResult:
+    """Load every pack enabled for ``world`` (in order) and report conflicts.
+
+    With ``require_trust`` (the default, matching connect), an enabled-but-untrusted
+    pack is held back and listed in ``skipped_untrusted`` instead of running.
+    """
     result = ActivationResult()
     for manifest in store.enabled(world):
+        if require_trust and not store.is_trusted(manifest.id):
+            result.skipped_untrusted.append(manifest.id)
+            continue
         api = ScriptApi(engine, source=manifest.id, base_dir=str(store.pack_dir(manifest.id)))
         try:
             activate_pack(manifest, api, str(store.entry_path(manifest.id)))

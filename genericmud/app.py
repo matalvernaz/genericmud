@@ -152,6 +152,8 @@ class EngineApp:
         parts: list[str] = []
         if result.loaded:
             parts.append(f"{len(result.loaded)} soundpack{'s' if len(result.loaded) != 1 else ''}")
+        for pack_id in result.skipped_untrusted:
+            parts.append(f"{pack_id} not loaded, not trusted")
         for pack_id, error in result.failed.items():
             parts.append(f"{pack_id} failed to load: {error}")
         for conflict in result.conflicts:
