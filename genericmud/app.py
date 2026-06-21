@@ -25,7 +25,9 @@ from genericmud.protocol.msp import parse_msp_line
 from genericmud.protocol.oob import OobMessage, ServerStatus, from_subnegotiation
 from genericmud.render.ansi import parse_ansi
 from genericmud.review.cursor import ReviewCursor
+from genericmud.session.credentials import CredentialStore
 from genericmud.session.log import SessionLogger
+from genericmud.session.login import AutoLogin
 from genericmud.sound.bus import SoundBackend, SoundBus
 from genericmud.voice.router import VoiceRouter
 
@@ -116,6 +118,7 @@ class EngineApp:
         sound_backend: SoundBackend | None = None,
         name: str = "",
         log_dir: Path | None = None,
+        credentials: CredentialStore | None = None,
     ) -> None:
         self.buffer = Buffer()
         self.voice = voice
@@ -144,6 +147,8 @@ class EngineApp:
         self.name = name  # session label, used for the log filename
         self.log_dir = Path(log_dir) if log_dir else config_dir() / "logs"
         self.logger: SessionLogger | None = None
+        self.credentials = credentials
+        self._login: AutoLogin | None = None
         self._pending = ""
         self._gauges: dict[str, object] = {}
 
@@ -160,6 +165,23 @@ class EngineApp:
         result = activate_world(self.packs, world, self.engine)
         self._announce_activation(result)
         return result
+
+    def on_connect(self, world: str) -> ActivationResult | None:
+        """The on-connect sequence: activate enabled packs, then arm auto-login."""
+        result = self.activate_packs(world)
+        self.begin_login(world)
+        return result
+
+    def begin_login(self, world: str) -> None:
+        """Arm auto-login for ``world`` if credentials are stored for it."""
+        self._login = None
+        if self.credentials is None:
+            return
+        creds = self.credentials.get(world)
+        if creds is None:
+            return
+        username, password = creds
+        self._login = AutoLogin(username, password, self._send)
 
     def _announce_activation(self, result: ActivationResult) -> None:
         parts: list[str] = []
@@ -213,6 +235,8 @@ class EngineApp:
         line = Line(plain, spans=spans)
         self.engine.process_line(line)  # may set line.channel and gag flags
         self._log(line.plain_text)  # full session log, including gagged-from-speech
+        if self._login is not None and not self._login.done:
+            self._login.feed(line.plain_text)  # answer name/password prompts
         policy = self.channels.policy(line.channel)
         if policy.speak and not line.gagged:
             self.voice.speak(
