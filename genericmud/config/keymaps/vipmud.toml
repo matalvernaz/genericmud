@@ -33,3 +33,9 @@
 # or mud.set_channel; these bind once the active soundpack defines them.
 "alt+t" = "recall:tell:1"
 "alt+c" = "recall:chat:1"
+
+# Navigation. Type ".3n2e" in the command box to speedwalk (3 north, 2 east).
+# alt+b drops a breadcrumb here; alt+r retraces the way back; alt+w says where you are.
+"alt+b" = "nav:mark"
+"alt+r" = "nav:retrace"
+"alt+w" = "nav:where"

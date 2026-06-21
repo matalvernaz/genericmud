@@ -15,6 +15,7 @@ from genericmud.automation.channels import ChannelPolicy
 from genericmud.automation.engine import AutomationEngine, EngineSink
 from genericmud.bridge import protocol
 from genericmud.model.buffer import Buffer, Line
+from genericmud.navigation import Navigator, expand_speedwalk
 from genericmud.packs import ActivationResult, PackStore, activate_world
 from genericmud.protocol import telnet as T
 from genericmud.protocol.msp import parse_msp_line
@@ -25,6 +26,7 @@ from genericmud.sound.bus import SoundBackend, SoundBus
 from genericmud.voice.router import VoiceRouter
 
 REVIEW_CHANNEL = "review"
+SPEEDWALK_PREFIX = "."  # ".3n2e" expands to n,n,n,e,e (leading char disambiguates)
 _REVIEW_VERBS = frozenset(
     {"prev_line", "next_line", "prev_word", "next_word", "prev_char", "next_char", "top", "bottom"}
 )
@@ -131,6 +133,7 @@ class EngineApp:
         self.channels.set_policy("tell", ChannelPolicy(interrupt=True))
         self.channels.set_policy("system", ChannelPolicy(interrupt=True))
         self.keymap = keymap or {}
+        self.nav = Navigator()  # breadcrumb trail + GMCP room for speedwalk/where-am-I
         self._pending = ""
         self._gauges: dict[str, object] = {}
 
@@ -221,21 +224,47 @@ class EngineApp:
             for message in result:
                 if isinstance(message, OobMessage):
                     self._gauges[message.name] = message.value
+                    if self._is_room_info(message):
+                        self.nav.update_room(message.value)
             if result:
                 self._post(protocol.status(self._gauges))
         elif isinstance(result, ServerStatus):
             self._gauges.update(result.data)
             self._post(protocol.status(self._gauges))
 
+    @staticmethod
+    def _is_room_info(message: OobMessage) -> bool:
+        return (
+            message.source == "gmcp"
+            and message.name.lower() == "room.info"
+            and isinstance(message.value, dict)
+        )
+
     # --- inbound from the renderer (WS messages) ---
 
     def on_ws_message(self, message: dict) -> None:
         kind = message.get("type")
         if kind == protocol.INPUT:
-            for line in self.engine.process_input(message.get("text", "")):
+            text = message.get("text", "")
+            if self._speedwalk(text):
+                return
+            for line in self.engine.process_input(text):
                 self._send(line)
+                self.nav.record(line)  # build the breadcrumb trail from manual walking
         elif kind == protocol.KEY:
             self._handle_key(message.get("key", ""))
+
+    def _speedwalk(self, text: str) -> bool:
+        """Expand and send a "." speedwalk run (e.g. ".3n2e"); False if not one."""
+        if not text.startswith(SPEEDWALK_PREFIX):
+            return False
+        steps = expand_speedwalk(text[len(SPEEDWALK_PREFIX) :])
+        if not steps:
+            return False
+        for direction in steps:
+            self._send(direction)
+            self.nav.record(direction)
+        return True
 
     def _handle_key(self, combo: str) -> None:
         action = self.keymap.get(combo)
@@ -257,8 +286,30 @@ class EngineApp:
             self.voice.flush()
         elif namespace == "sound" and argument == "flush":
             self.sound.flush()  # panic key: cut all playing audio (Shift+F11)
+        elif namespace == "nav":
+            self._handle_nav(argument)
         # "soundpack:toggle" and other namespaces are wired as features land.
+
+    def _handle_nav(self, action: str) -> None:
+        if action == "mark":
+            self.nav.clear()
+            self._speak_system("breadcrumb dropped")
+        elif action == "retrace":
+            path = self.nav.retrace()
+            if not path:
+                self._speak_system("no trail to retrace")
+                return
+            for direction in path:
+                self._send(direction)
+            self.nav.clear()  # optimistic: assume the way back succeeded
+            self._speak_system(f"retracing {len(path)} steps")
+        elif action == "where":
+            self._speak_system(self.nav.where())
 
     def _speak_review(self, text: str) -> None:
         self.voice.speak(text, channel=REVIEW_CHANNEL, interrupt=True)
         self._post(protocol.review(text))
+
+    def _speak_system(self, text: str) -> None:
+        self.voice.speak(text, channel="system", interrupt=True)
+        self._post(protocol.echo(f"* {text}"))
