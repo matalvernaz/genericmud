@@ -10,10 +10,13 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from datetime import datetime
+from pathlib import Path
 
 from genericmud.automation.channels import ChannelPolicy
 from genericmud.automation.engine import AutomationEngine, EngineSink
 from genericmud.bridge import protocol
+from genericmud.config.worlds import config_dir
 from genericmud.model.buffer import Buffer, Line
 from genericmud.navigation import Navigator, expand_speedwalk
 from genericmud.packs import ActivationResult, PackStore, activate_world
@@ -22,6 +25,7 @@ from genericmud.protocol.msp import parse_msp_line
 from genericmud.protocol.oob import OobMessage, ServerStatus, from_subnegotiation
 from genericmud.render.ansi import parse_ansi
 from genericmud.review.cursor import ReviewCursor
+from genericmud.session.log import SessionLogger
 from genericmud.sound.bus import SoundBackend, SoundBus
 from genericmud.voice.router import VoiceRouter
 
@@ -110,6 +114,8 @@ class EngineApp:
         keymap: dict[str, str] | None = None,
         packs: PackStore | None = None,
         sound_backend: SoundBackend | None = None,
+        name: str = "",
+        log_dir: Path | None = None,
     ) -> None:
         self.buffer = Buffer()
         self.voice = voice
@@ -135,6 +141,9 @@ class EngineApp:
         self.keymap = keymap or {}
         self.nav = Navigator()  # breadcrumb trail + GMCP room for speedwalk/where-am-I
         self.command_separator = ";"  # stacked input ("n;n;look"); set "" to disable
+        self.name = name  # session label, used for the log filename
+        self.log_dir = Path(log_dir) if log_dir else config_dir() / "logs"
+        self.logger: SessionLogger | None = None
         self._pending = ""
         self._gauges: dict[str, object] = {}
 
@@ -203,6 +212,7 @@ class EngineApp:
             return  # blank line: any sound cues already fired; don't show/speak "blank"
         line = Line(plain, spans=spans)
         self.engine.process_line(line)  # may set line.channel and gag flags
+        self._log(line.plain_text)  # full session log, including gagged-from-speech
         policy = self.channels.policy(line.channel)
         if policy.speak and not line.gagged:
             self.voice.speak(
@@ -260,6 +270,8 @@ class EngineApp:
         return [part for part in text.split(separator) if part != ""]
 
     def _dispatch_command(self, text: str) -> None:
+        if text.strip():
+            self._log(f"> {text}")
         if self._speedwalk(text):
             return
         for line in self.engine.process_input(text):
@@ -300,6 +312,8 @@ class EngineApp:
             self.sound.flush()  # panic key: cut all playing audio (Shift+F11)
         elif namespace == "nav":
             self._handle_nav(argument)
+        elif namespace == "log" and argument == "toggle":
+            self._toggle_log()
         # "soundpack:toggle" and other namespaces are wired as features land.
 
     def _handle_nav(self, action: str) -> None:
@@ -325,3 +339,20 @@ class EngineApp:
     def _speak_system(self, text: str) -> None:
         self.voice.speak(text, channel="system", interrupt=True)
         self._post(protocol.echo(f"* {text}"))
+
+    def _log(self, text: str) -> None:
+        if self.logger is not None and self.logger.active:
+            self.logger.log(text)
+
+    def _toggle_log(self) -> None:
+        if self.logger is not None and self.logger.active:
+            name = self.logger.path.name
+            self.logger.stop()
+            self.logger = None
+            self._speak_system(f"logging stopped: {name}")
+            return
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        path = self.log_dir / f"{self.name or 'session'}-{stamp}.log"
+        self.logger = SessionLogger(path)
+        self.logger.start()
+        self._speak_system(f"logging to {path.name}")

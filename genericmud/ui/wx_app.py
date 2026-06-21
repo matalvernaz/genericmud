@@ -133,6 +133,7 @@ class SessionPanel(wx.Panel):
             keymap=self._keymap,
             packs=self._packs,
             sound_backend=make_pygame_backend(),  # native SFX; None -> falls back to post
+            name=self.world.name,  # used for the session log filename
         )
         self._connection._on_event = self.app.on_telnet_event
         self.app.activate_packs(self.world.name)  # arm pack triggers before data arrives

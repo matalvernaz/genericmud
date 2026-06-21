@@ -39,3 +39,7 @@
 "alt+b" = "nav:mark"
 "alt+r" = "nav:retrace"
 "alt+w" = "nav:where"
+
+# Logging: toggle writing this session's output + sent commands to a timestamped
+# file under ~/.genericmud/logs.
+"alt+shift+l" = "log:toggle"
