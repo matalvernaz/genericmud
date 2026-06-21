@@ -20,7 +20,7 @@ from genericmud.packs import ActivationResult, PackStore, activate_world
 from genericmud.protocol import telnet as T
 from genericmud.protocol.msp import parse_msp_line
 from genericmud.protocol.oob import OobMessage, ServerStatus, from_subnegotiation
-from genericmud.render.ansi import strip_ansi
+from genericmud.render.ansi import parse_ansi
 from genericmud.review.cursor import ReviewCursor
 from genericmud.sound.bus import SoundBackend, SoundBus
 from genericmud.voice.router import VoiceRouter
@@ -190,16 +190,17 @@ class EngineApp:
             self._pending = ""
 
     def _emit_line(self, text: str) -> None:
-        text = strip_ansi(text)
-        text, cues = parse_msp_line(text)
+        text, cues = parse_msp_line(text)  # strip MSP markers before colour parsing
         for cue in cues:
             if cue.kind == "music":
                 self.sound.music(cue.file)
             else:
                 self.sound.play(cue.file, gain=cue.volume / 100.0)
-        if not text.strip():
+        spans = parse_ansi(text)
+        plain = "".join(span.text for span in spans)
+        if not plain.strip():
             return  # blank line: any sound cues already fired; don't show/speak "blank"
-        line = Line(text)
+        line = Line(plain, spans=spans)
         self.engine.process_line(line)  # may set line.channel and gag flags
         policy = self.channels.policy(line.channel)
         if policy.speak and not line.gagged:

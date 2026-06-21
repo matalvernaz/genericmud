@@ -26,6 +26,26 @@ def test_incoming_line_spoken_buffered_and_posted():
     assert any(m["type"] == "line" and m["text"] == "You see a dragon" for m in posted)
 
 
+def test_coloured_line_keeps_spans_alongside_plain_text():
+    app, _backend, _sent, _posted = _app()
+    app.on_telnet_event(DataReceived(b"a \x1b[31mred\x1b[0m word\r\n"))
+    line = app.buffer.lines()[-1]
+    assert line.plain_text == "a red word"  # speech/matching text unchanged
+    assert any(span.fg == "red" and span.text == "red" for span in line.spans)
+
+
+def test_colour_aware_trigger_sees_span_colour():
+    app, _backend, sent, _posted = _app()
+
+    def on_incoming(ctx):
+        if any(span.fg == "red" for span in ctx.line.spans):
+            ctx.engine.sink.send("alert")  # only react when the line came in red
+
+    app.engine.add_trigger("incoming", on_incoming)
+    app.on_telnet_event(DataReceived(b"\x1b[31mincoming attack\x1b[0m\r\n"))
+    assert sent == ["alert"]
+
+
 def test_gagged_line_not_spoken():
     app, backend, _sent, _posted = _app()
     app.engine.add_trigger("spammy", None, gag=True)

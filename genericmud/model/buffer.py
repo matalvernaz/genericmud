@@ -1,10 +1,11 @@
 """Line and scrollback Buffer — the single source of truth for output.
 
-A :class:`Line` is one logical output line; styled spans (from the ANSI parser)
-attach later, so for now ``plain_text`` carries the content used for trigger
-matching and review. The :class:`Buffer` is a bounded ring: the live self-voice
-reacts to append *events*, while review reads the buffer, keeping the two
-decoupled (the anti-flooding design).
+A :class:`Line` is one logical output line. ``plain_text`` carries the content
+used for trigger matching, speech, and review; ``spans`` holds the same text
+split into colour runs (from the ANSI parser) so colour-aware triggers can
+inspect style. The :class:`Buffer` is a bounded ring: the live self-voice reacts
+to append *events*, while review reads the buffer, keeping the two decoupled (the
+anti-flooding design).
 """
 
 from __future__ import annotations
@@ -12,6 +13,8 @@ from __future__ import annotations
 import time
 from collections import deque
 from dataclasses import dataclass, field
+
+from genericmud.render.ansi import Span
 
 DEFAULT_CAPACITY = 50_000
 
@@ -23,6 +26,7 @@ class Line:
     gagged: bool = False  # suppressed from self-voice
     display_when_gagged: bool = False  # gagged from voice but kept visible/reviewable
     ts: float = field(default_factory=time.time)
+    spans: list[Span] = field(default_factory=list)  # colour runs; empty if unparsed
 
 
 class Buffer:
