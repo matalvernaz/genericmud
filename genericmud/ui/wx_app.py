@@ -38,6 +38,7 @@ from genericmud.packs import (
     PackStore,
     activate_world,
     detect_entry,
+    entry_problem,
     setup_pack,
     slugify,
     vault,
@@ -641,11 +642,16 @@ class VaultBrowserDialog(wx.Dialog):
         try:
             archive = vault.download(best.url, tmp / "pack.zip", progress=self._progress)
             extracted = tmp / slugify(pack.name)  # pack-named dir -> a stable, unique pack id
-            with zipfile.ZipFile(archive) as bundle:
-                bundle.extractall(extracted)  # CPython sanitises member paths (no zip-slip)
+            try:
+                with zipfile.ZipFile(archive) as bundle:
+                    bundle.extractall(extracted)  # CPython sanitises member paths (no zip-slip)
+            except zipfile.BadZipFile as exc:
+                raise PackError(
+                    "the download wasn't a ZIP (the site may have served a web page)"
+                ) from exc
             entry = detect_entry(extracted)
             if entry is None:
-                raise PackError("no load script (e.g. main.set) found in the pack")
+                raise PackError(entry_problem(extracted))
             return setup_pack(self._store, extracted, entry=entry)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)  # the pack is copied into the store
@@ -783,7 +789,7 @@ class GenericMudFrame(wx.Frame):
         entry = detect_entry(folder)
         if entry is None:
             wx.MessageBox(
-                "Couldn't find a single load script (e.g. main.set) in that folder.",
+                f"Can't set up this folder: {entry_problem(folder)}.",
                 "Set up a soundpack", wx.OK | wx.ICON_ERROR,
             )
             return

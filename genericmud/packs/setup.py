@@ -16,7 +16,9 @@ from genericmud.packs.manifest import DIALECT_BY_SUFFIX, PackManifest
 from genericmud.packs.store import PackStore
 from genericmud.packs.world_import import world_from_pack
 
-_ENTRY_PREFERENCE = ("main.set", "main.lua", "main.xml")  # the conventional load script
+# Conventional load-script filenames, best-first.
+_ENTRY_PREFERENCE = ("main.set", "main.lua", "main.xml", "start.set", "startup.set", "load.set")
+_MIN_NAMED_STEM = 4  # only match a script "named after the pack" if the stem is this long
 
 
 @dataclass
@@ -26,24 +28,61 @@ class SetupResult:
     enabled_for: str | None  # the world name the pack was enabled for, if any
 
 
+def _contains(path: Path, needle: str) -> bool:
+    try:
+        return needle in path.read_text(encoding="latin-1", errors="ignore").lower()
+    except OSError:
+        return False
+
+
 def detect_entry(pack_dir: str | Path) -> str | None:
     """Best-guess load script for a multi-file pack, relative to ``pack_dir``.
 
-    A conventional ``main.*`` wins; otherwise a lone script; otherwise None
-    (ambiguous — the caller asks). Lets the setup flow handle real packs that ship
-    a ``main.set`` alongside many helper scripts.
+    Real packs rarely match a single naming rule, so try, in order: a conventional
+    ``main.*``/``start.*`` name; a VIPMud ``.set`` that ``#load``s the others (the
+    loader); a script named after the pack (e.g. ``toastush.xml`` in a toastush
+    pack); finally a lone script. None means ambiguous — the caller explains why.
+    Entry paths are POSIX (forward slashes) so they're portable; pathlib accepts
+    them on every OS.
     """
     pack_dir = Path(pack_dir)
     scripts = sorted(p for p in pack_dir.rglob("*") if p.suffix.lower() in DIALECT_BY_SUFFIX)
-    # as_posix() so the stored entry is portable (forward slashes), not OS-specific
-    # backslashes on Windows; pathlib accepts forward slashes on every platform.
+    if not scripts:
+        return None
+
+    def rel(script: Path) -> str:
+        return script.relative_to(pack_dir).as_posix()
+
     for preferred in _ENTRY_PREFERENCE:
         for script in scripts:
             if script.name.lower() == preferred:
-                return script.relative_to(pack_dir).as_posix()
+                return rel(script)
+    for script in scripts:  # a VIPMud loader pulls in the rest with #load
+        if script.suffix.lower() == ".set" and _contains(script, "#load"):
+            return rel(script)
+    root = pack_dir.name.lower()  # a plugin named after the pack (toastush.xml in toastush/)
+    for script in scripts:
+        stem = script.stem.lower()
+        if len(stem) >= _MIN_NAMED_STEM and stem in root:
+            return rel(script)
     if len(scripts) == 1:
-        return scripts[0].relative_to(pack_dir).as_posix()
+        return rel(scripts[0])
     return None
+
+
+def entry_problem(pack_dir: str | Path) -> str:
+    """A human-readable reason why no load script was found, for the UI to show.
+
+    Distinguishes the common dead ends: a Windows installer bundle, a multi-plugin
+    MUSHclient pack we can't auto-pick a load file for, or no script at all.
+    """
+    pack_dir = Path(pack_dir)
+    files = list(pack_dir.rglob("*"))
+    if any(f.suffix.lower() in (".exe", ".dll") for f in files):
+        return "this download is a Windows installer, not an importable soundpack"
+    if any(f.suffix.lower() == ".xml" for f in files):
+        return "this is a multi-plugin MUSHclient pack; pick its load file with Set Up instead"
+    return "no soundpack script (.set/.lua/.xml) was found in this download"
 
 
 def setup_pack(

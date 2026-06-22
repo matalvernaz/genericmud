@@ -22,7 +22,7 @@ from genericmud.packs.manifest import (
     load_manifest,
     slugify,
 )
-from genericmud.packs.setup import SetupResult, detect_entry, setup_pack
+from genericmud.packs.setup import SetupResult, detect_entry, entry_problem, setup_pack
 from genericmud.packs.store import PackError, PackExists, PackStore, UnknownPack
 from genericmud.packs.world_import import world_from_pack
 
@@ -41,6 +41,7 @@ __all__ = [
     "activate_world",
     "detect_conflicts",
     "detect_entry",
+    "entry_problem",
     "infer_manifest",
     "load_manifest",
     "setup_pack",
