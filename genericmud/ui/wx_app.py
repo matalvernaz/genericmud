@@ -19,7 +19,12 @@ and isn't installed on the dev host); the reused engine is what the tests cover.
 from __future__ import annotations
 
 import asyncio
+import shutil
+import tempfile
 import threading
+import webbrowser
+import zipfile
+from pathlib import Path
 
 import wx
 
@@ -28,7 +33,15 @@ from genericmud.automation.engine import AutomationEngine
 from genericmud.bridge import protocol
 from genericmud.config.keymap import load_keymap
 from genericmud.config.worlds import World, config_dir, load_worlds, save_worlds
-from genericmud.packs import PackError, PackStore, activate_world, detect_entry, setup_pack
+from genericmud.packs import (
+    PackError,
+    PackStore,
+    activate_world,
+    detect_entry,
+    setup_pack,
+    slugify,
+    vault,
+)
 from genericmud.session.credentials import PlaintextCredentialStore
 from genericmud.session.hub import SessionHub
 from genericmud.sound.pygame_backend import make_pygame_backend
@@ -515,6 +528,139 @@ class PackManagerDialog(wx.Dialog):
         wx.MessageBox("\n".join(lines), "Conflicts", wx.OK | wx.ICON_INFORMATION)
 
 
+def _run_async(work, on_done) -> None:
+    """Run ``work()`` on a daemon thread; deliver its result (or exception) to
+    ``on_done`` back on the wx main thread. Keeps network/IO off the UI thread."""
+
+    def runner() -> None:
+        try:
+            outcome = work()
+        except Exception as error:  # noqa: BLE001 - surfaced to the UI via on_done
+            outcome = error
+        wx.CallAfter(on_done, outcome)
+
+    threading.Thread(target=runner, daemon=True).start()
+
+
+class VaultBrowserDialog(wx.Dialog):
+    """Browse mudsoundpack.com, download a pack, and run it through setup_pack.
+
+    Network and the (potentially large) download run off the UI thread via
+    :func:`_run_async`; progress marshals back with ``wx.CallAfter``. On success
+    ``self.result`` holds the SetupResult and the dialog ends with ``wx.ID_OK`` so the
+    frame can confirm the world and connect. Build-blind (no wx on the dev host).
+    """
+
+    def __init__(self, parent: wx.Window, store: PackStore) -> None:
+        super().__init__(parent, title="Browse soundpacks (mudsoundpack.com)", size=(640, 480))
+        self._store = store
+        self._packs: list = []  # VaultPack list, parallel to the list box
+        self.result = None  # SetupResult once a pack is downloaded + set up
+
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        self._status = wx.StaticText(self, label="Loading the catalogue from mudsoundpack.com...")
+        sizer.Add(self._status, 0, wx.ALL, 8)
+
+        sizer.Add(wx.StaticText(self, label="&Soundpacks:"), 0, wx.LEFT, 8)
+        self._list = wx.ListBox(self, style=wx.LB_SINGLE)
+        self._list.SetName("Soundpacks")
+        sizer.Add(self._list, 1, wx.EXPAND | wx.ALL, 8)
+
+        self._gauge = wx.Gauge(self, range=100)
+        sizer.Add(self._gauge, 0, wx.EXPAND | wx.ALL, 8)
+
+        buttons = wx.BoxSizer(wx.HORIZONTAL)
+        self._setup_btn = wx.Button(self, label="&Download && Set Up")
+        self._setup_btn.Bind(wx.EVT_BUTTON, self._on_download)
+        self._setup_btn.Disable()
+        browser_btn = wx.Button(self, label="Open in &browser")
+        browser_btn.Bind(wx.EVT_BUTTON, self._on_open_browser)
+        buttons.Add(self._setup_btn, 0, wx.RIGHT, 4)
+        buttons.Add(browser_btn, 0, wx.RIGHT, 4)
+        sizer.Add(buttons, 0, wx.ALL, 8)
+        sizer.Add(self.CreateButtonSizer(wx.CLOSE), 0, wx.EXPAND | wx.ALL, 8)
+        self.SetSizer(sizer)
+
+        close = self.FindWindowById(wx.ID_CLOSE)
+        if close is not None:
+            close.Bind(wx.EVT_BUTTON, lambda _e: self.EndModal(wx.ID_CLOSE))
+        self.Bind(wx.EVT_CLOSE, lambda _e: self.EndModal(wx.ID_CLOSE))
+
+        _run_async(vault.list_packs, self._on_listed)
+
+    def _on_listed(self, outcome) -> None:
+        if isinstance(outcome, Exception):
+            self._status.SetLabel(f"Couldn't load the catalogue: {outcome}")
+            return
+        self._packs = outcome
+        self._list.Clear()
+        for pack in outcome:
+            version = f" v{pack.version}" if pack.version else ""
+            unsupported = "" if pack.supported else "  [unsupported client]"
+            self._list.Append(
+                f"{pack.name} - {pack.mud} - {pack.client}{version} ({pack.status}){unsupported}"
+            )
+        self._status.SetLabel(f"{len(outcome)} soundpacks. Select one, then Download && Set Up.")
+        if outcome:
+            self._list.SetSelection(0)
+            self._setup_btn.Enable()
+            self._list.SetFocus()
+
+    def _selected(self):
+        index = self._list.GetSelection()
+        if index == wx.NOT_FOUND or index >= len(self._packs):
+            return None
+        return self._packs[index]
+
+    def _on_download(self, _event: wx.CommandEvent) -> None:
+        pack = self._selected()
+        if pack is None:
+            return
+        if not pack.supported:
+            warn = wx.MessageBox(
+                f"{pack.client} packs aren't supported and probably won't work. Try anyway?",
+                "Unsupported client", wx.YES_NO | wx.ICON_WARNING,
+            )
+            if warn != wx.YES:
+                return
+        self._setup_btn.Disable()
+        self._status.SetLabel(f"Downloading and setting up {pack.name}...")
+        _run_async(lambda: self._fetch_and_setup(pack), self._on_setup_done)
+
+    def _fetch_and_setup(self, pack):  # background thread
+        best = vault.best_download(vault.pack_downloads(pack.id))
+        if best is None:
+            raise PackError("no downloadable archive for this pack; use Open in browser")
+        tmp = Path(tempfile.mkdtemp(prefix="genericmud-pack-"))
+        try:
+            archive = vault.download(best.url, tmp / "pack.zip", progress=self._progress)
+            extracted = tmp / slugify(pack.name)  # pack-named dir -> a stable, unique pack id
+            with zipfile.ZipFile(archive) as bundle:
+                bundle.extractall(extracted)  # CPython sanitises member paths (no zip-slip)
+            entry = detect_entry(extracted)
+            if entry is None:
+                raise PackError("no load script (e.g. main.set) found in the pack")
+            return setup_pack(self._store, extracted, entry=entry)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)  # the pack is copied into the store
+
+    def _progress(self, done: int, total: int) -> None:  # background thread
+        wx.CallAfter(self._gauge.SetValue, min(int(done * 100 / total) if total else 0, 100))
+
+    def _on_setup_done(self, outcome) -> None:
+        if isinstance(outcome, Exception):
+            self._status.SetLabel(f"Setup failed: {outcome}")
+            self._setup_btn.Enable()
+            return
+        self.result = outcome
+        self.EndModal(wx.ID_OK)
+
+    def _on_open_browser(self, _event: wx.CommandEvent) -> None:
+        pack = self._selected()
+        if pack is not None:
+            webbrowser.open(f"{vault.BASE_URL}/pack.php?id={pack.id}")
+
+
 class GenericMudFrame(wx.Frame):
     def __init__(self, loop: asyncio.AbstractEventLoop, keymap: dict):
         super().__init__(None, title="genericMud", size=(900, 600))
@@ -530,6 +676,7 @@ class GenericMudFrame(wx.Frame):
         close_item = file_menu.Append(wx.ID_ANY, "Close &Tab\tCtrl+W")
         packs_item = file_menu.Append(wx.ID_ANY, "&Manage Soundpacks...\tCtrl+P")
         setup_item = file_menu.Append(wx.ID_ANY, "Set &Up a Soundpack...")
+        browse_item = file_menu.Append(wx.ID_ANY, "&Browse Soundpacks Online...")
         file_menu.AppendSeparator()
         quit_item = file_menu.Append(wx.ID_EXIT, "E&xit\tCtrl+Q")
         menubar.Append(file_menu, "&File")
@@ -545,6 +692,7 @@ class GenericMudFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, self._on_close_tab, close_item)
         self.Bind(wx.EVT_MENU, self._on_manage_packs, packs_item)
         self.Bind(wx.EVT_MENU, self._on_setup_pack, setup_item)
+        self.Bind(wx.EVT_MENU, self._on_browse_online, browse_item)
         self.Bind(wx.EVT_MENU, lambda _e: self.Close(), quit_item)
         self.Bind(wx.EVT_MENU, self._on_toggle_self_voice, self._self_voice_item)
 
@@ -626,8 +774,19 @@ class GenericMudFrame(wx.Frame):
         except (PackError, OSError) as error:
             wx.MessageBox(str(error), "Set up failed", wx.OK | wx.ICON_ERROR)
             return
-        # Confirm/complete the world: host/port prefilled from the pack's world file
-        # if it had one (else blank), plus the sounds folder.
+        self._finish_setup(result)
+
+    def _on_browse_online(self, _event: wx.CommandEvent) -> None:
+        """Browse mudsoundpack.com, download a pack, then confirm the world and connect."""
+        dialog = VaultBrowserDialog(self, self._packs)
+        completed = dialog.ShowModal() == wx.ID_OK
+        result = dialog.result
+        dialog.Destroy()
+        if completed and result is not None:
+            self._finish_setup(result)
+
+    def _finish_setup(self, result) -> None:
+        """Confirm the pack-derived world (host/port prefilled), save it, enable, connect."""
         connect = ConnectDialog(self, load_worlds(), initial=result.world)
         if connect.ShowModal() == wx.ID_OK:
             world = connect.get_world()
