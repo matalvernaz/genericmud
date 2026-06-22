@@ -2,8 +2,9 @@
 
 The VIPMud-class interaction model on native controls: a read-only multiline
 output box NVDA reads like Notepad (Tab to it, arrow/say-line), a separate command
-box, Tab/Shift+Tab between them, type-on-output jumps to the command box, and a
-wx.Notebook tab per MUD.
+box, Tab/Shift+Tab between them, type-on-output jumps to the command box, and one
+wx.Simplebook page per MUD (no visible tab strip, so nothing sits in the keyboard Tab
+order; Ctrl+Tab / Ctrl+Shift+Tab switch sessions).
 
 Threading: wx runs on the main thread; an asyncio loop runs in a background thread
 for the connections. Engine output is marshaled to the UI with wx.CallAfter; input
@@ -360,15 +361,32 @@ class GenericMudFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, lambda _e: self.Close(), quit_item)
         self.Bind(wx.EVT_MENU, self._on_toggle_self_voice, self._self_voice_item)
 
-        self.notebook = wx.Notebook(self)
-        self.notebook.Bind(wx.EVT_NOTEBOOK_PAGE_CHANGED, lambda _e: self._update_active())
+        self.book = wx.Simplebook(self)  # no tab strip -> nothing in the keyboard Tab order
+        self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)  # Ctrl+Tab cycles sessions
+
+    def _on_char_hook(self, event: wx.KeyEvent) -> None:
+        # Grab Ctrl+Tab before the focused control sees it; let everything else
+        # (crucially plain Tab, which traverses Output <-> Command) fall through.
+        if event.GetKeyCode() == wx.WXK_TAB and event.ControlDown():
+            count = self.book.GetPageCount()
+            if count > 1:
+                step = -1 if event.ShiftDown() else 1
+                self._switch_session((self.book.GetSelection() + step) % count)
+            return  # swallow Ctrl+Tab
+        event.Skip()
+
+    def _switch_session(self, index: int) -> None:
+        self.book.ChangeSelection(index)  # ChangeSelection: no page-changed event to handle
+        self._update_active()
+        # Focus the new page's command box; NVDA reads its name, announcing the session.
+        self.book.GetPage(index).input.SetFocus()
 
     def open_session(self, world: World) -> None:
         panel = SessionPanel(
-            self.notebook, self._loop, self._keymap, world,
+            self.book, self._loop, self._keymap, world,
             self._packs, self._credentials, self._hub,
         )
-        self.notebook.AddPage(panel, world.name, select=True)
+        self.book.AddPage(panel, world.name, select=True)
         panel.input.SetFocus()
         self._update_active()
 
@@ -384,20 +402,22 @@ class GenericMudFrame(wx.Frame):
         dialog.Destroy()
 
     def _on_close_tab(self, _event: wx.CommandEvent) -> None:
-        index = self.notebook.GetSelection()
+        index = self.book.GetSelection()
         if index != wx.NOT_FOUND:
-            self.notebook.GetPage(index).close()  # cancel connection, stop speech
-            self.notebook.DeletePage(index)
+            self.book.GetPage(index).close()  # cancel connection, stop speech
+            self.book.DeletePage(index)
             self._update_active()
+            if self.book.GetPageCount():  # no tab strip to fall back on; place focus
+                self.book.GetPage(self.book.GetSelection()).input.SetFocus()
 
     def _on_toggle_self_voice(self, _event: wx.CommandEvent) -> None:
         self._self_voice = self._self_voice_item.IsChecked()
         self._update_active()
 
     def _update_active(self) -> None:
-        selected = self.notebook.GetSelection()
-        for i in range(self.notebook.GetPageCount()):
-            self.notebook.GetPage(i).set_active(i == selected and self._self_voice)
+        selected = self.book.GetSelection()
+        for i in range(self.book.GetPageCount()):
+            self.book.GetPage(i).set_active(i == selected and self._self_voice)
 
 
 def run(args) -> None:
