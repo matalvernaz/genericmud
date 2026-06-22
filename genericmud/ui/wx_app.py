@@ -559,7 +559,7 @@ class PackManagerDialog(wx.Dialog):
         self._refresh_packs()
 
 
-_SOURCE_MAX_BYTES = 150_000_000  # cap when following an installer's source repo (~150 MB)
+_SOURCE_MAX_BYTES = 3_000_000_000  # cap when following an installer's source repo (~3 GB)
 
 
 def _run_async(work, on_done) -> None:
@@ -594,8 +594,12 @@ class VaultBrowserDialog(wx.Dialog):
         self.result = None  # SetupResult once a pack is downloaded + set up
 
         sizer = wx.BoxSizer(wx.VERTICAL)
-        self._status = wx.StaticText(self, label="Loading the catalogue from mudsoundpack.com...")
-        sizer.Add(self._status, 0, wx.ALL, 8)
+        # A read-only, focusable status LOG (not a StaticText): NVDA can Tab to it and
+        # review every step, and each step is also spoken. Append-only, one line per step.
+        sizer.Add(wx.StaticText(self, label="S&tatus:"), 0, wx.LEFT | wx.TOP, 8)
+        self._status_log = wx.TextCtrl(self, style=wx.TE_MULTILINE | wx.TE_READONLY, size=(-1, 90))
+        self._status_log.SetName("Status")
+        sizer.Add(self._status_log, 0, wx.EXPAND | wx.ALL, 8)
 
         sizer.Add(wx.StaticText(self, label="&Soundpacks:"), 0, wx.LEFT, 8)
         self._list = wx.ListBox(self, style=wx.LB_SINGLE)
@@ -622,12 +626,20 @@ class VaultBrowserDialog(wx.Dialog):
             close.Bind(wx.EVT_BUTTON, lambda _e: self.EndModal(wx.ID_CLOSE))
         self.Bind(wx.EVT_CLOSE, lambda _e: self.EndModal(wx.ID_CLOSE))
 
+        self._status("Loading the catalogue from mudsoundpack.com.")
         _run_async(vault.list_packs, self._on_listed)
+
+    def _status(self, message: str) -> None:
+        """Append a step to the readable status log and speak it; safe from any thread."""
+        wx.CallAfter(self._append_status, message)
+
+    def _append_status(self, message: str) -> None:  # main thread
+        self._status_log.AppendText(message + "\n")
+        self._announce(message)
 
     def _on_listed(self, outcome) -> None:
         if isinstance(outcome, Exception):
-            self._status.SetLabel(f"Couldn't load the catalogue: {outcome}")
-            self._announce("Couldn't load the soundpack catalogue.")
+            self._status(f"Couldn't load the catalogue: {outcome}")
             return
         self._packs = outcome
         self._list.Clear()
@@ -637,8 +649,7 @@ class VaultBrowserDialog(wx.Dialog):
             self._list.Append(
                 f"{pack.name} - {pack.mud} - {pack.client}{version} ({pack.status}){unsupported}"
             )
-        self._status.SetLabel(f"{len(outcome)} soundpacks. Select one, then Download && Set Up.")
-        self._announce(f"{len(outcome)} soundpacks loaded. Choose one and Download and Set Up.")
+        self._status(f"{len(outcome)} soundpacks loaded. Choose one, then Download and Set Up.")
         if outcome:
             self._list.SetSelection(0)
             self._setup_btn.Enable()
@@ -663,8 +674,7 @@ class VaultBrowserDialog(wx.Dialog):
                 return
         self._setup_btn.Disable()
         self._last_milestone = 0
-        self._status.SetLabel(f"Downloading and setting up {pack.name}...")
-        self._announce(f"Downloading {pack.name}. Large packs can take a while.")
+        self._status(f"Downloading {pack.name}. Large packs can take a while.")
         _run_async(lambda: self._fetch_and_setup(pack), self._on_setup_done)
 
     def _fetch_and_setup(self, pack):  # background thread
@@ -675,6 +685,7 @@ class VaultBrowserDialog(wx.Dialog):
         try:
             archive = vault.download(best.url, tmp / "pack.zip", progress=self._progress)
             extracted = tmp / slugify(pack.name)  # pack-named dir -> a stable, unique pack id
+            self._status(f"Extracting {pack.name}.")
             try:
                 with zipfile.ZipFile(archive) as bundle:
                     bundle.extractall(extracted)  # CPython sanitises member paths (no zip-slip)
@@ -690,6 +701,7 @@ class VaultBrowserDialog(wx.Dialog):
                     origin = followed  # update from the real source, not the installer
             if entry is None:
                 raise PackError(entry_problem(extracted))
+            self._status(f"Setting up {pack.name}.")
             return setup_pack(self._store, extracted, entry=entry, origin=origin)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
@@ -700,8 +712,7 @@ class VaultBrowserDialog(wx.Dialog):
         source = vault.installer_source(extracted)
         if not source:
             return extracted, None, None
-        wx.CallAfter(self._announce, "This is an installer. Fetching the pack from its source.")
-        wx.CallAfter(self._status.SetLabel, f"Fetching pack source from {source}...")
+        self._status(f"This is an installer. Fetching the pack from its source: {source}")
         src_dir = tmp / "source"
         for archive_url in vault.git_archive_urls(source):
             try:
@@ -726,18 +737,18 @@ class VaultBrowserDialog(wx.Dialog):
     def _progress(self, done: int, total: int) -> None:  # background thread
         pct = min(int(done * 100 / total) if total else 0, 100)
         wx.CallAfter(self._gauge.SetValue, pct)
-        milestone = pct - pct % 25  # speak at 25/50/75/100, not on every chunk
+        milestone = pct - pct % 25  # log/speak at 25/50/75/100, not on every chunk
         if milestone and milestone != self._last_milestone:
             self._last_milestone = milestone
-            wx.CallAfter(self._announce, f"Downloaded {milestone} percent.")
+            self._status(f"Downloaded {milestone} percent.")
 
     def _on_setup_done(self, outcome) -> None:
         if isinstance(outcome, Exception):
-            self._status.SetLabel(f"Setup failed: {outcome}")
-            self._announce(f"Setup failed. {outcome}")
+            self._status(f"Setup failed: {outcome}")
             self._setup_btn.Enable()
             return
         self.result = outcome
+        # speak directly (not via the deferred log) -- the dialog is about to close
         self._announce("Download and set up complete. Confirm the connection details.")
         self.EndModal(wx.ID_OK)
 
