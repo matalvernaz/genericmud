@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "genericmud"
-version = "0.2.0"
+version = "0.2.1"
 description = "Accessible, cross-platform, self-voicing MUD client"
 readme = "README.md"
 requires-python = ">=3.12"
