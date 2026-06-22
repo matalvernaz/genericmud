@@ -14,6 +14,7 @@ where ``wildcards[1]`` is the first capture.
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 
 from lupa import LuaRuntime
 
@@ -61,12 +62,44 @@ def make_sandboxed_runtime() -> tuple[LuaRuntime, object | None]:
     return lua, install_hook
 
 
+def install_pack_require(lua: LuaRuntime, base_dir: str | None) -> None:
+    """Install a ``require()`` scoped to the pack directory.
+
+    A trusted pack may load its OWN bundled Lua libraries (``json``, ``ppi``, ...)
+    via ``require``; resolution is confined to the pack dir (looked up by filename
+    anywhere under it, MUSHclient-style), so it can't reach the host filesystem.
+    Without a base dir, ``require`` stays disabled (the sandbox default). Note: this
+    only makes the file *load* — a lib that then calls unimplemented MUSHclient APIs
+    still fails when used.
+    """
+    if not base_dir:
+        return
+    index = {path.name.lower(): path for path in Path(base_dir).rglob("*.lua")}
+    cache: dict[str, object] = {}
+
+    def _require(name: object = "", *_args: object) -> object:
+        key = str(name)
+        if key in cache:
+            return cache[key]
+        target = key.replace(".", "/").rsplit("/", 1)[-1].lower() + ".lua"
+        path = index.get(target)
+        if path is None:
+            raise FileNotFoundError(f"pack module {key!r} not found")
+        cache[key] = None  # sentinel: break a require cycle before executing
+        code = path.read_text(encoding="latin-1", errors="ignore")
+        cache[key] = lua.eval("function(...)\n" + code + "\nend")(key)
+        return cache[key]
+
+    lua.globals().require = _require
+
+
 class LuaPackRuntime:
     def __init__(self, api: ScriptApi) -> None:
         self._api = api
         self._lua, install_hook = make_sandboxed_runtime()
         self._guard = ScriptGuard(install_hook)
         self._install_mud()
+        install_pack_require(self._lua, api.base_dir)
 
     def _install_mud(self) -> None:
         api = self._api

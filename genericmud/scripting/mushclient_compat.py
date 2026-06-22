@@ -26,7 +26,7 @@ import xml.etree.ElementTree as ET
 from genericmud.automation.engine import MatchContext
 from genericmud.scripting.api import ScriptApi
 from genericmud.scripting.guard import ScriptGuard
-from genericmud.scripting.lua_runtime import make_sandboxed_runtime
+from genericmud.scripting.lua_runtime import install_pack_require, make_sandboxed_runtime
 
 _WILDCARD_RE = re.compile(r"%(\d)")
 _SEND_TO_SCRIPT = "12"
@@ -46,6 +46,7 @@ class MushclientPack:
         self._lua, install_hook = make_sandboxed_runtime()
         self._guard = ScriptGuard(install_hook)
         self._install_api()
+        install_pack_require(self._lua, self._base_dir)
 
     # --- MUSHclient global API ---
 
