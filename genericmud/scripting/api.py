@@ -94,6 +94,13 @@ class ScriptApi:
     def mute(self, category: str, muted: bool = True) -> None:
         self._engine.sound.set_muted(category, bool(muted))
 
+    def flush(self) -> None:
+        """Stop every playing cue (panic path; VIPMud ``#pc 0 stop``)."""
+        self._engine.sound.flush()
+
+    def set_master(self, gain: float) -> None:
+        self._engine.sound.set_master(float(gain))
+
     # --- cross-session (multi-character play) ---
 
     def send_to(self, session: str, text: str) -> bool:

@@ -51,12 +51,17 @@ class PygameSoundBackend:
 
     def play(self, file: str, channel: str, gain: float, pan: float, loop: bool) -> None:
         sound = self._sound(file)
+        if sound is None:  # missing/undecodable file: skip the cue, don't crash the line
+            return
         mixer_channel = self._channel(channel)
         mixer_channel.play(sound, loops=-1 if loop else 0)
         mixer_channel.set_volume(*stereo_volume(gain, pan))
 
     def music(self, file: str, channel: str, gain: float) -> None:
-        self._mixer.music.load(file)
+        try:
+            self._mixer.music.load(file)
+        except Exception:  # noqa: BLE001 - a missing/bad music file must not crash the line
+            return
         self._mixer.music.set_volume(_clamp(gain))
         self._mixer.music.play(loops=-1)  # background music loops until stopped
 
@@ -77,7 +82,10 @@ class PygameSoundBackend:
     def _sound(self, file: str):
         sound = self._sounds.get(file)
         if sound is None:
-            sound = self._mixer.Sound(file)
+            try:
+                sound = self._mixer.Sound(file)
+            except Exception:  # noqa: BLE001 - missing/undecodable file: caller skips the cue
+                return None
             self._sounds[file] = sound
         return sound
 
