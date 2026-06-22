@@ -35,12 +35,14 @@ def detect_entry(pack_dir: str | Path) -> str | None:
     """
     pack_dir = Path(pack_dir)
     scripts = sorted(p for p in pack_dir.rglob("*") if p.suffix.lower() in DIALECT_BY_SUFFIX)
+    # as_posix() so the stored entry is portable (forward slashes), not OS-specific
+    # backslashes on Windows; pathlib accepts forward slashes on every platform.
     for preferred in _ENTRY_PREFERENCE:
         for script in scripts:
             if script.name.lower() == preferred:
-                return str(script.relative_to(pack_dir))
+                return script.relative_to(pack_dir).as_posix()
     if len(scripts) == 1:
-        return str(scripts[0].relative_to(pack_dir))
+        return scripts[0].relative_to(pack_dir).as_posix()
     return None
 
 
