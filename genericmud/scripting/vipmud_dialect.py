@@ -180,9 +180,12 @@ class VipMudPack:
         # Server-controlled packs build sound paths from @sppath; the pack's own
         # settings loader (file I/O, deferred) normally sets it. Default it (and the
         # script path) to the pack dir so @sppath/x.wav resolves to bundled sounds.
+        # Default @sppath/@scpath to the pack dir, but don't clobber a value the session
+        # pre-set from world.sounds (so a world can point at its own sound folder).
         base = api.base_dir
-        if base:
+        if base and not api.get_var("sppath"):
             api.set_var("sppath", base)
+        if base and not api.get_var("scpath"):
             api.set_var("scpath", base)
 
     def load_source(self, source: str) -> None:

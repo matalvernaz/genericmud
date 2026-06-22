@@ -148,6 +148,8 @@ class SessionPanel(wx.Panel):
         self._connection._on_event = self.app.on_telnet_event
         self._connection.auto_reconnect = True
         self._connection.on_status = self.app.on_connection_status
+        if self.world.sounds:  # point @sppath at the world's sound folder before packs load
+            self.app.engine.set_var("sppath", self.world.sounds)
         self.app.on_connect(self.world.name)  # activate packs + arm auto-login before data
         try:
             await self._connection.connect(self.world.host, self.world.port, tls=self.world.tls)
@@ -282,6 +284,7 @@ class ConnectDialog(wx.Dialog):
         self._name = self._labeled_text(grid, "&Name:", "Name")
         self._host = self._labeled_text(grid, "&Host:", "Host")
         self._port = self._labeled_text(grid, "&Port:", "Port", "4000")
+        self._sounds = self._labeled_text(grid, "So&unds folder:", "Sounds folder")
 
         grid.Add((0, 0))
         self._tls = wx.CheckBox(self, label="Use &TLS")
@@ -315,6 +318,7 @@ class ConnectDialog(wx.Dialog):
             self._host.SetValue(world.host)
             self._port.SetValue(str(world.port))
             self._tls.SetValue(world.tls)
+            self._sounds.SetValue(world.sounds or "")
 
     def get_world(self) -> World:
         name = self._name.GetValue().strip() or self._host.GetValue().strip()
@@ -327,6 +331,7 @@ class ConnectDialog(wx.Dialog):
             host=self._host.GetValue().strip(),
             port=port,
             tls=self._tls.GetValue(),
+            sounds=self._sounds.GetValue().strip() or None,
         )
 
     def should_save(self) -> bool:

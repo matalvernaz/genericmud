@@ -104,3 +104,14 @@ def test_if_numeric_branch_and_assignment_not_sent():
     assert engine.process_input("clamp") == []
     assert engine.get_var("v") == "100"  # "@v = 100" assigns, not sent
     assert sink.sent == []
+
+
+def test_world_sounds_dir_overrides_pack_default_sppath():
+    # The session sets @sppath from world.sounds before packs load; the pack must not
+    # clobber it, so sounds resolve against the world's folder, not the pack dir.
+    sink = RecordingSink()
+    engine = AutomationEngine(sink)
+    engine.set_var("sppath", "/my/sounds")
+    VipMudPack(ScriptApi(engine, source="vip", base_dir="/pack")).load_source(SPHOOK)
+    engine.process_line(Line("$sphook play:combat/hit:100:0:0:1"))
+    assert sink.played[-1]["file"] == "/my/sounds/combat/hit.wav"
