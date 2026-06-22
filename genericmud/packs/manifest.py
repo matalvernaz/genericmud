@@ -83,12 +83,13 @@ def _read_pack_toml(manifest_path: Path) -> PackManifest:
     return PackManifest.from_dict(data)
 
 
-def load_manifest(path: str | Path) -> PackManifest:
+def load_manifest(path: str | Path, entry: str | None = None) -> PackManifest:
     """Read ``pack.toml`` if present, else infer from a single bare script.
 
-    ``path`` may be a pack directory or a single script file. A directory with
-    no ``pack.toml`` must contain exactly one recognized script file (else the
-    pack is ambiguous and needs an explicit manifest).
+    ``path`` may be a pack directory or a single script file. A directory with no
+    ``pack.toml`` normally must contain exactly one recognized script file; pass
+    ``entry`` (a script path relative to the directory) to pick the load script of a
+    multi-file pack — the case real soundpacks need (e.g. a VIPMud pack's ``main.set``).
     """
     path = Path(path)
     if path.is_file():
@@ -96,10 +97,16 @@ def load_manifest(path: str | Path) -> PackManifest:
     manifest_path = path / MANIFEST_NAME
     if manifest_path.is_file():
         return _read_pack_toml(manifest_path)
+    if entry is not None:
+        entry_path = path / entry
+        dialect = DIALECT_BY_SUFFIX.get(entry_path.suffix.lower())
+        if dialect is None or not entry_path.is_file():
+            raise UnknownDialect(f"entry {entry!r} is not a known script in {path}")
+        return PackManifest(id=slugify(path.name), name=path.name, dialect=dialect, entry=entry)
     scripts = [p for p in sorted(path.iterdir()) if p.suffix.lower() in DIALECT_BY_SUFFIX]
     if len(scripts) == 1:
         return infer_manifest(scripts[0])
     raise UnknownDialect(
         f"{path} has no {MANIFEST_NAME} and {len(scripts)} script files "
-        f"(need exactly one to infer a pack)"
+        f"(need exactly one, or pass entry= to pick the load script)"
     )

@@ -51,12 +51,14 @@ class PackStore:
         world: str | None = None,
         replace: bool = False,
         trust: bool = False,
+        entry: str | None = None,
     ) -> PackManifest:
         """Install a pack: a dir with ``pack.toml``, a bare script, or a ``.zip``.
 
         ``replace=True`` updates an already-installed pack in place. ``world``
         enables the pack for that MUD. Installs are untrusted by default (held
         back from auto-load on connect); pass ``trust=True`` to vouch for it now.
+        ``entry`` picks the load script of a multi-file pack (relative to its root).
         """
         source = Path(source)
         if not source.exists():
@@ -69,13 +71,15 @@ class PackStore:
                 except zipfile.BadZipFile as exc:
                     raise PackError(f"not a valid zip: {source} ({exc})") from exc
                 root = _pack_root(Path(tmp))
-                return self._install_from(root, world=world, replace=replace, trust=trust)
-        return self._install_from(source, world=world, replace=replace, trust=trust)
+                return self._install_from(
+                    root, world=world, replace=replace, trust=trust, entry=entry
+                )
+        return self._install_from(source, world=world, replace=replace, trust=trust, entry=entry)
 
     def _install_from(
-        self, source: Path, *, world: str | None, replace: bool, trust: bool
+        self, source: Path, *, world: str | None, replace: bool, trust: bool, entry: str | None
     ) -> PackManifest:
-        manifest = load_manifest(source)
+        manifest = load_manifest(source, entry=entry)
         index = self._load_index()
         if manifest.id in index and not replace:
             raise PackExists(f"pack {manifest.id!r} already installed; pass replace=True to update")

@@ -22,7 +22,9 @@ from genericmud.packs.manifest import (
     load_manifest,
     slugify,
 )
+from genericmud.packs.setup import SetupResult, detect_entry, setup_pack
 from genericmud.packs.store import PackError, PackExists, PackStore, UnknownPack
+from genericmud.packs.world_import import world_from_pack
 
 __all__ = [
     "DIALECT_BY_SUFFIX",
@@ -33,11 +35,15 @@ __all__ = [
     "PackExists",
     "PackManifest",
     "PackStore",
+    "SetupResult",
     "UnknownDialect",
     "UnknownPack",
     "activate_world",
     "detect_conflicts",
+    "detect_entry",
     "infer_manifest",
     "load_manifest",
+    "setup_pack",
     "slugify",
+    "world_from_pack",
 ]
