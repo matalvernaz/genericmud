@@ -8,12 +8,15 @@ so it is testable headless; the caller persists the returned world and connects.
 
 from __future__ import annotations
 
+import tempfile
+import zipfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 from genericmud.config.worlds import World
 from genericmud.packs.manifest import DIALECT_BY_SUFFIX, PackManifest
-from genericmud.packs.store import PackStore
+from genericmud.packs.store import PackError, PackStore
 from genericmud.packs.world_import import world_from_pack
 
 # Conventional load-script filenames, best-first.
@@ -94,17 +97,19 @@ def setup_pack(
     entry: str | None = None,
     sounds: str | None = None,
     trust: bool = True,
+    origin: str | None = None,
 ) -> SetupResult:
     """Install ``source``, derive its world, and enable+trust it for that world.
 
     Installs the pack (``entry`` picks the load script of a multi-file pack), reads
     the connection from the pack's MUSHclient world file, and — if one is found —
     points it at ``sounds`` and enables the pack for that world. Trusts by default,
-    since setting a pack up is an explicit vouch. A pack with no world file (a bare
-    VIPMud ``.set``) returns ``world=None`` so the caller can prompt for host/port.
+    since setting a pack up is an explicit vouch. ``origin`` records where the content
+    came from (a URL) so the pack can be updated later. A pack with no world file (a
+    bare VIPMud ``.set``) returns ``world=None`` so the caller can prompt for host/port.
     The returned ``world`` is not yet saved; the caller persists it and connects.
     """
-    manifest = store.install(source, replace=True, entry=entry)
+    manifest = store.install(source, replace=True, entry=entry, origin=origin)
     world = world_from_pack(store.pack_dir(manifest.id))
     enabled_for = None
     if world is not None:
@@ -115,3 +120,28 @@ def setup_pack(
     if trust:
         store.trust(manifest.id)
     return SetupResult(manifest=manifest, world=world, enabled_for=enabled_for)
+
+
+def update_pack(
+    store: PackStore, pack_id: str, *, fetch: Callable[[str, Path], object]
+) -> SetupResult:
+    """Re-fetch a pack from its recorded ``origin`` URL and reinstall it in place.
+
+    ``fetch(url, dest_zip)`` downloads the archive (injected, so this stays testable
+    and network-free). Per-world enablement and trust are preserved — install
+    ``replace=True`` rewrites only the pack content, not ``worlds.json``/``trust.json``.
+    Raises if the pack has no origin (e.g. it was set up from a local folder).
+    """
+    manifest = store.manifest(pack_id)
+    if not manifest.origin:
+        raise PackError(f"{pack_id} has no recorded source to update from")
+    with tempfile.TemporaryDirectory() as tmp:
+        archive = Path(tmp) / "update.zip"
+        fetch(manifest.origin, archive)
+        extracted = Path(tmp) / pack_id  # same id -> install replaces in place
+        with zipfile.ZipFile(archive) as bundle:
+            bundle.extractall(extracted)
+        entry = detect_entry(extracted)
+        if entry is None:
+            raise PackError(f"the updated download for {pack_id} has no load script")
+        return setup_pack(store, extracted, entry=entry, origin=manifest.origin)

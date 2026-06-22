@@ -41,6 +41,7 @@ from genericmud.packs import (
     entry_problem,
     setup_pack,
     slugify,
+    update_pack,
     vault,
 )
 from genericmud.session.credentials import PlaintextCredentialStore
@@ -404,6 +405,7 @@ class PackManagerDialog(wx.Dialog):
             ("Toggle &trust", self._on_toggle_trust),
             ("&Uninstall", self._on_uninstall),
             ("Check &conflicts", self._on_conflicts),
+            ("&Update from source", self._on_update),
         ):
             button = wx.Button(self, label=label)
             button.Bind(wx.EVT_BUTTON, handler)
@@ -527,6 +529,34 @@ class PackManagerDialog(wx.Dialog):
         if not result.failed and not result.conflicts:
             lines.append("No load failures or binding conflicts.")
         wx.MessageBox("\n".join(lines), "Conflicts", wx.OK | wx.ICON_INFORMATION)
+
+    def _on_update(self, _event: wx.CommandEvent) -> None:
+        pack_id = self._selected_pack()
+        if pack_id is None:
+            return
+        if not self._store.manifest(pack_id).origin:
+            wx.MessageBox(
+                "This pack has no recorded source to update from (it was set up from a "
+                "local folder).", "Update", wx.OK | wx.ICON_INFORMATION,
+            )
+            return
+
+        def work():
+            return update_pack(
+                self._store, pack_id,
+                fetch=lambda url, dest: vault.download(url, dest, max_bytes=_SOURCE_MAX_BYTES),
+            )
+
+        _run_async(work, lambda outcome: self._on_updated(pack_id, outcome))
+
+    def _on_updated(self, pack_id: str, outcome) -> None:
+        if isinstance(outcome, Exception):
+            wx.MessageBox(f"Update failed: {outcome}", "Update", wx.OK | wx.ICON_ERROR)
+        else:
+            wx.MessageBox(
+                f"Updated {pack_id}. Reconnect to apply.", "Update", wx.OK | wx.ICON_INFORMATION,
+            )
+        self._refresh_packs()
 
 
 _SOURCE_MAX_BYTES = 150_000_000  # cap when following an installer's source repo (~150 MB)
@@ -653,11 +683,14 @@ class VaultBrowserDialog(wx.Dialog):
                     "the download wasn't a ZIP (the site may have served a web page)"
                 ) from exc
             entry = detect_entry(extracted)
+            origin = best.url  # record where the content came from, so it can be updated
             if entry is None:  # an installer bundle? follow the repo it clones
-                extracted, entry = self._follow_installer(extracted, tmp)
+                extracted, entry, followed = self._follow_installer(extracted, tmp)
+                if followed:
+                    origin = followed  # update from the real source, not the installer
             if entry is None:
                 raise PackError(entry_problem(extracted))
-            return setup_pack(self._store, extracted, entry=entry)
+            return setup_pack(self._store, extracted, entry=entry, origin=origin)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
@@ -666,7 +699,7 @@ class VaultBrowserDialog(wx.Dialog):
         and retry from there. Size-capped, so a huge source aborts and surfaces its URL."""
         source = vault.installer_source(extracted)
         if not source:
-            return extracted, None
+            return extracted, None, None
         wx.CallAfter(self._announce, "This is an installer. Fetching the pack from its source.")
         wx.CallAfter(self._status.SetLabel, f"Fetching pack source from {source}...")
         src_dir = tmp / "source"
@@ -687,8 +720,8 @@ class VaultBrowserDialog(wx.Dialog):
                 continue
             entry = detect_entry(src_dir)
             if entry:
-                return src_dir, entry
-        return src_dir, None  # the pack is copied into the store
+                return src_dir, entry, archive_url
+        return src_dir, None, None  # the pack is copied into the store
 
     def _progress(self, done: int, total: int) -> None:  # background thread
         pct = min(int(done * 100 / total) if total else 0, 100)

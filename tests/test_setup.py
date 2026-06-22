@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from genericmud.packs.setup import detect_entry, entry_problem, setup_pack
+import shutil
+import zipfile
+
+from genericmud.packs.setup import detect_entry, entry_problem, setup_pack, update_pack
 from genericmud.packs.store import PackStore
 
 MCL = """<?xml version="1.0" encoding="iso-8859-1"?>
@@ -97,6 +100,38 @@ def test_entry_problem_distinguishes_dead_ends(tmp_path):
     empty.mkdir()
     (empty / "readme.txt").write_text("hi", encoding="utf-8")
     assert "no soundpack script" in entry_problem(empty)
+
+
+def test_install_records_origin(tmp_path):
+    store = PackStore(tmp_path / "store")
+    bare = tmp_path / "x.set"
+    bare.write_text("#trigger {a} {look}", encoding="utf-8")
+    manifest = store.install(bare, origin="https://example.test/x.zip")
+    assert store.manifest(manifest.id).origin == "https://example.test/x.zip"
+
+
+def test_update_pack_refetches_from_origin_and_preserves_state(tmp_path):
+    store = PackStore(tmp_path / "store")
+    v1 = tmp_path / "v1"
+    v1.mkdir()
+    (v1 / "main.set").write_text("#trigger {old} {look}", encoding="utf-8")
+    setup_pack(store, v1, entry="main.set", origin="https://example.test/pack.zip")
+    store.enable("v1", "myworld")
+
+    # A "new version" archive the fake fetch returns.
+    new = tmp_path / "new"
+    new.mkdir()
+    (new / "main.set").write_text("#trigger {new} {look}", encoding="utf-8")
+    new_zip = tmp_path / "new.zip"
+    with zipfile.ZipFile(new_zip, "w") as bundle:
+        bundle.write(new / "main.set", "main.set")
+
+    update_pack(store, "v1", fetch=lambda _url, dest: shutil.copy(new_zip, dest))
+
+    assert "new" in store.entry_path("v1").read_text(encoding="utf-8")  # content refreshed
+    assert store.manifest("v1").origin == "https://example.test/pack.zip"  # origin kept
+    assert store.is_enabled("v1", "myworld")  # enablement preserved
+    assert store.is_trusted("v1")  # trust preserved
 
 
 def test_setup_bare_set_pack_has_no_world(tmp_path):

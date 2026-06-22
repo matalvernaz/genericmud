@@ -38,6 +38,7 @@ class PackManifest:
     description: str = ""
     worlds: tuple[str, ...] = field(default_factory=tuple)  # advisory targets; () = any
     sound_dir: str = ""  # sounds subdir, relative to the pack dir ("" = pack root)
+    origin: str = ""  # where the pack content came from (URL); enables re-fetch/update
 
     def to_dict(self) -> dict:
         data = asdict(self)

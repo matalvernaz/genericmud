@@ -17,6 +17,7 @@ import json
 import shutil
 import tempfile
 import zipfile
+from dataclasses import replace as dataclass_replace  # 'replace' the kwarg shadows it here
 from pathlib import Path
 
 from genericmud.packs.manifest import PackManifest, load_manifest
@@ -52,6 +53,7 @@ class PackStore:
         replace: bool = False,
         trust: bool = False,
         entry: str | None = None,
+        origin: str | None = None,
     ) -> PackManifest:
         """Install a pack: a dir with ``pack.toml``, a bare script, or a ``.zip``.
 
@@ -59,10 +61,15 @@ class PackStore:
         enables the pack for that MUD. Installs are untrusted by default (held
         back from auto-load on connect); pass ``trust=True`` to vouch for it now.
         ``entry`` picks the load script of a multi-file pack (relative to its root).
+        ``origin`` records where the content came from (a URL) so the pack can be
+        re-fetched/updated later.
         """
         source = Path(source)
         if not source.exists():
             raise PackError(f"no such pack source: {source}")
+        opts = {
+            "world": world, "replace": replace, "trust": trust, "entry": entry, "origin": origin,
+        }
         if source.is_file() and source.suffix.lower() == ".zip":
             with tempfile.TemporaryDirectory() as tmp:
                 try:
@@ -70,16 +77,22 @@ class PackStore:
                         archive.extractall(tmp)  # CPython sanitizes member paths (no zip-slip)
                 except zipfile.BadZipFile as exc:
                     raise PackError(f"not a valid zip: {source} ({exc})") from exc
-                root = _pack_root(Path(tmp))
-                return self._install_from(
-                    root, world=world, replace=replace, trust=trust, entry=entry
-                )
-        return self._install_from(source, world=world, replace=replace, trust=trust, entry=entry)
+                return self._install_from(_pack_root(Path(tmp)), **opts)
+        return self._install_from(source, **opts)
 
     def _install_from(
-        self, source: Path, *, world: str | None, replace: bool, trust: bool, entry: str | None
+        self,
+        source: Path,
+        *,
+        world: str | None,
+        replace: bool,
+        trust: bool,
+        entry: str | None,
+        origin: str | None,
     ) -> PackManifest:
         manifest = load_manifest(source, entry=entry)
+        if origin:
+            manifest = dataclass_replace(manifest, origin=origin)
         index = self._load_index()
         if manifest.id in index and not replace:
             raise PackExists(f"pack {manifest.id!r} already installed; pass replace=True to update")
