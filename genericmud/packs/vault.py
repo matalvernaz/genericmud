@@ -20,6 +20,10 @@ BASE_URL = "https://mudsoundpack.com"
 _USER_AGENT = "genericMud-soundpack-browser"
 _DOWNLOAD_CHUNK = 65536
 
+
+class DownloadTooLarge(Exception):
+    """A download passed its size cap (e.g. an installer's source repo is huge)."""
+
 # Clients genericMud can actually load (one of the three script dialects); others
 # (Mudlet, TinTin++, MonkeyTerm) are listed but flagged as unsupported.
 SUPPORTED_CLIENTS = frozenset({"mush", "vipmud"})
@@ -121,8 +125,65 @@ def best_download(downloads: list[VaultDownload]) -> VaultDownload | None:
     return next((d for d in downloads if d.installable), None)
 
 
-def download(url: str, dest_path: str | Path, opener=urlopen, progress=None) -> Path:
-    """Stream ``url`` to ``dest_path`` in chunks; call ``progress(done, total)`` as it goes."""
+_GIT_CLONE_RE = re.compile(r'git(?:\.exe)?\s+clone\s+(?:--\S+\s+)*["\']?(\S+)', re.I)
+_REPO_URL_RE = re.compile(r'[A-Z][A-Z0-9_]*REPO_URL\s*=\s*["\']?([^\s"\']+)', re.I)
+_INSTALLER_SCRIPTS = (".bat", ".cmd", ".ps1", ".sh")
+
+
+def installer_source(pack_dir: str | Path) -> str | None:
+    """A source-repo URL an installer script clones, or None.
+
+    Many "soundpack" downloads are just a Windows installer that ``git clone``s the
+    real pack. Scan its scripts (skipping bundled git tooling) for a ``git clone
+    <url>`` or a ``*_REPO_URL=`` and return the repo URL, so the meat can be fetched
+    directly instead of running the .exe.
+    """
+    base = Path(pack_dir)
+    for path in sorted(base.rglob("*")):
+        if path.suffix.lower() not in _INSTALLER_SCRIPTS or "portablegit" in str(path).lower():
+            continue
+        try:
+            text = path.read_text(encoding="latin-1", errors="ignore")
+        except OSError:
+            continue
+        for pattern in (_GIT_CLONE_RE, _REPO_URL_RE):
+            match = pattern.search(text)
+            if match and (".git" in match.group(1) or _is_git_host(match.group(1))):
+                return match.group(1)
+    return None
+
+
+def _is_git_host(url: str) -> bool:
+    return any(host in url.lower() for host in ("github", "gitlab", "gitea"))
+
+
+def git_archive_urls(clone_url: str) -> list[str]:
+    """Candidate archive-zip URLs for a github/gitlab/gitea clone URL (master, then main)."""
+    url = clone_url.rstrip("/").removesuffix(".git")
+    match = re.match(r"https?://([^/]+)/(.+)", url)
+    if not match:
+        return []
+    host, path = match.group(1), match.group(2).strip("/")
+    urls = []
+    for branch in ("master", "main"):
+        if "gitlab" in host:
+            name = path.rsplit("/", 1)[-1]
+            urls.append(f"https://{host}/{path}/-/archive/{branch}/{name}-{branch}.zip")
+        elif "github.com" in host:
+            urls.append(f"https://{host}/{path}/archive/refs/heads/{branch}.zip")
+        else:  # gitea and similar self-hosted forges
+            urls.append(f"https://{host}/{path}/archive/{branch}.zip")
+    return urls
+
+
+def download(
+    url: str, dest_path: str | Path, opener=urlopen, progress=None, max_bytes=None
+) -> Path:
+    """Stream ``url`` to ``dest_path`` in chunks; call ``progress(done, total)`` as it goes.
+
+    ``max_bytes`` aborts with :class:`DownloadTooLarge` once exceeded — used when
+    following an installer's source repo, which can be huge (Erion's is ~1 GB).
+    """
     dest_path = Path(dest_path)
     request = Request(url, headers={"User-Agent": _USER_AGENT})
     with opener(request) as response:
@@ -132,6 +193,8 @@ def download(url: str, dest_path: str | Path, opener=urlopen, progress=None) -> 
             while chunk := response.read(_DOWNLOAD_CHUNK):
                 handle.write(chunk)
                 done += len(chunk)
+                if max_bytes is not None and done > max_bytes:
+                    raise DownloadTooLarge(f"source exceeded {max_bytes // 1_000_000} MB")
                 if progress is not None:
                     progress(done, total)
     return dest_path

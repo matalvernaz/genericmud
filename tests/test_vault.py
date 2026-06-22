@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import io
 
+import pytest
+
 from genericmud.packs.vault import (
     BASE_URL,
+    DownloadTooLarge,
     best_download,
     download,
+    git_archive_urls,
+    installer_source,
     list_packs,
     pack_downloads,
 )
@@ -96,3 +101,48 @@ def test_download_streams_to_file_with_progress(tmp_path):
     )
     assert out.read_bytes() == data
     assert seen[-1] == (len(data), len(data))
+
+
+def test_download_aborts_past_the_size_cap(tmp_path):
+    data = b"x" * 5000
+    with pytest.raises(DownloadTooLarge):
+        download(
+            "https://h.example/big.zip", tmp_path / "big.zip",
+            opener=_opener({"https://h.example/big.zip": data}), max_bytes=1000,
+        )
+
+
+def test_installer_source_finds_the_git_clone(tmp_path):
+    (tmp_path / "installer.bat").write_text(
+        "@echo off\nstart/wait PortableGit\\bin\\git.exe clone "
+        "https://gitlab.com/erion1/soundpack.git soundpack\nexit",
+        encoding="utf-8",
+    )
+    assert installer_source(tmp_path) == "https://gitlab.com/erion1/soundpack.git"
+
+
+def test_installer_source_finds_a_repo_url_var(tmp_path):
+    (tmp_path / "updator.bat").write_text(
+        'set "SOUNDS_REPO_URL=https://nathantech.net:3000/CosmicRage/CosmicRageSounds.git"',
+        encoding="utf-8",
+    )
+    assert installer_source(tmp_path).endswith("CosmicRageSounds.git")
+
+
+def test_installer_source_ignores_bundled_git_tooling(tmp_path):
+    docs = tmp_path / "PortableGit" / "doc"
+    docs.mkdir(parents=True)
+    (docs / "example.sh").write_text("git clone https://github.com/git/git.git", encoding="utf-8")
+    assert installer_source(tmp_path) is None
+
+
+def test_git_archive_urls_per_host():
+    assert git_archive_urls("https://gitlab.com/erion1/soundpack.git")[0] == (
+        "https://gitlab.com/erion1/soundpack/-/archive/master/soundpack-master.zip"
+    )
+    assert git_archive_urls("https://github.com/o/r.git")[0] == (
+        "https://github.com/o/r/archive/refs/heads/master.zip"
+    )
+    assert git_archive_urls("https://nathantech.net:3000/CosmicRage/CosmicRageSounds.git")[0] == (
+        "https://nathantech.net:3000/CosmicRage/CosmicRageSounds/archive/master.zip"
+    )

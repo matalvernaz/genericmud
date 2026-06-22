@@ -529,6 +529,9 @@ class PackManagerDialog(wx.Dialog):
         wx.MessageBox("\n".join(lines), "Conflicts", wx.OK | wx.ICON_INFORMATION)
 
 
+_SOURCE_MAX_BYTES = 150_000_000  # cap when following an installer's source repo (~150 MB)
+
+
 def _run_async(work, on_done) -> None:
     """Run ``work()`` on a daemon thread; deliver its result (or exception) to
     ``on_done`` back on the wx main thread. Keeps network/IO off the UI thread."""
@@ -650,11 +653,42 @@ class VaultBrowserDialog(wx.Dialog):
                     "the download wasn't a ZIP (the site may have served a web page)"
                 ) from exc
             entry = detect_entry(extracted)
+            if entry is None:  # an installer bundle? follow the repo it clones
+                extracted, entry = self._follow_installer(extracted, tmp)
             if entry is None:
                 raise PackError(entry_problem(extracted))
             return setup_pack(self._store, extracted, entry=entry)
         finally:
-            shutil.rmtree(tmp, ignore_errors=True)  # the pack is copied into the store
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def _follow_installer(self, extracted, tmp):  # background thread
+        """If the download is just a Windows installer, fetch the repo it git-clones
+        and retry from there. Size-capped, so a huge source aborts and surfaces its URL."""
+        source = vault.installer_source(extracted)
+        if not source:
+            return extracted, None
+        wx.CallAfter(self._announce, "This is an installer. Fetching the pack from its source.")
+        wx.CallAfter(self._status.SetLabel, f"Fetching pack source from {source}...")
+        src_dir = tmp / "source"
+        for archive_url in vault.git_archive_urls(source):
+            try:
+                src_zip = vault.download(
+                    archive_url, tmp / "source.zip",
+                    progress=self._progress, max_bytes=_SOURCE_MAX_BYTES,
+                )
+            except vault.DownloadTooLarge as exc:
+                raise PackError(f"{exc}; get the pack directly from {source}") from exc
+            except Exception:  # noqa: BLE001 - wrong branch / not found -> try the next URL
+                continue
+            try:
+                with zipfile.ZipFile(src_zip) as bundle:
+                    bundle.extractall(src_dir)
+            except zipfile.BadZipFile:
+                continue
+            entry = detect_entry(src_dir)
+            if entry:
+                return src_dir, entry
+        return src_dir, None  # the pack is copied into the store
 
     def _progress(self, done: int, total: int) -> None:  # background thread
         pct = min(int(done * 100 / total) if total else 0, 100)
