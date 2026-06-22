@@ -551,9 +551,11 @@ class VaultBrowserDialog(wx.Dialog):
     frame can confirm the world and connect. Build-blind (no wx on the dev host).
     """
 
-    def __init__(self, parent: wx.Window, store: PackStore) -> None:
+    def __init__(self, parent: wx.Window, store: PackStore, announce) -> None:
         super().__init__(parent, title="Browse soundpacks (mudsoundpack.com)", size=(640, 480))
         self._store = store
+        self._announce = announce  # speak status for screen-reader users
+        self._last_milestone = 0  # throttle spoken download progress to 25% steps
         self._packs: list = []  # VaultPack list, parallel to the list box
         self.result = None  # SetupResult once a pack is downloaded + set up
 
@@ -591,6 +593,7 @@ class VaultBrowserDialog(wx.Dialog):
     def _on_listed(self, outcome) -> None:
         if isinstance(outcome, Exception):
             self._status.SetLabel(f"Couldn't load the catalogue: {outcome}")
+            self._announce("Couldn't load the soundpack catalogue.")
             return
         self._packs = outcome
         self._list.Clear()
@@ -601,6 +604,7 @@ class VaultBrowserDialog(wx.Dialog):
                 f"{pack.name} - {pack.mud} - {pack.client}{version} ({pack.status}){unsupported}"
             )
         self._status.SetLabel(f"{len(outcome)} soundpacks. Select one, then Download && Set Up.")
+        self._announce(f"{len(outcome)} soundpacks loaded. Choose one and Download and Set Up.")
         if outcome:
             self._list.SetSelection(0)
             self._setup_btn.Enable()
@@ -624,7 +628,9 @@ class VaultBrowserDialog(wx.Dialog):
             if warn != wx.YES:
                 return
         self._setup_btn.Disable()
+        self._last_milestone = 0
         self._status.SetLabel(f"Downloading and setting up {pack.name}...")
+        self._announce(f"Downloading {pack.name}. Large packs can take a while.")
         _run_async(lambda: self._fetch_and_setup(pack), self._on_setup_done)
 
     def _fetch_and_setup(self, pack):  # background thread
@@ -645,14 +651,21 @@ class VaultBrowserDialog(wx.Dialog):
             shutil.rmtree(tmp, ignore_errors=True)  # the pack is copied into the store
 
     def _progress(self, done: int, total: int) -> None:  # background thread
-        wx.CallAfter(self._gauge.SetValue, min(int(done * 100 / total) if total else 0, 100))
+        pct = min(int(done * 100 / total) if total else 0, 100)
+        wx.CallAfter(self._gauge.SetValue, pct)
+        milestone = pct - pct % 25  # speak at 25/50/75/100, not on every chunk
+        if milestone and milestone != self._last_milestone:
+            self._last_milestone = milestone
+            wx.CallAfter(self._announce, f"Downloaded {milestone} percent.")
 
     def _on_setup_done(self, outcome) -> None:
         if isinstance(outcome, Exception):
             self._status.SetLabel(f"Setup failed: {outcome}")
+            self._announce(f"Setup failed. {outcome}")
             self._setup_btn.Enable()
             return
         self.result = outcome
+        self._announce("Download and set up complete. Confirm the connection details.")
         self.EndModal(wx.ID_OK)
 
     def _on_open_browser(self, _event: wx.CommandEvent) -> None:
@@ -669,6 +682,7 @@ class GenericMudFrame(wx.Frame):
         self._packs = PackStore(config_dir() / "soundpacks")
         self._credentials = PlaintextCredentialStore(config_dir() / "credentials.json")
         self._hub = SessionHub()  # shared across all open sessions for cross-character play
+        self._announcer = make_voice_backend()  # speaks UI status for screen-reader users
 
         menubar = wx.MenuBar()
         file_menu = wx.Menu()
@@ -756,6 +770,10 @@ class GenericMudFrame(wx.Frame):
             return None
         return self.book.GetPage(index).world.name
 
+    def announce(self, text: str) -> None:
+        """Speak a UI status update through the screen reader (the app's self-voice)."""
+        self._announcer.speak(text)
+
     def _on_setup_pack(self, _event: wx.CommandEvent) -> None:
         """Wizard: pick an extracted pack folder, derive its world, confirm, connect."""
         with wx.DirDialog(self, "Choose the extracted soundpack folder") as dialog:
@@ -769,6 +787,7 @@ class GenericMudFrame(wx.Frame):
                 "Set up a soundpack", wx.OK | wx.ICON_ERROR,
             )
             return
+        self.announce("Setting up the soundpack.")
         try:
             result = setup_pack(self._packs, folder, entry=entry)
         except (PackError, OSError) as error:
@@ -778,7 +797,7 @@ class GenericMudFrame(wx.Frame):
 
     def _on_browse_online(self, _event: wx.CommandEvent) -> None:
         """Browse mudsoundpack.com, download a pack, then confirm the world and connect."""
-        dialog = VaultBrowserDialog(self, self._packs)
+        dialog = VaultBrowserDialog(self, self._packs, self.announce)
         completed = dialog.ShowModal() == wx.ID_OK
         result = dialog.result
         dialog.Destroy()
@@ -794,6 +813,7 @@ class GenericMudFrame(wx.Frame):
                 worlds = [w for w in load_worlds() if w.name != world.name] + [world]
                 save_worlds(worlds)
                 self._packs.enable(result.manifest.id, world.name)  # (re)bind to final name
+                self.announce(f"Connecting to {world.name}.")
                 self.open_session(world)
         connect.Destroy()
 
