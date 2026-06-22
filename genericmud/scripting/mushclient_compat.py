@@ -1,16 +1,21 @@
 """MUSHclient compatibility: load `<muclient>` XML worlds/plugins + run their Lua.
 
 Parses MUSHclient triggers/aliases and executes their `<script>` CDATA against a
-sandboxed Lua runtime whose globals are MUSHclient's API (``Send``,
-``DoAfterSpecial``, ``ColourNote``, ``GetVariable``...), backed by the shared
-:class:`ScriptApi`. This lets Matt's existing plugins (e.g.
+sandboxed Lua runtime whose globals are MUSHclient's API (``Send``, ``Sound``,
+``GetInfo``, ``DoAfterSpecial``, ``ColourNote``, ``GetVariable``...), backed by the
+shared :class:`ScriptApi`. The same functions are also mirrored onto a ``world``
+table, since real packs call both bare (``Sound(...)``) and through the world
+object (``world.Sound(...)``). This lets Matt's existing plugins (e.g.
 ``/home/matt/erion/erion_gathering.xml``) and MUSHclient soundpacks run on the
 genericMud engine unchanged.
 
-Scope: covers the API surface real soundpacks/plugins use. A few MUSHclient
-semantics are simplified — notably ``DoAfterSpecial`` always runs its deferred
-text as Lua (the soundpack-standard "send to script" case) rather than honouring
-every sendto code.
+Scope: covers the API surface real soundpacks use, audio included — ``Sound`` (the
+BASS-backed call mudsoundpack.com packs use, with its ``volume=``/``pan=`` control
+strings) and ``GetInfo`` directory codes (so ``GetInfo(67).."/sounds/x.ogg"``
+resolves against the pack dir). Out of scope: the full plugin-suite surface
+(LuaSocket, GUI windows, VBScript) and a few simplified semantics — notably
+``DoAfterSpecial`` always runs its deferred text as Lua (the soundpack-standard
+"send to script" case) rather than honouring every sendto code.
 """
 
 from __future__ import annotations
@@ -27,10 +32,17 @@ _WILDCARD_RE = re.compile(r"%(\d)")
 _SEND_TO_SCRIPT = "12"
 _DEFAULT_TRIGGER_SEQUENCE = "100"
 
+_SOUND_CHANNEL = "sound"  # MUSHclient Sound() is a single-voice channel
+_VOLUME_MAX = 100.0  # MUSHclient volume is 0..100
+# GetInfo() directory codes (app/config/world/plugin dirs). A genericMud pack bundles
+# its scripts + sounds under one dir, so every dir code resolves to the pack root.
+_DIR_INFO_CODES = frozenset({56, 60, 64, 66, 67})
+
 
 class MushclientPack:
     def __init__(self, api: ScriptApi) -> None:
         self._api = api
+        self._base_dir = api.base_dir
         self._lua, install_hook = make_sandboxed_runtime()
         self._guard = ScriptGuard(install_hook)
         self._install_api()
@@ -39,22 +51,36 @@ class MushclientPack:
 
     def _install_api(self) -> None:
         api = self._api
+        funcs = {
+            "Send": api.send,
+            "SendNoEcho": api.send,
+            "Execute": api.send,
+            "Note": api.echo,
+            "ColourNote": self._colour_note,
+            "GetVariable": api.get_var,
+            "SetVariable": api.set_var,
+            "DeleteVariable": lambda name: api.set_var(name, ""),
+            "EnableTrigger": lambda *_a: None,
+            "EnableAlias": lambda *_a: None,
+            "EnableTimer": lambda *_a: None,
+            "Hyperlink": lambda *_a: None,
+            "GetSoundKeyword": lambda *_a: "",
+            "PlaySound": self._play_sound,
+            "Sound": self._sound,
+            "GetInfo": self._get_info,
+            "DoAfterSpecial": self._do_after_special,
+        }
         g = self._lua.globals()
-        g.Send = api.send
-        g.SendNoEcho = api.send
-        g.Execute = api.send
-        g.Note = api.echo
-        g.ColourNote = self._colour_note
-        g.GetVariable = api.get_var
-        g.SetVariable = api.set_var
-        g.DeleteVariable = lambda name: api.set_var(name, "")
-        g.EnableTrigger = lambda *args: None
-        g.EnableAlias = lambda *args: None
-        g.EnableTimer = lambda *args: None
-        g.Hyperlink = lambda *args: None
-        g.GetSoundKeyword = lambda *args: ""
-        g.PlaySound = self._play_sound
-        g.DoAfterSpecial = self._do_after_special
+        for name, fn in funcs.items():
+            g[name] = fn
+        # Packs call both bare (Sound(...)) and through the world object
+        # (world.Sound(...), world.getvariable(...)). Mirror funcs onto a world
+        # table, with lowercase aliases for the world.lowercase() callers.
+        world = self._lua.table()
+        for name, fn in funcs.items():
+            world[name] = fn
+            world[name.lower()] = fn
+        g.world = world
 
     def _colour_note(self, *args: object) -> None:
         # ColourNote(fg, bg, text [, fg, bg, text]...) — concatenate the text parts.
@@ -70,6 +96,40 @@ class MushclientPack:
         pan: object = 0,
     ) -> None:
         self._api.play(str(file), loop=bool(loop))
+
+    def _sound(self, arg: object = "", *_rest: object) -> None:
+        """MUSHclient ``Sound``: a path plays it; a ``key=value`` string is a control
+        directive (``volume=``/``pan=``/``freq=``) for the current cue."""
+        text = str(arg)
+        if "=" in text:
+            self._sound_control(text)
+        elif text:
+            self._api.play(text, channel=_SOUND_CHANNEL)
+
+    def _sound_control(self, directive: str) -> None:
+        key, _, raw = directive.partition("=")
+        if key.strip().lower() != "volume":
+            return  # pan/freq: no live per-cue control in the bus yet — accept, ignore
+        try:
+            level = float(raw)
+        except ValueError:
+            return
+        if level <= 0:
+            self._api.stop(_SOUND_CHANNEL)  # "volume=0" is the soundpack idiom for stop
+        else:
+            self._api.set_volume(_SOUND_CHANNEL, level / _VOLUME_MAX)
+
+    def _get_info(self, code: object = 0) -> str:
+        """MUSHclient ``GetInfo``: the pack dir for directory codes, else ``""``.
+
+        Packs build sound paths as ``GetInfo(67).."/sounds/x.ogg"``; returning the
+        pack root makes those resolve against the bundled files.
+        """
+        try:
+            number = int(code)
+        except (TypeError, ValueError):
+            return ""
+        return (self._base_dir or "") if number in _DIR_INFO_CODES else ""
 
     def _do_after_special(self, delay: float, code: str, sendto: object = _SEND_TO_SCRIPT) -> None:
         deferred = self._compile(str(code))

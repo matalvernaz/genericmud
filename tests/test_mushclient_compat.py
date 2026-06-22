@@ -31,11 +31,25 @@ function do_kk(name, line, wildcards) Send("kill kobold") end
 
 ERION = "/home/matt/erion/erion_gathering.xml"
 
+# Real packs (mudsoundpack.com) use Sound() not PlaySound(), build paths with
+# GetInfo(67), and call through the world object — exercise all three.
+SOUNDS = """<?xml version="1.0"?>
+<muclient><triggers>
+ <trigger match="boom" enabled="y" regexp="n" send_to="12">
+  <send>Sound("boom.wav")</send></trigger>
+ <trigger match="hush" enabled="y" regexp="n" send_to="12">
+  <send>Sound("volume=0")</send></trigger>
+ <trigger match="ding" enabled="y" regexp="n" send_to="12">
+  <send>world.Sound("ding.wav")</send></trigger>
+ <trigger match="local" enabled="y" regexp="n" send_to="12">
+  <send>Sound(GetInfo(67) .. "/snd/x.ogg")</send></trigger>
+</triggers></muclient>"""
 
-def _load(xml: str) -> tuple[RecordingSink, AutomationEngine]:
+
+def _load(xml: str, base_dir: str | None = None) -> tuple[RecordingSink, AutomationEngine]:
     sink = RecordingSink()
     engine = AutomationEngine(sink)
-    MushclientPack(ScriptApi(engine, source="mushclient")).load_source(xml)
+    MushclientPack(ScriptApi(engine, source="mushclient", base_dir=base_dir)).load_source(xml)
     return sink, engine
 
 
@@ -61,6 +75,30 @@ def test_alias_named_script_consumes_input():
     sink, engine = _load(INLINE)
     assert engine.process_input("kk") == []
     assert "kill kobold" in sink.sent
+
+
+def test_sound_plays_file():
+    sink, engine = _load(SOUNDS)
+    engine.process_line(Line("boom"))
+    assert any(played["file"] == "boom.wav" for played in sink.played)
+
+
+def test_sound_volume_zero_stops():
+    sink, engine = _load(SOUNDS)
+    engine.process_line(Line("hush"))
+    assert "sound" in sink.stopped
+
+
+def test_world_sound_plays():
+    sink, engine = _load(SOUNDS)
+    engine.process_line(Line("ding"))
+    assert any(played["file"] == "ding.wav" for played in sink.played)
+
+
+def test_get_info_resolves_sound_path():
+    sink, engine = _load(SOUNDS, base_dir="/packs/demo")
+    engine.process_line(Line("local"))
+    assert any(played["file"] == "/packs/demo/snd/x.ogg" for played in sink.played)
 
 
 @pytest.mark.skipif(not os.path.exists(ERION), reason="erion plugin not present")

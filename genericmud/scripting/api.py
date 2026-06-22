@@ -116,6 +116,11 @@ class ScriptApi:
         if self._engine.hub is not None:
             self._engine.hub.shared_set(key, value)
 
+    @property
+    def base_dir(self) -> str | None:
+        """The pack's root dir, for dialects that resolve their own paths (e.g. GetInfo)."""
+        return self._base_dir
+
     def _resolve(self, file: str) -> str:
         if self._base_dir and not os.path.isabs(file):
             return os.path.join(self._base_dir, file)
