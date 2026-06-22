@@ -28,7 +28,7 @@ from genericmud.automation.engine import AutomationEngine
 from genericmud.bridge import protocol
 from genericmud.config.keymap import load_keymap
 from genericmud.config.worlds import World, config_dir, load_worlds, save_worlds
-from genericmud.packs import PackError, PackStore, activate_world
+from genericmud.packs import PackError, PackStore, activate_world, detect_entry, setup_pack
 from genericmud.session.credentials import PlaintextCredentialStore
 from genericmud.session.hub import SessionHub
 from genericmud.sound.pygame_backend import make_pygame_backend
@@ -265,7 +265,7 @@ class SessionPanel(wx.Panel):
 
 
 class ConnectDialog(wx.Dialog):
-    def __init__(self, parent: wx.Window, saved: list[World]):
+    def __init__(self, parent: wx.Window, saved: list[World], initial: World | None = None):
         super().__init__(parent, title="Connect to a MUD")
         self._saved = saved
         grid = wx.FlexGridSizer(0, 2, 6, 6)
@@ -300,6 +300,13 @@ class ConnectDialog(wx.Dialog):
         sizer.Add(grid, 1, wx.EXPAND | wx.ALL, 8)
         sizer.Add(self.CreateButtonSizer(wx.OK | wx.CANCEL), 0, wx.EXPAND | wx.ALL, 8)
         self.SetSizerAndFit(sizer)
+
+        if initial is not None:  # prefill from a pack-derived world (the setup wizard)
+            self._name.SetValue(initial.name)
+            self._host.SetValue(initial.host)
+            self._port.SetValue(str(initial.port))
+            self._tls.SetValue(initial.tls)
+            self._sounds.SetValue(initial.sounds or "")
 
     def _labeled_text(
         self, grid: wx.FlexGridSizer, label: str, name: str, value: str = ""
@@ -522,6 +529,7 @@ class GenericMudFrame(wx.Frame):
         connect_item = file_menu.Append(wx.ID_ANY, "&Connect...\tCtrl+N")
         close_item = file_menu.Append(wx.ID_ANY, "Close &Tab\tCtrl+W")
         packs_item = file_menu.Append(wx.ID_ANY, "&Manage Soundpacks...\tCtrl+P")
+        setup_item = file_menu.Append(wx.ID_ANY, "Set &Up a Soundpack...")
         file_menu.AppendSeparator()
         quit_item = file_menu.Append(wx.ID_EXIT, "E&xit\tCtrl+Q")
         menubar.Append(file_menu, "&File")
@@ -536,6 +544,7 @@ class GenericMudFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, self._on_connect, connect_item)
         self.Bind(wx.EVT_MENU, self._on_close_tab, close_item)
         self.Bind(wx.EVT_MENU, self._on_manage_packs, packs_item)
+        self.Bind(wx.EVT_MENU, self._on_setup_pack, setup_item)
         self.Bind(wx.EVT_MENU, lambda _e: self.Close(), quit_item)
         self.Bind(wx.EVT_MENU, self._on_toggle_self_voice, self._self_voice_item)
 
@@ -598,6 +607,36 @@ class GenericMudFrame(wx.Frame):
         if index == wx.NOT_FOUND or not self.book.GetPageCount():
             return None
         return self.book.GetPage(index).world.name
+
+    def _on_setup_pack(self, _event: wx.CommandEvent) -> None:
+        """Wizard: pick an extracted pack folder, derive its world, confirm, connect."""
+        with wx.DirDialog(self, "Choose the extracted soundpack folder") as dialog:
+            if dialog.ShowModal() != wx.ID_OK:
+                return
+            folder = dialog.GetPath()
+        entry = detect_entry(folder)
+        if entry is None:
+            wx.MessageBox(
+                "Couldn't find a single load script (e.g. main.set) in that folder.",
+                "Set up a soundpack", wx.OK | wx.ICON_ERROR,
+            )
+            return
+        try:
+            result = setup_pack(self._packs, folder, entry=entry)
+        except (PackError, OSError) as error:
+            wx.MessageBox(str(error), "Set up failed", wx.OK | wx.ICON_ERROR)
+            return
+        # Confirm/complete the world: host/port prefilled from the pack's world file
+        # if it had one (else blank), plus the sounds folder.
+        connect = ConnectDialog(self, load_worlds(), initial=result.world)
+        if connect.ShowModal() == wx.ID_OK:
+            world = connect.get_world()
+            if world.host:
+                worlds = [w for w in load_worlds() if w.name != world.name] + [world]
+                save_worlds(worlds)
+                self._packs.enable(result.manifest.id, world.name)  # (re)bind to final name
+                self.open_session(world)
+        connect.Destroy()
 
     def _on_toggle_self_voice(self, _event: wx.CommandEvent) -> None:
         self._self_voice = self._self_voice_item.IsChecked()
