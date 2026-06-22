@@ -63,6 +63,16 @@ def test_detect_entry_finds_vipmud_loader(tmp_path):
     assert detect_entry(tmp_path / "vippack") == "scripts/boot.set"
 
 
+def test_detect_entry_prefers_the_main_loader(tmp_path):
+    # Among several .set loaders, the one that #loads the most files is the main one.
+    pack = tmp_path / "p"
+    pack.mkdir()
+    (pack / "buffers.set").write_text("#load {a.set}", encoding="utf-8")  # sorts first, 1 load
+    (pack / "boot.set").write_text("#load {a.set}\n#load {b.set}\n#load {c.set}", encoding="utf-8")
+    (pack / "a.set").write_text("#say {a}", encoding="utf-8")
+    assert detect_entry(pack) == "boot.set"
+
+
 def test_detect_entry_finds_plugin_named_after_pack(tmp_path):
     # A MUSHclient pack: pick the plugin named after the pack (toastush.xml in toastush/).
     plugins = tmp_path / "toastush" / "worlds" / "plugins"

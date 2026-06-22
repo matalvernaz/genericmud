@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from pathlib import Path
 
 from genericmud.automation.engine import MatchContext
 from genericmud.scripting.api import ScriptApi
@@ -174,6 +175,8 @@ class VipMudPack:
 
     def __init__(self, api: ScriptApi) -> None:
         self._api = api
+        self._base_dir = api.base_dir
+        self._loaded: set[str] = set()  # files already #load-ed (cycle/dup guard)
         self._handles: dict[str, str] = {}  # VIPMud play handle -> sound bus channel
         self._next_handle = 1
         self._last_handle = _MASTER_HANDLE
@@ -239,7 +242,32 @@ class VipMudPack:
             self._execute_if(args, wildcards)
         elif command == "PC" and len(args) > 1:
             self._execute_pc(args, wildcards)
+        elif command == "LOAD" and args:
+            self._load_file(self._subst(args[0].text, wildcards))
         # Unknown #commands are ignored rather than sent to the MUD (Phase 2 features).
+
+    def _load_file(self, reference: str) -> None:
+        """``#LOAD {file}`` — load another ``.set`` from the pack so a loader script
+        pulls in all the pack's scripts. Confined to the pack dir; each file loads once."""
+        if not self._base_dir:
+            return
+        base = Path(self._base_dir).resolve()
+        target = Path(reference.replace("\\", "/"))
+        candidate = target if target.is_absolute() else base / target
+        try:
+            real = candidate.resolve()
+        except OSError:
+            return
+        if not (real.is_file() and real.is_relative_to(base)):
+            matches = sorted(base.rglob(target.name))  # layouts vary: match by filename
+            real = matches[0] if matches else None
+        if real is None:
+            return
+        key = str(real)
+        if key in self._loaded:  # don't re-load (handles #load cycles + duplicates)
+            return
+        self._loaded.add(key)
+        self.load_source(real.read_text(encoding="latin-1", errors="ignore"))
 
     def _bare_or_send(self, args: list[_Tok], wildcards: list[str]) -> None:
         if not args:

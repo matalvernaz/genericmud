@@ -106,6 +106,36 @@ def test_if_numeric_branch_and_assignment_not_sent():
     assert sink.sent == []
 
 
+def test_load_chains_in_another_set_file(tmp_path):
+    # #load pulls in the pack's other scripts, so triggers spread across files register.
+    (tmp_path / "main.set").write_text("#load {sub.set}", encoding="utf-8")
+    (tmp_path / "sub.set").write_text("#trigger {boom} {#play {bang.wav}}", encoding="utf-8")
+    sink = RecordingSink()
+    engine = AutomationEngine(sink)
+    VipMudPack(ScriptApi(engine, source="vip", base_dir=str(tmp_path))).load_source(
+        (tmp_path / "main.set").read_text(encoding="utf-8")
+    )
+    engine.process_line(Line("boom"))
+    # base_dir is set, so the relative sound resolves under the pack dir.
+    assert any(played["file"].endswith("bang.wav") for played in sink.played)
+
+
+def test_load_resolves_by_filename_across_layouts(tmp_path):
+    # A loader referencing @scpath/x.set still finds x.set when the layout differs.
+    (tmp_path / "boot.set").write_text("#load {@scpath/deep.set}", encoding="utf-8")
+    nested = tmp_path / "Scripts"
+    nested.mkdir()
+    (nested / "deep.set").write_text("#trigger {hi} {#say {found}}", encoding="utf-8")
+    sink = RecordingSink()
+    engine = AutomationEngine(sink)
+    # @scpath defaults to the pack dir; deep.set lives in a subdir -> matched by name.
+    VipMudPack(ScriptApi(engine, source="vip", base_dir=str(tmp_path))).load_source(
+        (tmp_path / "boot.set").read_text(encoding="utf-8")
+    )
+    engine.process_line(Line("hi"))
+    assert sink.spoken and sink.spoken[-1][0] == "found"
+
+
 def test_world_sounds_dir_overrides_pack_default_sppath():
     # The session sets @sppath from world.sounds before packs load; the pack must not
     # clobber it, so sounds resolve against the world's folder, not the pack dir.

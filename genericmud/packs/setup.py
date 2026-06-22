@@ -28,11 +28,11 @@ class SetupResult:
     enabled_for: str | None  # the world name the pack was enabled for, if any
 
 
-def _contains(path: Path, needle: str) -> bool:
+def _count(path: Path, needle: str) -> int:
     try:
-        return needle in path.read_text(encoding="latin-1", errors="ignore").lower()
+        return path.read_text(encoding="latin-1", errors="ignore").lower().count(needle)
     except OSError:
-        return False
+        return 0
 
 
 def detect_entry(pack_dir: str | Path) -> str | None:
@@ -57,9 +57,11 @@ def detect_entry(pack_dir: str | Path) -> str | None:
         for script in scripts:
             if script.name.lower() == preferred:
                 return rel(script)
-    for script in scripts:  # a VIPMud loader pulls in the rest with #load
-        if script.suffix.lower() == ".set" and _contains(script, "#load"):
-            return rel(script)
+    loaders = [(s, _count(s, "#load")) for s in scripts if s.suffix.lower() == ".set"]
+    loaders = [(s, n) for s, n in loaders if n]  # .set files that #load others
+    if loaders:  # the pack's main loader pulls in the most files
+        loaders.sort(key=lambda pair: (-pair[1], rel(pair[0])))
+        return rel(loaders[0][0])
     root = pack_dir.name.lower()  # a plugin named after the pack (toastush.xml in toastush/)
     for script in scripts:
         stem = script.stem.lower()
