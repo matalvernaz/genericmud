@@ -28,8 +28,10 @@ def test_sandbox_blocks_dunder_attribute_escape(tmp_path):
         "local ok = pcall(function() return mud.send.__globals__ end); return ok"
     )
     assert reached is False
+    # as_posix(): a Windows path's backslashes would be invalid Lua string escapes (\\U etc.)
+    # and fail to COMPILE, masking what we're testing. The filter blocks it regardless.
     runtime.run_source(
-        f'pcall(function() mud.send.__globals__["os"].system("touch {sentinel}") end)'
+        f'pcall(function() mud.send.__globals__["os"].system("touch {sentinel.as_posix()}") end)'
     )
     assert not sentinel.exists()
 
