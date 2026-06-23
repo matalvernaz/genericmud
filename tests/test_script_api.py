@@ -35,10 +35,11 @@ def test_resolve_returns_expected_path_when_unfound(tmp_path):
     api = _api(str(pack))
     api.set_var("sppath", str(tmp_path / "nope"))  # not a directory
     # Missing everywhere: return the expected path so the diagnostic can report where it looked.
-    assert api._resolve("ghost.wav").endswith("/pack/ghost.wav")
+    # Compare via Path so the separator matches the host (os.path.join emits "\" on Windows).
+    assert api._resolve("ghost.wav") == str(pack / "ghost.wav")
 
 
 def test_resolve_without_sppath_is_unchanged(tmp_path):
     pack = tmp_path / "pack"
     pack.mkdir()
-    assert _api(str(pack))._resolve("ghost.wav").endswith("/pack/ghost.wav")
+    assert _api(str(pack))._resolve("ghost.wav") == str(pack / "ghost.wav")
