@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import re
 import xml.etree.ElementTree as ET
+from pathlib import Path
 
 from genericmud.automation.engine import MatchContext
 from genericmud.scripting.api import ScriptApi
@@ -43,19 +44,26 @@ class MushclientPack:
     def __init__(self, api: ScriptApi) -> None:
         self._api = api
         self._base_dir = api.base_dir
-        self._exposed: dict[str, object] = {}  # ppi: exposed-function name -> Lua function
+        self._exposed: dict[str, dict] = {}  # ppi: plugin id -> {exposed name -> Lua fn}
+        self._current_plugin = "world"  # whose script is loading now (for ppi.Expose)
+        self._loaded_includes: set[str] = set()
         self._lua, install_hook = make_sandboxed_runtime(lua51=True)  # MUSHclient targets Lua 5.1
         self._guard = ScriptGuard(install_hook)
         self._install_api()
-        # Hand the plugin our own ppi (its bundled ppi.lua needs package.seeall, which the
-        # sandbox strips). Then make any still-unimplemented host call a no-op, so a plugin
-        # loads + its sound path runs instead of crashing on the first gap.
+        # Hand each plugin our own ppi (its bundled ppi.lua needs package.seeall, which the
+        # sandbox strips). Then make any still-unimplemented host name a "black hole" that is
+        # callable AND indexable (returns itself) -- so Window/InfoBox/etc. we don't implement
+        # no-op (even Foo.bar.baz()) and the plugin loads + its sound path runs.
         install_pack_require(self._lua, self._base_dir, builtins={"ppi": self._make_ppi()})
-        self._lua.execute("setmetatable(_G, { __index = function() return function() end end })")
+        self._lua.execute(
+            "local bh = setmetatable({}, {__call=function() end, "
+            "__index=function(t) return t end});"
+            "setmetatable(_G, { __index = function() return bh end })"
+        )
 
     def _make_ppi(self):
         """A minimal in-process ppi (plugin-to-plugin interface): Expose registers a
-        function, Load returns this plugin's exposed functions as a table."""
+        function under the loading plugin; Load returns a plugin's exposed functions."""
         ppi = self._lua.table()
         ppi.Expose = self._ppi_expose
         ppi.Load = self._ppi_load
@@ -63,10 +71,11 @@ class MushclientPack:
 
     def _ppi_expose(self, name: object = "", fn: object = None) -> None:
         key = str(name)
-        self._exposed[key] = fn if fn is not None else self._lua.globals()[key]
+        functions = self._exposed.setdefault(self._current_plugin, {})
+        functions[key] = fn if fn is not None else self._lua.globals()[key]
 
-    def _ppi_load(self, _plugin_id: object = None):
-        return self._lua.table_from(self._exposed)
+    def _ppi_load(self, plugin_id: object = None):
+        return self._lua.table_from(self._exposed.get(str(plugin_id), {}))
 
     # --- MUSHclient global API ---
 
@@ -167,7 +176,18 @@ class MushclientPack:
             self.load_source(handle.read())
 
     def load_source(self, xml: str) -> None:
-        root = ET.fromstring(xml)
+        # Strip the XML + DOCTYPE declarations: .MCL world files carry an encoding decl
+        # (ElementTree rejects that on a str) and a <!DOCTYPE muclient> it can't resolve.
+        xml = re.sub(r"<\?xml[^>]*\?>", "", xml)
+        xml = re.sub(r"<!DOCTYPE[^>]*>", "", xml)
+        self._load_plugin(ET.fromstring(xml))
+
+    def _load_plugin(self, root: ET.Element) -> None:
+        """Run one plugin/world's script + triggers; a world (<include>s) pulls in its
+        plugins so they share this runtime and can ppi-message each other."""
+        plugin = next(root.iter("plugin"), None)
+        previous = self._current_plugin
+        self._current_plugin = (plugin.get("id") if plugin is not None else "") or "world"
         script = "\n".join((el.text or "") for el in root.iter("script"))
         if script.strip():
             self._guard.run_strict(self._lua.execute, script)
@@ -175,6 +195,19 @@ class MushclientPack:
             self._register(element, is_alias=False)
         for element in root.iter("alias"):
             self._register(element, is_alias=True)
+        self._current_plugin = previous
+        for include in root.iter("include"):
+            name = include.get("name")
+            if name:
+                self._load_included(name)
+
+    def _load_included(self, filename: str) -> None:
+        if not self._base_dir or filename in self._loaded_includes:
+            return
+        self._loaded_includes.add(filename)  # each plugin loads once
+        matches = sorted(Path(self._base_dir).rglob(filename))  # layouts vary -> match by name
+        if matches:
+            self.load_source(matches[0].read_text(encoding="latin-1", errors="ignore"))
 
     def _register(self, element: ET.Element, *, is_alias: bool) -> None:
         attrs = element.attrib

@@ -78,7 +78,7 @@ def test_alias_named_script_consumes_input():
 
 
 PPI_PLUGIN = """<?xml version="1.0"?>
-<muclient><plugin name="audio"/>
+<muclient><plugin name="audio" id="audio"/>
 <script><![CDATA[
 local ppi = require "ppi"
 function play(file) Sound(file) end
@@ -92,7 +92,34 @@ def test_ppi_shim_exposes_and_permissive_globals_no_op():
     engine = AutomationEngine(sink)
     pack = MushclientPack(ScriptApi(engine, source="m", base_dir="/tmp"))
     pack.load_source(PPI_PLUGIN)  # loads despite the unimplemented host call
-    assert "play" in pack._exposed  # ppi.Expose registered it via our shim
+    assert "play" in pack._exposed["audio"]  # exposed under its own plugin id
+
+
+def test_include_pulls_in_plugin(tmp_path):
+    # A world that <include>s a separate plugin file: the plugin must load on the shared
+    # runtime and its trigger must fire. Guards _load_included + the Path import.
+    (tmp_path / "audio.xml").write_text(
+        '<?xml version="1.0"?>\n'
+        '<muclient><plugin name="audio" id="audiopack"/>\n'
+        '<triggers><trigger match="boom" enabled="y" regexp="n" send_to="12">'
+        '<send>Sound("boom.wav")</send></trigger></triggers>\n'
+        '<script><![CDATA[ local ppi = require "ppi"'
+        ' function play(f) Sound(f) end ppi.Expose("play") ]]></script>'
+        "</muclient>",
+        encoding="utf-8",
+    )
+    (tmp_path / "world.xml").write_text(
+        '<?xml version="1.0"?>\n<muclient><include name="audio.xml"/></muclient>',
+        encoding="utf-8",
+    )
+    sink = RecordingSink()
+    engine = AutomationEngine(sink)
+    pack = MushclientPack(ScriptApi(engine, source="mushclient", base_dir=str(tmp_path)))
+    pack.load_file(str(tmp_path / "world.xml"))
+    engine.process_line(Line("boom"))
+    # Sound() resolves a relative path against the pack dir (base_dir).
+    assert any(played["file"].endswith("boom.wav") for played in sink.played)
+    assert "play" in pack._exposed["audiopack"]  # included plugin exposed under its id
 
 
 def test_sound_plays_file():
