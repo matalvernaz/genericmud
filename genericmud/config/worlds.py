@@ -5,6 +5,7 @@ tomllib is read-only, so saving hand-writes the small, well-defined schema.
 
 from __future__ import annotations
 
+import sys
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +21,14 @@ class World:
 
 
 def config_dir() -> Path:
+    """Where genericMud keeps soundpacks, worlds, logs, and credentials.
+
+    In the shipped (frozen) build this is a folder beside the executable, so the
+    whole app is portable: unzip it and everything — including downloaded packs —
+    lives in that one directory. From source it's ``~/.genericmud``.
+    """
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent / "genericmud-data"
     return Path.home() / ".genericmud"
 
 

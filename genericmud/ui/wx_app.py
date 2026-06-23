@@ -36,6 +36,7 @@ from genericmud.config.worlds import World, config_dir, load_worlds, save_worlds
 from genericmud.packs import (
     PackError,
     PackStore,
+    SetupResult,
     activate_world,
     detect_entry,
     entry_problem,
@@ -43,6 +44,7 @@ from genericmud.packs import (
     slugify,
     update_pack,
     vault,
+    world_from_pack,
 )
 from genericmud.session.credentials import PlaintextCredentialStore
 from genericmud.session.hub import SessionHub
@@ -678,6 +680,15 @@ class VaultBrowserDialog(wx.Dialog):
         _run_async(lambda: self._fetch_and_setup(pack), self._on_setup_done)
 
     def _fetch_and_setup(self, pack):  # background thread
+        pack_id = slugify(pack.name)
+        if pack_id in {manifest.id for manifest in self._store.installed()}:
+            self._status(f"{pack.name} is already installed; using the cached copy.")
+            world = world_from_pack(self._store.pack_dir(pack_id))
+            return SetupResult(
+                manifest=self._store.manifest(pack_id),
+                world=world,
+                enabled_for=world.name if world else None,
+            )
         best = vault.best_download(vault.pack_downloads(pack.id))
         if best is None:
             raise PackError("no downloadable archive for this pack; use Open in browser")
