@@ -20,6 +20,7 @@ resolves against the pack dir). Out of scope: the full plugin-suite surface
 
 from __future__ import annotations
 
+import glob
 import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -223,13 +224,22 @@ class MushclientPack:
                 self._include_errors.append((name, f"{type(exc).__name__}: {exc}"))
 
     def _load_included(self, filename: str) -> None:
-        if not self._base_dir:
+        if not self._base_dir or not filename:
             return
-        matches = sorted(Path(self._base_dir).rglob(filename))  # layouts vary -> match by name
-        if not matches:
-            return
-        target = matches[0].resolve()
-        if target in self._loaded_includes:  # dedup by file, not name (dirs may share a name)
+        base = Path(self._base_dir).resolve()
+        # Match by filename (layouts vary). Escape glob metachars so a literal name like
+        # "a[1].xml" isn't read as a pattern, and confirm each hit is a real file under the
+        # pack dir (rglob can surface a symlink or directory outside it).
+        target = None
+        for match in sorted(base.rglob(glob.escape(Path(filename).name))):
+            try:
+                resolved = match.resolve()
+            except OSError:
+                continue
+            if resolved.is_file() and resolved.is_relative_to(base):
+                target = resolved
+                break
+        if target is None or target in self._loaded_includes:  # dedup by file (dirs share names)
             return
         self._loaded_includes.add(target)
         self.load_source(target.read_text(encoding="latin-1", errors="ignore"))
@@ -240,7 +250,10 @@ class MushclientPack:
             return
         pattern = attrs.get("match", "")
         regex = attrs.get("regexp", "n") == "y"
-        priority = -int(attrs.get("sequence", _DEFAULT_TRIGGER_SEQUENCE))
+        try:  # a malformed sequence attribute must not abort the whole world load
+            priority = -int(attrs.get("sequence", _DEFAULT_TRIGGER_SEQUENCE))
+        except ValueError:
+            priority = -int(_DEFAULT_TRIGGER_SEQUENCE)
         keep_default = "n" if is_alias else "y"  # aliases consume by default
         keep = attrs.get("keep_evaluating", keep_default) == "y"
         callback = self._make_callback(element, attrs)
@@ -277,7 +290,9 @@ class MushclientPack:
                     # MUSHclient substitutes %1.. into send-to-script text per match, then
                     # runs it. Can't precompile: a bare %1 (e.g. `for i=1,%1`) isn't valid Lua.
                     def call_script(ctx: MatchContext) -> None:
-                        self._guard.run(self._compile(_substitute(body, ctx.wildcards)))
+                        # Compile inside the guard: a syntax error from substituted MUD text
+                        # must be contained, not raised into line processing.
+                        self._guard.run(lambda: self._compile(_substitute(body, ctx.wildcards))())
                 else:
                     compiled = self._compile(body)  # no wildcards: compile once at registration
 

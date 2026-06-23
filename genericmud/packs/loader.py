@@ -26,7 +26,9 @@ def _load_lua(api: ScriptApi, entry: str, trusted: bool) -> None:
 
 
 def _load_vipmud(api: ScriptApi, entry: str, trusted: bool) -> None:
-    with open(entry, encoding="utf-8") as handle:
+    # latin-1 like the rest of the VIPMud path (#LOAD, world import): .set packs are
+    # iso-8859-1, and utf-8 would crash the entry load on any high byte.
+    with open(entry, encoding="latin-1") as handle:
         VipMudPack(api).load_source(handle.read())
 
 

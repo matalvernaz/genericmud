@@ -19,6 +19,21 @@ def _runtime() -> tuple[RecordingSink, AutomationEngine, LuaPackRuntime]:
     return sink, engine, runtime
 
 
+def test_sandbox_blocks_dunder_attribute_escape(tmp_path):
+    _, _, runtime = _runtime()
+    sentinel = tmp_path / "pwned"
+    # An exposed method's dunders must be unreachable: mud.send.__globals__ would otherwise
+    # hand back the api module's os / __builtins__ / eval -- a full sandbox escape.
+    reached = runtime.run_source(
+        "local ok = pcall(function() return mud.send.__globals__ end); return ok"
+    )
+    assert reached is False
+    runtime.run_source(
+        f'pcall(function() mud.send.__globals__["os"].system("touch {sentinel}") end)'
+    )
+    assert not sentinel.exists()
+
+
 def test_lua_send():
     sink, _, runtime = _runtime()
     runtime.run_source('mud.send("hello")')

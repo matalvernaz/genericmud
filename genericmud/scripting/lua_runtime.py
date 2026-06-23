@@ -37,6 +37,21 @@ _SANDBOX_REMOVE = (
 )
 
 
+def _deny_dunder_attrs(obj: object, attr_name: object, is_setting: bool) -> object:
+    """lupa attribute filter: block Lua access to ``_``-prefixed Python attributes.
+
+    Exposed objects (the ``mud`` API methods) are meant to be CALLED, never
+    introspected. Without this, a pack escapes the sandbox through any bound
+    method: ``mud.send.__globals__`` hands back the api module's namespace --
+    ``os``, ``__builtins__``, ``__import__``, ``eval`` -- which is arbitrary code
+    execution even with the ``os``/``io``/``python`` globals removed. Blocking
+    every dunder severs the ``__self__``/``__class__``/``__globals__`` gadget chain.
+    """
+    if isinstance(attr_name, str) and attr_name.startswith("_"):
+        raise AttributeError("sandbox: access to private attributes is denied")
+    return attr_name
+
+
 def make_sandboxed_runtime(
     *, lua51: bool = False, full_stdlib: bool = False
 ) -> tuple[LuaRuntime, object | None]:
@@ -65,7 +80,12 @@ def make_sandboxed_runtime(
         from lupa.lua51 import LuaRuntime as Lua51Runtime
 
         runtime_cls = Lua51Runtime
-    lua = runtime_cls(unpack_returned_tuples=True, register_eval=False, register_builtins=False)
+    lua = runtime_cls(
+        unpack_returned_tuples=True,
+        register_eval=False,
+        register_builtins=False,
+        attribute_filter=_deny_dunder_attrs,
+    )
     globals_ = lua.globals()
     install_hook = None
     if globals_.debug is not None:
@@ -131,8 +151,12 @@ def install_pack_require(
         if path is None:
             raise FileNotFoundError(f"pack module {key!r} not found")
         cache[key] = None  # sentinel: break a require cycle before executing
-        code = path.read_text(encoding="latin-1", errors="ignore")
-        result = lua.eval("function(...)\n" + code + "\nend")(key)
+        try:
+            code = path.read_text(encoding="latin-1", errors="ignore")
+            result = lua.eval("function(...)\n" + code + "\nend")(key)
+        except BaseException:
+            cache.pop(key, None)  # a failed load must not stay cached as if it returned nil
+            raise
         if result is None:
             # A module(..., package.seeall)-style lib (Lua 5.1) registers itself in
             # package.loaded under its name and returns nothing; hand back that table.
