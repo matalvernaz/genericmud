@@ -46,7 +46,7 @@ class MushclientPack:
         self._base_dir = api.base_dir
         self._exposed: dict[str, dict] = {}  # ppi: plugin id -> {exposed name -> Lua fn}
         self._current_plugin = "world"  # whose script is loading now (for ppi.Expose)
-        self._loaded_includes: set[str] = set()
+        self._loaded_includes: set[Path] = set()  # resolved paths, so each file loads once
         # MUSHclient targets Lua 5.1; trusted packs keep the full stdlib their
         # libraries assume (os/io/loadstring + the module(..., package.seeall) idiom).
         self._lua, install_hook = make_sandboxed_runtime(lua51=True, full_stdlib=full_stdlib)
@@ -206,12 +206,16 @@ class MushclientPack:
                 self._load_included(name)
 
     def _load_included(self, filename: str) -> None:
-        if not self._base_dir or filename in self._loaded_includes:
+        if not self._base_dir:
             return
-        self._loaded_includes.add(filename)  # each plugin loads once
         matches = sorted(Path(self._base_dir).rglob(filename))  # layouts vary -> match by name
-        if matches:
-            self.load_source(matches[0].read_text(encoding="latin-1", errors="ignore"))
+        if not matches:
+            return
+        target = matches[0].resolve()
+        if target in self._loaded_includes:  # dedup by file, not name (dirs may share a name)
+            return
+        self._loaded_includes.add(target)
+        self.load_source(target.read_text(encoding="latin-1", errors="ignore"))
 
     def _register(self, element: ET.Element, *, is_alias: bool) -> None:
         attrs = element.attrib

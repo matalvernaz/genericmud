@@ -53,9 +53,12 @@ def make_sandboxed_runtime(
     ``full_stdlib=True`` keeps the rest of the Lua standard library (``os``/``io``/
     ``loadstring``/``package``) instead of stripping it — real MUSHclient soundpacks
     assume the full stdlib (MUSHclient runs them unsandboxed), and the ``module(...,
-    package.seeall)`` idiom their libraries use needs ``package``. Only the lupa
-    Python bridge is removed (host-process escape; not part of any MUSHclient
-    environment). Reserved for *trusted* packs; untrusted packs get the locked set.
+    package.seeall)`` idiom their libraries use needs ``package``. It still removes the
+    escape hatches that no soundpack uses and that exceed even that grant: the lupa
+    Python bridge (``python``), native-code loading (``package.loadlib``), the lupa
+    object registry (``debug.getregistry``), and the hook primitive a pack could use to
+    disable our loop guard (``debug.sethook`` — captured above first). Reserved for
+    *trusted* packs; untrusted packs get the fully locked-down set.
     """
     runtime_cls = LuaRuntime
     if lua51:
@@ -75,8 +78,18 @@ def make_sandboxed_runtime(
             " end)()"
         )
         install_hook = lua.eval(installer_src)
-    for name in ("python",) if full_stdlib else _SANDBOX_REMOVE:
-        globals_[name] = None
+    if full_stdlib:
+        globals_["python"] = None  # the lupa<->host bridge; not part of any Lua stdlib
+        # Close the in-process escape hatches a soundpack never uses but that exceed the
+        # FS/process surface trusted packs are granted: native-code loading, the lupa
+        # object registry, and our loop guard's own hook (already captured above).
+        lua.execute(
+            "if package then package.loadlib = nil end\n"
+            "if debug then debug.getregistry = nil; debug.sethook = nil end"
+        )
+    else:
+        for name in _SANDBOX_REMOVE:
+            globals_[name] = None
     return lua, install_hook
 
 
@@ -98,6 +111,14 @@ def install_pack_require(
         return
     index = {path.name.lower(): path for path in Path(base_dir).rglob("*.lua")} if base_dir else {}
     cache: dict[str, object] = {}
+    # Resolve package.loaded[key] via rawget so a black-hole _G.__index metatable (the
+    # MUSHclient compat layer installs one) can't fool the lookup into a no-op table.
+    _loaded_module = lua.eval(
+        "function(key)"
+        " local p = rawget(_G, 'package'); if type(p) ~= 'table' then return nil end;"
+        " local l = rawget(p, 'loaded'); if type(l) ~= 'table' then return nil end;"
+        " return rawget(l, key) end"
+    )
 
     def _require(name: object = "", *_args: object) -> object:
         key = str(name)
@@ -115,9 +136,7 @@ def install_pack_require(
         if result is None:
             # A module(..., package.seeall)-style lib (Lua 5.1) registers itself in
             # package.loaded under its name and returns nothing; hand back that table.
-            package = lua.globals().package
-            if package is not None and package.loaded is not None:
-                result = package.loaded[key]
+            result = _loaded_module(key)
         cache[key] = result
         return result
 

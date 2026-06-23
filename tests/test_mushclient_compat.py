@@ -122,6 +122,39 @@ def test_include_pulls_in_plugin(tmp_path):
     assert "play" in pack._exposed["audiopack"]  # included plugin exposed under its id
 
 
+def test_require_of_a_nil_module_is_nil_not_the_black_hole(tmp_path):
+    # A required lib that returns nothing must yield nil, not the permissive black-hole
+    # table _G's metatable would hand back (the rawget guard in _require).
+    (tmp_path / "empty.lua").write_text("-- returns nothing\n", encoding="latin-1")
+    sink = RecordingSink()
+    engine = AutomationEngine(sink)
+    MushclientPack(ScriptApi(engine, source="m", base_dir=str(tmp_path))).load_source(
+        "<muclient><script><![CDATA[\n"
+        'local m = require("empty")\n'
+        'if m == nil then Send("got-nil") else Send("got-blackhole") end\n'
+        "]]></script></muclient>"
+    )
+    assert "got-nil" in sink.sent
+
+
+def test_full_stdlib_keeps_stdlib_but_closes_escape_hatches(tmp_path):
+    # Trusted packs get the Lua stdlib (os/io/loadstring/debug.traceback) but not the
+    # escape hatches: package.loadlib, debug.getregistry, debug.sethook are gone.
+    sink = RecordingSink()
+    engine = AutomationEngine(sink)
+    MushclientPack(
+        ScriptApi(engine, source="m", base_dir=str(tmp_path)), full_stdlib=True
+    ).load_source(
+        "<muclient><script><![CDATA[\n"
+        'if os and io and loadstring and debug and debug.traceback then Send("stdlib") end\n'
+        'if package.loadlib == nil then Send("no-loadlib") end\n'
+        'if debug.getregistry == nil then Send("no-getregistry") end\n'
+        'if debug.sethook == nil then Send("no-sethook") end\n'
+        "]]></script></muclient>"
+    )
+    assert {"stdlib", "no-loadlib", "no-getregistry", "no-sethook"} <= set(sink.sent)
+
+
 def test_sound_plays_file():
     sink, engine = _load(SOUNDS)
     engine.process_line(Line("boom"))

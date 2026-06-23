@@ -96,6 +96,27 @@ def test_detect_entry_prefers_mcl_world(tmp_path):
     assert detect_entry(pack) == "worlds/erion.MCL"
 
 
+def test_detect_entry_mcl_world_beats_a_stray_main_xml(tmp_path):
+    # A MUSHclient pack whose plugin happens to be named main.xml: the .MCL world still
+    # wins (no .set present), so we don't load a plugin as if it were the whole pack.
+    pack = tmp_path / "p"
+    (pack / "worlds").mkdir(parents=True)
+    (pack / "worlds" / "world.MCL").write_text(MCL, encoding="latin-1")
+    (pack / "main.xml").write_text("<muclient/>", encoding="utf-8")
+    assert detect_entry(pack) == "worlds/world.MCL"
+
+
+def test_detect_entry_vipmud_loader_wins_over_bundled_mcl(tmp_path):
+    # A VIPMud pack may bundle a .MCL for connection info; its .set loader is the entry,
+    # not the world (the .mcl rule is gated on the pack having no .set).
+    pack = tmp_path / "vip"
+    pack.mkdir()
+    (pack / "boot.set").write_text("#load {extra.set}\n#say {hi}", encoding="utf-8")
+    (pack / "extra.set").write_text("#say {x}", encoding="utf-8")
+    (pack / "conn.MCL").write_text(MCL, encoding="latin-1")
+    assert detect_entry(pack) == "boot.set"
+
+
 def test_entry_problem_distinguishes_dead_ends(tmp_path):
     installer = tmp_path / "inst"
     installer.mkdir()
