@@ -47,6 +47,7 @@ class MushclientPack:
         self._exposed: dict[str, dict] = {}  # ppi: plugin id -> {exposed name -> Lua fn}
         self._current_plugin = "world"  # whose script is loading now (for ppi.Expose)
         self._loaded_includes: set[Path] = set()  # resolved paths, so each file loads once
+        self._include_errors: list[tuple[str, str]] = []  # plugins that failed to load (name, why)
         # MUSHclient targets Lua 5.1; trusted packs keep the full stdlib their
         # libraries assume (os/io/loadstring + the module(..., package.seeall) idiom).
         self._lua, install_hook = make_sandboxed_runtime(lua51=True, full_stdlib=full_stdlib)
@@ -180,10 +181,11 @@ class MushclientPack:
             self.load_source(handle.read())
 
     def load_source(self, xml: str) -> None:
-        # Strip the XML + DOCTYPE declarations: .MCL world files carry an encoding decl
-        # (ElementTree rejects that on a str) and a <!DOCTYPE muclient> it can't resolve.
+        # Strip only the XML declaration -- ElementTree rejects an encoding decl on a str.
+        # Keep the DOCTYPE: MUSHclient plugins declare config entities in its internal
+        # subset (<!ENTITY foo "...">) and reference them as &foo;, which ET expands. (An
+        # earlier strip of the whole DOCTYPE corrupted that subset -> ParseError.)
         xml = re.sub(r"<\?xml[^>]*\?>", "", xml)
-        xml = re.sub(r"<!DOCTYPE[^>]*>", "", xml)
         self._load_plugin(ET.fromstring(xml))
 
     def _load_plugin(self, root: ET.Element) -> None:
@@ -202,8 +204,12 @@ class MushclientPack:
         self._current_plugin = previous
         for include in root.iter("include"):
             name = include.get("name")
-            if name:
+            if not name:
+                continue
+            try:
                 self._load_included(name)
+            except Exception as exc:  # noqa: BLE001 - a malformed plugin must not sink the pack
+                self._include_errors.append((name, f"{type(exc).__name__}: {exc}"))
 
     def _load_included(self, filename: str) -> None:
         if not self._base_dir:
@@ -256,10 +262,16 @@ class MushclientPack:
         body = (send_element.text or "") if send_element is not None else ""
         if body.strip():
             if attrs.get("send_to", "0") == _SEND_TO_SCRIPT:
-                compiled = self._compile(body)
+                if _WILDCARD_RE.search(body):
+                    # MUSHclient substitutes %1.. into send-to-script text per match, then
+                    # runs it. Can't precompile: a bare %1 (e.g. `for i=1,%1`) isn't valid Lua.
+                    def call_script(ctx: MatchContext) -> None:
+                        self._guard.run(self._compile(_substitute(body, ctx.wildcards)))
+                else:
+                    compiled = self._compile(body)  # no wildcards: compile once at registration
 
-                def call_script(_ctx: MatchContext) -> None:
-                    self._guard.run(compiled)
+                    def call_script(_ctx: MatchContext) -> None:
+                        self._guard.run(compiled)
 
                 return call_script
 

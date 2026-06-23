@@ -155,6 +155,61 @@ def test_full_stdlib_keeps_stdlib_but_closes_escape_hatches(tmp_path):
     assert {"stdlib", "no-loadlib", "no-getregistry", "no-sethook"} <= set(sink.sent)
 
 
+def test_send_to_script_substitutes_wildcards():
+    # MUSHclient send-to-script (send_to=12) substitutes %1.. into the script text before
+    # running it; a bare %1 (Repeat_Command's "for i=1,%1") must not break compilation.
+    sink = RecordingSink()
+    engine = AutomationEngine(sink)
+    MushclientPack(ScriptApi(engine, source="rc")).load_source(
+        "<muclient><aliases>"
+        '<alias match="^rep (\\d+) (.*)$" enabled="y" regexp="y" send_to="12">'
+        '<send>for i = 1, %1 do Send("%2") end</send></alias>'
+        "</aliases></muclient>"
+    )
+    engine.process_input("rep 3 jump")
+    assert sink.sent == ["jump", "jump", "jump"]
+
+
+def test_doctype_entities_are_expanded():
+    # MUSHclient plugins declare config in a DOCTYPE internal subset and reference it as
+    # &name;. The DOCTYPE must survive load_source so ElementTree expands the entities.
+    sink = RecordingSink()
+    engine = AutomationEngine(sink)
+    MushclientPack(ScriptApi(engine, source="m")).load_source(
+        '<?xml version="1.0" encoding="iso-8859-1"?>\n'
+        "<!DOCTYPE muclient [\n"
+        '  <!ENTITY cue "boom.wav">\n'
+        "]>\n"
+        "<muclient><triggers>"
+        '<trigger match="boom" enabled="y" send_to="12"><send>Sound("&cue;")</send></trigger>'
+        "</triggers></muclient>"
+    )
+    engine.process_line(Line("boom"))
+    assert any(p["file"] == "boom.wav" for p in sink.played)
+
+
+def test_malformed_included_plugin_does_not_sink_the_pack(tmp_path):
+    # One unparseable <include>d plugin is skipped (recorded), not allowed to abort the world.
+    (tmp_path / "good.xml").write_text(
+        "<muclient><triggers>"
+        '<trigger match="ping" enabled="y" send_to="12"><send>Send("pong")</send></trigger>'
+        "</triggers></muclient>",
+        encoding="latin-1",
+    )
+    (tmp_path / "bad.xml").write_text("<muclient>& not well formed</muclient>", encoding="latin-1")
+    (tmp_path / "world.MCL").write_text(
+        '<muclient><include name="good.xml"/><include name="bad.xml"/></muclient>',
+        encoding="latin-1",
+    )
+    sink = RecordingSink()
+    engine = AutomationEngine(sink)
+    pack = MushclientPack(ScriptApi(engine, source="m", base_dir=str(tmp_path)))
+    pack.load_file(str(tmp_path / "world.MCL"))  # must not raise
+    engine.process_line(Line("ping"))
+    assert "pong" in sink.sent  # the good plugin loaded despite the bad sibling
+    assert any(name == "bad.xml" for name, _ in pack._include_errors)
+
+
 def test_sound_plays_file():
     sink, engine = _load(SOUNDS)
     engine.process_line(Line("boom"))

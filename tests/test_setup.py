@@ -117,6 +117,19 @@ def test_detect_entry_vipmud_loader_wins_over_bundled_mcl(tmp_path):
     assert detect_entry(pack) == "boot.set"
 
 
+def test_detect_entry_picks_the_richest_mcl_world(tmp_path):
+    # A full MUSHclient-install bundle ships extra worlds (captures/sandbox); pick the one
+    # that <include>s the plugin suite, not a bare capture world.
+    pack = tmp_path / "bundle"
+    (pack / "worlds").mkdir(parents=True)
+    (pack / "worlds" / "captures.MCL").write_text(MCL, encoding="latin-1")  # 0 includes
+    (pack / "worlds" / "Main World.MCL").write_text(
+        MCL.replace("</muclient>", '<include name="a.xml"/><include name="b.xml"/></muclient>'),
+        encoding="latin-1",
+    )
+    assert detect_entry(pack) == "worlds/Main World.MCL"
+
+
 def test_entry_problem_distinguishes_dead_ends(tmp_path):
     installer = tmp_path / "inst"
     installer.mkdir()

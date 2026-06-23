@@ -41,12 +41,13 @@ def _count(path: Path, needle: str) -> int:
 def detect_entry(pack_dir: str | Path) -> str | None:
     """Best-guess load script for a multi-file pack, relative to ``pack_dir``.
 
-    Real packs rarely match a single naming rule, so try, in order: a lone MUSHclient
-    ``.MCL`` world when the pack has no VIPMud ``.set`` (a MUSHclient pack — the world
-    ``<include>``s its plugins, so it wins over a stray ``main.*`` plugin); a conventional
-    ``main.*``/``start.*`` name; a VIPMud ``.set`` that ``#load``s the others (the loader);
-    a script named after the pack (e.g. ``toastush.xml`` in a toastush pack); finally a
-    lone script. None means ambiguous — the caller explains why.
+    Real packs rarely match a single naming rule, so try, in order: the MUSHclient ``.MCL``
+    world that ``<include>``s the most plugins, when the pack has no VIPMud ``.set`` (a
+    MUSHclient pack — the world wins over a stray ``main.*`` plugin, and over a bundle's
+    extra captures/sandbox worlds); a conventional ``main.*``/``start.*`` name; a VIPMud
+    ``.set`` that ``#load``s the others (the loader); a script named after the pack (e.g.
+    ``toastush.xml`` in a toastush pack); finally a lone script. None means ambiguous —
+    the caller explains why.
     Entry paths are POSIX (forward slashes) so they're portable; pathlib accepts
     them on every OS.
     """
@@ -58,12 +59,14 @@ def detect_entry(pack_dir: str | Path) -> str | None:
     def rel(script: Path) -> str:
         return script.relative_to(pack_dir).as_posix()
 
-    # A MUSHclient pack (no VIPMud .set entry) loads from its single .MCL world, which
-    # <include>s the plugins. Prefer it over a stray main.* plugin; a VIPMud pack that
-    # merely bundles a .MCL for connection info still picks its .set entry below.
+    # A MUSHclient pack (no VIPMud .set entry) loads from a .MCL world, which <include>s
+    # the plugins. Prefer it over a stray main.* plugin. Among several .MCL (a full
+    # MUSHclient-install bundle also ships captures/sandbox worlds), pick the one that
+    # <include>s the most plugins -- the soundpack world. A VIPMud pack that merely
+    # bundles a .MCL for connection info has a .set, so it picks its .set entry below.
     worlds = [s for s in scripts if s.suffix.lower() == ".mcl"]
-    if len(worlds) == 1 and not any(s.suffix.lower() == ".set" for s in scripts):
-        return rel(worlds[0])
+    if worlds and not any(s.suffix.lower() == ".set" for s in scripts):
+        return rel(max(worlds, key=lambda w: _count(w, "<include")))
     for preferred in _ENTRY_PREFERENCE:
         for script in scripts:
             if script.name.lower() == preferred:
