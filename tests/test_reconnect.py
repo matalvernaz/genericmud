@@ -3,12 +3,28 @@
 from __future__ import annotations
 
 import asyncio
+import time
 
-from genericmud.transport.connection import MudConnection, ReconnectPolicy
+from genericmud.transport.connection import (
+    _QUIT_GRACE_SECONDS,
+    MudConnection,
+    ReconnectPolicy,
+)
 
 
 async def _noop_sleep(_delay):
     pass
+
+
+class _FakeWriter:
+    def write(self, data):
+        pass
+
+    def is_closing(self):
+        return False
+
+    def close(self):
+        pass
 
 
 def test_policy_backoff_caps_and_gives_up():
@@ -29,6 +45,47 @@ def test_should_reconnect_gating():
     assert conn._should_reconnect() is True
     conn._closing = True
     assert conn._should_reconnect() is False  # a deliberate close suppresses reconnect
+
+
+def test_quit_command_suppresses_reconnect():
+    conn = MudConnection()
+    conn.auto_reconnect = True
+    conn._writer = _FakeWriter()
+    conn.send_line("  QUIT  ")  # stripped + lowercased against the quit set
+    assert conn._should_reconnect() is False  # the close following a quit is intentional
+
+
+def test_non_quit_command_still_reconnects():
+    conn = MudConnection()
+    conn.auto_reconnect = True
+    conn._writer = _FakeWriter()
+    conn.send_line("kill dragon")
+    assert conn._should_reconnect() is True
+
+
+def test_stale_quit_no_longer_suppresses():
+    conn = MudConnection()
+    conn.auto_reconnect = True
+    conn._quit_sent_at = time.monotonic() - (_QUIT_GRACE_SECONDS + 1)
+    assert conn._should_reconnect() is True  # quit too long ago to explain this drop
+
+
+async def test_connect_clears_quit_marker(monkeypatch):
+    conn = MudConnection()
+    conn._quit_sent_at = time.monotonic()
+
+    class _Reader:
+        async def read(self, _n):
+            return b""  # immediate EOF so the read loop exits cleanly
+
+    async def fake_open(host, port, ssl=None):
+        return _Reader(), _FakeWriter()
+
+    monkeypatch.setattr(asyncio, "open_connection", fake_open)
+    await conn.connect("host", 23)
+    assert conn._quit_sent_at is None  # a fresh connection re-arms reconnect
+    if conn._read_task is not None:
+        await conn._read_task  # drain the EOF read loop
 
 
 async def test_reconnect_loop_retries_then_succeeds(monkeypatch):

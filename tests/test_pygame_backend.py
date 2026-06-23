@@ -120,6 +120,58 @@ def test_stop_routes_music_vs_sound_channel():
     assert backend._channels["sound"].stopped == 1
 
 
+def test_missing_sound_warns_once_per_path():
+    mixer = _FakeMixer()
+
+    def boom(_path):
+        raise RuntimeError("undecodable")
+
+    mixer.Sound = boom  # every cue fails to decode
+    messages: list[str] = []
+    backend = PygameSoundBackend(mixer, on_error=messages.append)
+    backend.play("/abs/miss.wav", "sound", 1.0, 0.0, False)
+    backend.play("/abs/miss.wav", "sound", 1.0, 0.0, False)  # same path: no repeat warning
+    backend.play("/abs/other.wav", "sound", 1.0, 0.0, False)
+    assert len(messages) == 2
+    assert "/abs/miss.wav" in messages[0]
+    assert "/abs/other.wav" in messages[1]
+
+
+def test_missing_sound_without_on_error_is_silent():
+    mixer = _FakeMixer()
+
+    def boom(_path):
+        raise RuntimeError("undecodable")
+
+    mixer.Sound = boom
+    PygameSoundBackend(mixer).play("/abs/miss.wav", "sound", 1.0, 0.0, False)  # must not raise
+
+
+def test_music_failure_warns():
+    mixer = _FakeMixer()
+
+    def boom(_path):
+        raise RuntimeError("bad music")
+
+    mixer.music.load = boom
+    messages: list[str] = []
+    PygameSoundBackend(mixer, on_error=messages.append).music("/abs/theme.ogg", "music", 0.5)
+    assert len(messages) == 1 and "/abs/theme.ogg" in messages[0]
+
+
+def test_make_pygame_backend_reports_no_device(monkeypatch):
+    pygame = pytest.importorskip("pygame")
+    monkeypatch.setattr(pygame.mixer, "get_init", lambda: False)
+
+    def boom(*_a, **_k):
+        raise pygame.error("no device")
+
+    monkeypatch.setattr(pygame.mixer, "init", boom)
+    messages: list[str] = []
+    assert make_pygame_backend(on_error=messages.append) is None
+    assert any("no audio device" in message for message in messages)
+
+
 def test_real_pygame_backend_smoke(tmp_path, monkeypatch):
     pytest.importorskip("pygame")
     monkeypatch.setenv("SDL_AUDIODRIVER", "dummy")  # no real device on CI/dev hosts

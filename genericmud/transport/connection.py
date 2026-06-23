@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import ssl
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -37,6 +38,12 @@ _ACCEPT_REMOTE = frozenset(
 )
 # Local (our-side) options we offer by replying WILL when the server says DO.
 _ENABLE_LOCAL = frozenset({T.OPT_TTYPE, T.OPT_NAWS})
+
+# A server-initiated close (the read loop hits EOF) is indistinguishable from a network
+# drop, so a logout the player asked for would otherwise auto-reconnect. We treat the link
+# as deliberately closed when one of these commands was sent just before it dropped.
+DEFAULT_QUIT_COMMANDS = frozenset({"quit", "qq", "logout", "rent"})
+_QUIT_GRACE_SECONDS = 30.0  # a quit older than this no longer suppresses reconnect
 
 
 @dataclass
@@ -75,6 +82,9 @@ class MudConnection:
         self.reconnect_policy = ReconnectPolicy()
         self.on_status: Callable[[str], None] | None = None
         self._closing = False  # True only on a deliberate disconnect (suppresses reconnect)
+        # Quit commands seen on this connection suppress reconnect on the close that follows.
+        self.quit_commands = set(DEFAULT_QUIT_COMMANDS)
+        self._quit_sent_at: float | None = None  # monotonic time of the last quit command
         self._target: tuple[str, int, bool, ssl.SSLContext | None] | None = None
 
     @property
@@ -94,6 +104,7 @@ class MudConnection:
         ssl_context: ssl.SSLContext | None = None,
     ) -> None:
         self._closing = False
+        self._quit_sent_at = None  # a prior session's quit must not suppress this one's drops
         self._target = (host, port, tls, ssl_context)
         ctx: ssl.SSLContext | None = None
         if tls or ssl_context is not None:
@@ -116,6 +127,10 @@ class MudConnection:
             self._teardown()
             if self._should_reconnect():
                 asyncio.create_task(self._reconnect_loop())  # noqa: RUF006 - fire-and-forget
+            elif not self._closing:
+                # A drop we won't reconnect (quit/auto_reconnect off); confirm it to the user.
+                # A user-initiated close() stays quiet -- the UI already announced it.
+                self._status("disconnected")
 
     def _dispatch(self, event: Event) -> None:
         if isinstance(event, Negotiation):
@@ -181,6 +196,8 @@ class MudConnection:
         """Send a user command line (CRLF-terminated, IAC-escaped)."""
         data = text.encode("utf-8").replace(bytes([T.IAC]), bytes([T.IAC, T.IAC]))
         self._raw_write(data + b"\r\n")
+        if text.strip().lower() in self.quit_commands:
+            self._quit_sent_at = time.monotonic()  # the close that follows is intentional
 
     async def close(self) -> None:
         """Deliberately disconnect; this suppresses auto-reconnect."""
@@ -196,7 +213,11 @@ class MudConnection:
         self._reader = None
 
     def _should_reconnect(self) -> bool:
-        return self.auto_reconnect and not self._closing
+        if not self.auto_reconnect or self._closing:
+            return False
+        if self._quit_sent_at is not None:
+            return time.monotonic() - self._quit_sent_at > _QUIT_GRACE_SECONDS
+        return True
 
     def _status(self, message: str) -> None:
         if self.on_status is not None:

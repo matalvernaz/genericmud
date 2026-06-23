@@ -15,6 +15,8 @@ post backend.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 MUSIC_CATEGORY = "music"
 _DEFAULT_CHANNELS = 32  # the mixer is process-global; give concurrent sessions room
 
@@ -44,10 +46,12 @@ def stereo_volume(gain: float, pan: float) -> tuple[float, float]:
 class PygameSoundBackend:
     """A SoundBus backend over an injected ``pygame.mixer`` (or a compatible stub)."""
 
-    def __init__(self, mixer) -> None:
+    def __init__(self, mixer, on_error: Callable[[str], None] | None = None) -> None:
         self._mixer = mixer
+        self._on_error = on_error
         self._sounds: dict[str, object] = {}  # path -> Sound (decode cache)
         self._channels: dict[str, object] = {}  # category -> Channel
+        self._warned: set[str] = set()  # paths already reported, so a missing cue warns once
 
     def play(self, file: str, channel: str, gain: float, pan: float, loop: bool) -> None:
         sound = self._sound(file)
@@ -61,9 +65,20 @@ class PygameSoundBackend:
         try:
             self._mixer.music.load(file)
         except Exception:  # noqa: BLE001 - a missing/bad music file must not crash the line
+            self._warn(file)
             return
         self._mixer.music.set_volume(_clamp(gain))
         self._mixer.music.play(loops=-1)  # background music loops until stopped
+
+    def _warn(self, file: str) -> None:
+        """Report a cue we couldn't play, once per path (a flood would fire every line)."""
+        if self._on_error is None or file in self._warned:
+            return
+        self._warned.add(file)
+        self._on_error(
+            f"sound not played: {file} -- file missing or unsupported format; "
+            "set the world's Sounds folder if your sounds are elsewhere"
+        )
 
     def stop(self, channel: str) -> None:
         if channel == MUSIC_CATEGORY:
@@ -85,21 +100,33 @@ class PygameSoundBackend:
             try:
                 sound = self._mixer.Sound(file)
             except Exception:  # noqa: BLE001 - missing/undecodable file: caller skips the cue
+                self._warn(file)
                 return None
             self._sounds[file] = sound
         return sound
 
 
-def make_pygame_backend() -> PygameSoundBackend | None:
-    """Init the pygame mixer and wrap it, or None if pygame/audio is unavailable."""
+def make_pygame_backend(
+    on_error: Callable[[str], None] | None = None,
+) -> PygameSoundBackend | None:
+    """Init the pygame mixer and wrap it, or None if pygame/audio is unavailable.
+
+    ``on_error`` receives a human-readable reason when the backend can't be built (so the
+    caller can tell the user sound is off, rather than silently dropping every cue) and is
+    forwarded to the backend for per-file failures.
+    """
     try:
         import pygame
     except ImportError:
+        if on_error is not None:
+            on_error("sound is off: pygame is not installed in this build")
         return None
     try:
         if not pygame.mixer.get_init():
             pygame.mixer.init()
         pygame.mixer.set_num_channels(_DEFAULT_CHANNELS)
     except pygame.error:
+        if on_error is not None:
+            on_error("sound is off: no audio device is available")
         return None  # no audio device (headless server, locked device, etc.)
-    return PygameSoundBackend(pygame.mixer)
+    return PygameSoundBackend(pygame.mixer, on_error=on_error)

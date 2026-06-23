@@ -37,6 +37,7 @@ export class Input {
     }
 
     const combo = this._combo(event);
+    if (combo === "alt+f4") return; // let the platform close the window
     if (combo) {
       event.preventDefault();
       this.bridge.send({ type: "key", key: combo });

@@ -90,6 +90,10 @@ def _key_combo(event: wx.KeyEvent) -> str | None:
     return "+".join(mods + [name])
 
 
+# Window/OS commands the input box must NOT swallow -- they have to reach the platform's
+# default handler (Alt+F4 -> WM_CLOSE -> our EVT_CLOSE), or the window can't be closed.
+_PASSTHROUGH_COMBOS = frozenset({"alt+f4"})
+
 _OUTPUT_CAP_LINES = 5000  # keep the native control bounded so NVDA/UIA stays responsive
 _FLUSH_INTERVAL_MS = 50  # batch output appends during floods
 
@@ -122,6 +126,7 @@ class SessionPanel(wx.Panel):
         self._alive = True
         self._pending: list[str] = []
         self._flush_scheduled = False
+        self._sound_warned = False  # speak the first sound problem; echo the rest
 
         # NVDA reads a control's name from a wx.StaticText created immediately
         # before it plus SetName() (the proven ffn-dl pattern). Both are required.
@@ -157,7 +162,7 @@ class SessionPanel(wx.Panel):
             schedule=self._loop.call_later,
             keymap=self._keymap,
             packs=self._packs,
-            sound_backend=make_pygame_backend(),  # native SFX; None -> falls back to post
+            sound_backend=make_pygame_backend(on_error=self._sound_error),  # native SFX
             name=self.world.name,  # used for the session log filename
             credentials=self._credentials,
             hub=self._hub,
@@ -231,10 +236,10 @@ class SessionPanel(wx.Panel):
             self._recall_history(-1 if code == wx.WXK_UP else 1)
             return
         combo = _key_combo(event)
-        if combo and self.app is not None:
+        if combo and combo not in _PASSTHROUGH_COMBOS and self.app is not None:
             self._loop.call_soon_threadsafe(self.app.on_ws_message, {"type": "key", "key": combo})
             return
-        event.Skip()
+        event.Skip()  # passthrough/unbound combos -> default handling (Alt+F4 -> EVT_CLOSE)
 
     def _on_output_char(self, event: wx.KeyEvent) -> None:
         unicode_key = event.GetUnicodeKey()
@@ -259,6 +264,18 @@ class SessionPanel(wx.Panel):
     def _speak_system(self, text: str) -> None:  # loop thread
         if self._voice is not None:
             self._voice.speak(text, channel="system", interrupt=True)
+
+    def _sound_error(self, message: str) -> None:  # loop thread (pygame backend / make_pygame)
+        """Surface a sound failure: echo every one to the output, speak only the first.
+
+        A blind user otherwise gets silence with no clue why; the first failure is spoken
+        so they know to look, and all of them land in the reviewable output.
+        """
+        self._post(protocol.echo(f"* {message}"))
+        if not self._sound_warned:
+            self._sound_warned = True
+            if self._voice is not None:
+                self._voice.speak(message, channel="system", interrupt=False)
 
     def set_active(self, active: bool) -> None:
         self._loop.call_soon_threadsafe(self._apply_active, active)

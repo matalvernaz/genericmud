@@ -24,6 +24,8 @@ class ScriptApi:
         self._engine = engine
         self._source = source
         self._base_dir = base_dir
+        self._sounds_index: dict[str, str] = {}  # basename(lower) -> full path under @sppath
+        self._sounds_index_key: str | None = None  # the @sppath the index was built for
 
     # --- output ---
 
@@ -135,4 +137,29 @@ class ScriptApi:
         # Collapse the doubled slash MUSHclient packs build from GetInfo() (a trailing slash
         # plus a plugin's leading one). NOT os.path.normpath -- on Windows it flips / to \,
         # mangling the forward-slash paths packs use (and breaking exact-path tests).
-        return re.sub(r"/{2,}", "/", file) if file else file
+        resolved = re.sub(r"/{2,}", "/", file) if file else file
+        if resolved and not os.path.exists(resolved):
+            fallback = self._find_in_sounds_dir(resolved)
+            if fallback is not None:
+                return fallback
+        return resolved
+
+    def _find_in_sounds_dir(self, path: str) -> str | None:
+        """Locate a missing sound by basename under the user's Sounds folder (``@sppath``).
+
+        Packs hardcode where their audio lives; this lets the world's Sounds folder point at
+        sounds kept elsewhere (e.g. Erion's separate sound repo), regardless of the pack's own
+        path assumptions. Indexed once per folder; a basename collision keeps the first match
+        (filenames are unique within a soundpack), and the walk only runs on a cache miss.
+        """
+        sounds_dir = self._engine.get_var("sppath")
+        if not sounds_dir or not os.path.isdir(sounds_dir):
+            return None
+        if self._sounds_index_key != sounds_dir:
+            index: dict[str, str] = {}
+            for root, _dirs, files in os.walk(sounds_dir):
+                for name in files:
+                    index.setdefault(name.lower(), os.path.join(root, name))
+            self._sounds_index = index
+            self._sounds_index_key = sounds_dir
+        return self._sounds_index.get(os.path.basename(path).lower())
