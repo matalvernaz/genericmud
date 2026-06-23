@@ -71,23 +71,29 @@ def make_sandboxed_runtime(*, lua51: bool = False) -> tuple[LuaRuntime, object |
     return lua, install_hook
 
 
-def install_pack_require(lua: LuaRuntime, base_dir: str | None) -> None:
-    """Install a ``require()`` scoped to the pack directory.
+def install_pack_require(
+    lua: LuaRuntime, base_dir: str | None, builtins: dict | None = None
+) -> None:
+    """Install a ``require()`` scoped to the pack directory (+ optional builtins).
 
     A trusted pack may load its OWN bundled Lua libraries (``json``, ``ppi``, ...)
     via ``require``; resolution is confined to the pack dir (looked up by filename
     anywhere under it, MUSHclient-style), so it can't reach the host filesystem.
-    Without a base dir, ``require`` stays disabled (the sandbox default). Note: this
-    only makes the file *load* — a lib that then calls unimplemented MUSHclient APIs
-    still fails when used.
+    ``builtins`` maps a module name to a value returned verbatim — used to hand a
+    plugin our own ``ppi`` shim instead of its bundled ``ppi.lua`` (which needs
+    ``package.seeall``, stripped by the sandbox). Note: require only makes a file
+    *load* — a lib that then calls unimplemented MUSHclient APIs still fails in use.
     """
-    if not base_dir:
+    builtins = dict(builtins or {})
+    if not base_dir and not builtins:
         return
-    index = {path.name.lower(): path for path in Path(base_dir).rglob("*.lua")}
+    index = {path.name.lower(): path for path in Path(base_dir).rglob("*.lua")} if base_dir else {}
     cache: dict[str, object] = {}
 
     def _require(name: object = "", *_args: object) -> object:
         key = str(name)
+        if key in builtins:
+            return builtins[key]
         if key in cache:
             return cache[key]
         target = key.replace(".", "/").rsplit("/", 1)[-1].lower() + ".lua"

@@ -77,6 +77,24 @@ def test_alias_named_script_consumes_input():
     assert "kill kobold" in sink.sent
 
 
+PPI_PLUGIN = """<?xml version="1.0"?>
+<muclient><plugin name="audio"/>
+<script><![CDATA[
+local ppi = require "ppi"
+function play(file) Sound(file) end
+ppi.Expose("play")
+SomeUnimplementedHostFunc()  -- permissive fallback must no-op, not crash the load
+]]></script></muclient>"""
+
+
+def test_ppi_shim_exposes_and_permissive_globals_no_op():
+    sink = RecordingSink()
+    engine = AutomationEngine(sink)
+    pack = MushclientPack(ScriptApi(engine, source="m", base_dir="/tmp"))
+    pack.load_source(PPI_PLUGIN)  # loads despite the unimplemented host call
+    assert "play" in pack._exposed  # ppi.Expose registered it via our shim
+
+
 def test_sound_plays_file():
     sink, engine = _load(SOUNDS)
     engine.process_line(Line("boom"))

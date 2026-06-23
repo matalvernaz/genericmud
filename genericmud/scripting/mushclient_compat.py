@@ -43,10 +43,30 @@ class MushclientPack:
     def __init__(self, api: ScriptApi) -> None:
         self._api = api
         self._base_dir = api.base_dir
+        self._exposed: dict[str, object] = {}  # ppi: exposed-function name -> Lua function
         self._lua, install_hook = make_sandboxed_runtime(lua51=True)  # MUSHclient targets Lua 5.1
         self._guard = ScriptGuard(install_hook)
         self._install_api()
-        install_pack_require(self._lua, self._base_dir)
+        # Hand the plugin our own ppi (its bundled ppi.lua needs package.seeall, which the
+        # sandbox strips). Then make any still-unimplemented host call a no-op, so a plugin
+        # loads + its sound path runs instead of crashing on the first gap.
+        install_pack_require(self._lua, self._base_dir, builtins={"ppi": self._make_ppi()})
+        self._lua.execute("setmetatable(_G, { __index = function() return function() end end })")
+
+    def _make_ppi(self):
+        """A minimal in-process ppi (plugin-to-plugin interface): Expose registers a
+        function, Load returns this plugin's exposed functions as a table."""
+        ppi = self._lua.table()
+        ppi.Expose = self._ppi_expose
+        ppi.Load = self._ppi_load
+        return ppi
+
+    def _ppi_expose(self, name: object = "", fn: object = None) -> None:
+        key = str(name)
+        self._exposed[key] = fn if fn is not None else self._lua.globals()[key]
+
+    def _ppi_load(self, _plugin_id: object = None):
+        return self._lua.table_from(self._exposed)
 
     # --- MUSHclient global API ---
 
