@@ -43,7 +43,7 @@ class MushclientPack:
     def __init__(self, api: ScriptApi) -> None:
         self._api = api
         self._base_dir = api.base_dir
-        self._lua, install_hook = make_sandboxed_runtime()
+        self._lua, install_hook = make_sandboxed_runtime(lua51=True)  # MUSHclient targets Lua 5.1
         self._guard = ScriptGuard(install_hook)
         self._install_api()
         install_pack_require(self._lua, self._base_dir)

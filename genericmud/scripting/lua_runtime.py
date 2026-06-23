@@ -37,14 +37,23 @@ _SANDBOX_REMOVE = (
 )
 
 
-def make_sandboxed_runtime() -> tuple[LuaRuntime, object | None]:
+def make_sandboxed_runtime(*, lua51: bool = False) -> tuple[LuaRuntime, object | None]:
     """A sandboxed LuaRuntime plus an install_hook callable for the script guard.
 
     install_hook(check, n) registers a Lua debug count-hook (a Lua closure, since
     lupa rejects a Python hook) that calls ``check`` every n instructions. It's
     captured before ``debug`` is removed from the sandbox; None if unavailable.
+
+    ``lua51=True`` uses lupa's Lua 5.1 backend, which is the dialect MUSHclient
+    embeds — its plugin scripts assume 5.1 semantics (e.g. writable for-loop
+    variables) that 5.4 rejects.
     """
-    lua = LuaRuntime(unpack_returned_tuples=True, register_eval=False, register_builtins=False)
+    runtime_cls = LuaRuntime
+    if lua51:
+        from lupa.lua51 import LuaRuntime as Lua51Runtime
+
+        runtime_cls = Lua51Runtime
+    lua = runtime_cls(unpack_returned_tuples=True, register_eval=False, register_builtins=False)
     globals_ = lua.globals()
     install_hook = None
     if globals_.debug is not None:
