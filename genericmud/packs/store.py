@@ -14,6 +14,7 @@ loader; the store only answers what is installed and enabled for a world.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import tempfile
 import zipfile
@@ -98,6 +99,9 @@ class PackStore:
             raise PackExists(f"pack {manifest.id!r} already installed; pass replace=True to update")
 
         dest = self.packs_dir / manifest.id
+        src, dst = source.resolve(), dest.resolve()
+        if src == dst or dst in src.parents or src in dst.parents:
+            raise PackError(f"refusing to install {manifest.id!r}: source and destination overlap")
         if dest.exists():
             shutil.rmtree(dest)
         if source.is_file():
@@ -240,5 +244,11 @@ def _load_json(path: Path) -> dict:
 
 def _save_json(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as handle:
+    # Write to a temp file and atomically replace, so a crash mid-write can't leave a torn or
+    # empty index/worlds/trust file (which would lose every installed pack's state).
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as handle:
         json.dump(data, handle, indent=2, sort_keys=True)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp, path)

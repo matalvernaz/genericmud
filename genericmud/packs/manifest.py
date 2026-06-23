@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 import tomllib
 from dataclasses import asdict, dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 MANIFEST_NAME = "pack.toml"
 
@@ -58,6 +58,20 @@ class PackManifest:
     def validate(self) -> None:
         if self.dialect not in KNOWN_DIALECTS:
             raise UnknownDialect(f"{self.dialect!r} (known: {sorted(KNOWN_DIALECTS)})")
+        # id keys packs_dir/<id> (install rmtree's then writes it); entry is joined onto the
+        # pack dir and read/executed. Both can come from an untrusted pack.toml, so refuse
+        # anything that isn't a plain slug / a confined relative path.
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", self.id):
+            raise ValueError(f"unsafe pack id {self.id!r} (must be a slug)")
+        entry = PurePosixPath(self.entry.replace("\\", "/"))
+        unsafe_entry = (
+            not self.entry.strip()
+            or entry.is_absolute()
+            or ".." in entry.parts
+            or ":" in self.entry
+        )
+        if unsafe_entry:
+            raise ValueError(f"unsafe pack entry {self.entry!r}")
 
 
 def slugify(name: str) -> str:
@@ -79,8 +93,9 @@ def infer_manifest(file_path: str | Path) -> PackManifest:
 def _read_pack_toml(manifest_path: Path) -> PackManifest:
     with open(manifest_path, "rb") as handle:
         data = tomllib.load(handle)
-    if "id" not in data:
-        data["id"] = slugify(data.get("name", manifest_path.parent.name))
+    # Slugify whatever id we land on: an explicit pack.toml id is untrusted and must not be
+    # able to become a path (it keys packs_dir/<id>, which install rmtree's then writes to).
+    data["id"] = slugify(str(data.get("id") or data.get("name") or manifest_path.parent.name))
     data.setdefault("name", data["id"])
     return PackManifest.from_dict(data)
 

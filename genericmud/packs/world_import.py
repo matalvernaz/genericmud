@@ -22,8 +22,10 @@ _WORLD_FILE_SUFFIXES = (".mcl", ".xml")
 
 
 def _attr(attrs: str, name: str) -> str | None:
-    match = re.search(rf'\b{name}\s*=\s*"([^"]*)"', attrs, re.IGNORECASE)
-    return match.group(1) if match else None
+    # Accept either quote style: exported MUSHclient worlds use ", some hand-written/.MCL
+    # variants use '. \1 backreference keeps the closing quote matched to the opening one.
+    match = re.search(rf"""\b{name}\s*=\s*(['"])(.*?)\1""", attrs, re.IGNORECASE)
+    return match.group(2) if match else None
 
 
 def _world_from_text(text: str) -> World | None:
