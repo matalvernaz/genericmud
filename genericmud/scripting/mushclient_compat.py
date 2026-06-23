@@ -53,7 +53,9 @@ class MushclientPack:
         # MUSHclient targets Lua 5.1; trusted packs keep the full stdlib their
         # libraries assume (os/io/loadstring + the module(..., package.seeall) idiom).
         self._lua, install_hook = make_sandboxed_runtime(lua51=True, full_stdlib=full_stdlib)
-        self._guard = ScriptGuard(install_hook)
+        # Untrusted packs fail closed if the runaway-loop guard can't be installed; a trusted
+        # pack is user-vouched arbitrary code, so a missing hook is acceptable there.
+        self._guard = ScriptGuard(install_hook, require_hook=not full_stdlib)
         self._install_api()
         # Hand each plugin our own ppi (its bundled ppi.lua needs package.seeall, which the
         # sandbox strips). Then make any still-unimplemented host name a "black hole" that is

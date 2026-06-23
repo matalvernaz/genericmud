@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from genericmud.automation.engine import AutomationEngine
 from genericmud.model.buffer import Line
 from tests.helpers import RecordingSink
@@ -20,6 +22,18 @@ def test_trigger_fires_with_wildcards():
     engine.process_line(Line("You see a dragon"))
     assert captured["wc"] == ["You see a dragon", "a dragon"]
     assert sink.sent == ["got a dragon"]
+
+
+def test_redos_trigger_times_out_and_is_disabled():
+    pytest.importorskip("regex")  # the per-match timeout needs the regex module
+    engine = AutomationEngine(RecordingSink())
+    fired: list[int] = []
+    # A catastrophic pack pattern must not hang the engine on a crafted line: the per-match
+    # timeout fires, the line is treated as no-match, and the offending rule is disabled.
+    engine.add_trigger(r"(a|a)+$", lambda ctx: fired.append(1), regex=True, name="redos")
+    engine.process_line(Line("a" * 60 + "!"))
+    assert fired == []
+    assert all(not rule.enabled for rule in engine._triggers if rule.name == "redos")
 
 
 def test_gag_and_gag_but_display():

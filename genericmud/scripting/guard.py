@@ -20,14 +20,25 @@ class ScriptTimeout(Exception):
     pass
 
 
+class ScriptGuardUnavailable(RuntimeError):
+    """The Lua timeout hook couldn't be installed and the caller required it."""
+
+
 class ScriptGuard:
     def __init__(
-        self, install_hook: Callable | None, max_seconds: float = MAX_SCRIPT_SECONDS
+        self,
+        install_hook: Callable | None,
+        max_seconds: float = MAX_SCRIPT_SECONDS,
+        *,
+        require_hook: bool = False,
     ) -> None:
         self._deadline = 0.0
         self._max_seconds = max_seconds
         self.last_error: Exception | None = None
         self.enabled = install_hook is not None
+        if require_hook and not self.enabled:
+            # Fail closed: never run an untrusted pack with no runaway-loop protection at all.
+            raise ScriptGuardUnavailable("no Lua timeout hook available; refusing untrusted code")
         if install_hook is not None:
             install_hook(self._check, HOOK_INSTRUCTION_INTERVAL)
 

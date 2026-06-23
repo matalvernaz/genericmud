@@ -19,6 +19,24 @@ from genericmud.model.buffer import Line
 from genericmud.session.hub import SessionHub
 from genericmud.sound.bus import SoundBus
 
+# A pack-supplied regex trigger is matched against every incoming line, so a catastrophic-
+# backtracking pattern (ReDoS) on a crafted line could hang the engine. The `regex` module is
+# a `re` superset that honours a per-match timeout (and interrupts backtracking); fall back to
+# stdlib `re` (no timeout) if it's somehow absent, so the engine still imports.
+_MATCH_BUDGET_SECONDS = 0.25
+try:
+    import regex as _matcher
+
+    _MATCH_KWARGS: dict[str, float] = {"timeout": _MATCH_BUDGET_SECONDS}
+    _MatchTimeout: type[BaseException] = TimeoutError
+except ImportError:  # pragma: no cover - regex is a declared dependency
+    import re as _matcher  # type: ignore[no-redef]
+
+    _MATCH_KWARGS = {}
+
+    class _MatchTimeout(Exception):  # never raised by stdlib re; keeps the except clause valid
+        ...
+
 
 class EngineSink:
     """Side-effect surface the engine drives. Real wiring overrides these."""
@@ -47,7 +65,7 @@ def compile_pattern(pattern: str, regex: bool) -> re.Pattern[str]:
     convention); each wildcard becomes a numbered capture group.
     """
     if regex:
-        return re.compile(pattern)
+        return _matcher.compile(pattern)
     out: list[str] = []
     for ch in pattern:
         if ch == "*":
@@ -56,7 +74,7 @@ def compile_pattern(pattern: str, regex: bool) -> re.Pattern[str]:
             out.append("(.)")
         else:
             out.append(re.escape(ch))
-    return re.compile("".join(out))
+    return _matcher.compile("".join(out))
 
 
 @dataclass
@@ -203,7 +221,11 @@ class AutomationEngine:
         for rule in list(self._triggers):
             if not rule.enabled:
                 continue
-            match = rule.pattern.search(line.plain_text)
+            try:
+                match = rule.pattern.search(line.plain_text, **_MATCH_KWARGS)
+            except _MatchTimeout:
+                rule.enabled = False  # a pattern that backtracks past the budget is disabled
+                continue
             if match is None:
                 continue
             if rule.channel is not None:
@@ -226,7 +248,11 @@ class AutomationEngine:
         for rule in list(self._aliases):
             if not rule.enabled:
                 continue
-            match = rule.pattern.match(text)
+            try:
+                match = rule.pattern.match(text, **_MATCH_KWARGS)
+            except _MatchTimeout:
+                rule.enabled = False  # a pattern that backtracks past the budget is disabled
+                continue
             if match is None:
                 continue
             if rule.callback is not None:

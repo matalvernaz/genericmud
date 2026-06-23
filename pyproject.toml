@@ -4,18 +4,20 @@ build-backend = "hatchling.build"
 
 [project]
 name = "genericmud"
-version = "0.3.13"
+version = "0.4.0"
 description = "Accessible, cross-platform, self-voicing MUD client"
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
 authors = [{ name = "Matt Alvernaz" }]
 
-# Lua powers the scripting layer (native + VIPMud + MUSHclient soundpacks), so it's a
-# core runtime dependency. Transport, protocol, and automation are otherwise stdlib.
+# Lua powers the scripting layer (native + VIPMud + MUSHclient soundpacks), so it's a core
+# runtime dependency. `regex` gives trigger matching a per-match timeout so a pack's
+# catastrophic pattern can't hang the engine (ReDoS). Transport/protocol are otherwise stdlib.
 # Native voice and the webview shell stay optional extras.
 dependencies = [
   "lupa>=2.0",
+  "regex>=2024.0",
 ]
 
 [project.optional-dependencies]

@@ -171,7 +171,7 @@ class LuaPackRuntime:
     def __init__(self, api: ScriptApi) -> None:
         self._api = api
         self._lua, install_hook = make_sandboxed_runtime()
-        self._guard = ScriptGuard(install_hook)
+        self._guard = ScriptGuard(install_hook, require_hook=True)  # native packs are sandboxed
         self._install_mud()
         install_pack_require(self._lua, api.base_dir)
 

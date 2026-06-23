@@ -29,5 +29,6 @@ python3 -m venv .venv
 .venv/bin/pytest -q
 ```
 
-The engine's only runtime dependency is `lupa` (Lua scripting). Install `.[gui]` for the webview/WebSocket
-shell and `.[voice]` for native self-voicing backends (Windows/macOS).
+The engine's runtime dependencies are `lupa` (Lua scripting) and `regex` (ReDoS-safe trigger matching with a
+per-match timeout). Install `.[gui]` for the webview/WebSocket shell and `.[voice]` for native self-voicing
+backends (Windows/macOS).
