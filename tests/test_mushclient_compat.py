@@ -234,6 +234,31 @@ def test_get_info_resolves_sound_path():
     assert any(played["file"] == "/packs/demo/snd/x.ogg" for played in sink.played)
 
 
+def test_get_info_anchors_on_the_world_dir_not_pack_root(tmp_path):
+    # Erion's layout: the world + sounds are nested under the pack (base_dir), not at its
+    # root. GetInfo(67) must return the WORLD file's dir (with a trailing slash, so a plugin
+    # that appends "sounds/.." with no leading slash still resolves beside the world).
+    worlds = tmp_path / "MUSHclient" / "worlds"
+    worlds.mkdir(parents=True)
+    (worlds / "w.MCL").write_text(
+        "<muclient><triggers>"
+        '<trigger match="boom" enabled="y" send_to="12">'
+        '<send>Sound(GetInfo(67).."sounds/boom.wav")</send></trigger>'
+        "</triggers></muclient>",
+        encoding="latin-1",
+    )
+    sink = RecordingSink()
+    engine = AutomationEngine(sink)
+    # base_dir is the PACK ROOT (where require resolves libs); the world is nested below it.
+    pack = MushclientPack(ScriptApi(engine, source="m", base_dir=str(tmp_path)))
+    pack.load_file(str(worlds / "w.MCL"))
+    engine.process_line(Line("boom"))
+    assert sink.played, "no sound played"
+    played = sink.played[0]["file"]
+    assert played.endswith("MUSHclient/worlds/sounds/boom.wav")  # beside the world, not the root
+    assert "//" not in played  # normpath collapsed the trailing-slash join
+
+
 @pytest.mark.skipif(not os.path.exists(ERION), reason="erion plugin not present")
 def test_real_erion_plugin_end_to_end():
     sink = RecordingSink()

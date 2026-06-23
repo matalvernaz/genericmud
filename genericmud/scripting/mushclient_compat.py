@@ -35,8 +35,8 @@ _DEFAULT_TRIGGER_SEQUENCE = "100"
 
 _SOUND_CHANNEL = "sound"  # MUSHclient Sound() is a single-voice channel
 _VOLUME_MAX = 100.0  # MUSHclient volume is 0..100
-# GetInfo() directory codes (app/config/world/plugin dirs). A genericMud pack bundles
-# its scripts + sounds under one dir, so every dir code resolves to the pack root.
+# GetInfo() directory codes (app/config/world/plugin dirs). Real packs build sound paths
+# relative to the WORLD file's directory, so every dir code resolves to it (see _get_info).
 _DIR_INFO_CODES = frozenset({56, 60, 64, 66, 67})
 
 
@@ -44,6 +44,7 @@ class MushclientPack:
     def __init__(self, api: ScriptApi, *, full_stdlib: bool = False) -> None:
         self._api = api
         self._base_dir = api.base_dir
+        self._world_dir: str | None = None  # dir of the loaded world file; anchors GetInfo() paths
         self._exposed: dict[str, dict] = {}  # ppi: plugin id -> {exposed name -> Lua fn}
         self._current_plugin = "world"  # whose script is loading now (for ppi.Expose)
         self._loaded_includes: set[Path] = set()  # resolved paths, so each file loads once
@@ -153,16 +154,23 @@ class MushclientPack:
             self._api.set_volume(_SOUND_CHANNEL, level / _VOLUME_MAX)
 
     def _get_info(self, code: object = 0) -> str:
-        """MUSHclient ``GetInfo``: the pack dir for directory codes, else ``""``.
+        """MUSHclient ``GetInfo``: the world file's directory for dir codes, else ``""``.
 
-        Packs build sound paths as ``GetInfo(67).."/sounds/x.ogg"``; returning the
-        pack root makes those resolve against the bundled files.
+        Packs build sound paths as ``GetInfo(67).."sounds/x.ogg"`` (with or without a
+        leading slash), so return the loaded world's directory WITH a trailing slash --
+        MUSHclient dir codes end in a separator, and some plugins (Erion's MSDP_handler)
+        append ``"sounds/.."`` with none. Sounds sit beside the world, which may be nested
+        under the pack root, so anchor on the world dir, not ``base_dir``. ``api.play``
+        normpath's the result, so the doubled slash a leading-slash plugin produces is fine.
         """
         try:
             number = int(code)
         except (TypeError, ValueError):
             return ""
-        return (self._base_dir or "") if number in _DIR_INFO_CODES else ""
+        if number not in _DIR_INFO_CODES:
+            return ""
+        root = self._world_dir or self._base_dir or ""
+        return f"{root.rstrip('/')}/" if root else ""
 
     def _do_after_special(self, delay: float, code: str, sendto: object = _SEND_TO_SCRIPT) -> None:
         deferred = self._compile(str(code))
@@ -175,6 +183,9 @@ class MushclientPack:
     # --- loading ---
 
     def load_file(self, path: str) -> None:
+        # The world file's directory anchors GetInfo() sound paths: sounds sit beside the
+        # world (often nested below the pack root that require/ resolves against).
+        self._world_dir = Path(path).resolve().parent.as_posix()
         # MUSHclient world/plugin files are iso-8859-1 (a .MCL declares it); latin-1
         # decodes any byte without error, and load_source strips the encoding decl.
         with open(path, encoding="latin-1") as handle:

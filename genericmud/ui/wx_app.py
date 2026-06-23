@@ -280,6 +280,18 @@ class SessionPanel(wx.Panel):
         if self._connection is not None:
             asyncio.create_task(self._connection.close())
 
+    def is_connected(self) -> bool:
+        return self._connection is not None and self._connection.connected
+
+    def disconnect(self) -> None:
+        """Drop the connection but keep the session/tab open (and stop auto-reconnect)."""
+        self._loop.call_soon_threadsafe(self._do_disconnect)
+
+    def _do_disconnect(self) -> None:  # loop thread
+        if self._connection is not None:
+            self._connection.auto_reconnect = False
+            asyncio.create_task(self._connection.close())
+
 
 class ConnectDialog(wx.Dialog):
     def __init__(self, parent: wx.Window, saved: list[World], initial: World | None = None):
@@ -786,6 +798,7 @@ class GenericMudFrame(wx.Frame):
         menubar = wx.MenuBar()
         file_menu = wx.Menu()
         connect_item = file_menu.Append(wx.ID_ANY, "&Connect...\tCtrl+N")
+        disconnect_item = file_menu.Append(wx.ID_ANY, "&Disconnect\tCtrl+D")
         close_item = file_menu.Append(wx.ID_ANY, "Close &Tab\tCtrl+W")
         packs_item = file_menu.Append(wx.ID_ANY, "&Manage Soundpacks...\tCtrl+P")
         setup_item = file_menu.Append(wx.ID_ANY, "Set &Up a Soundpack...")
@@ -802,6 +815,7 @@ class GenericMudFrame(wx.Frame):
 
         self.SetMenuBar(menubar)
         self.Bind(wx.EVT_MENU, self._on_connect, connect_item)
+        self.Bind(wx.EVT_MENU, self._on_disconnect, disconnect_item)
         self.Bind(wx.EVT_MENU, self._on_close_tab, close_item)
         self.Bind(wx.EVT_MENU, self._on_manage_packs, packs_item)
         self.Bind(wx.EVT_MENU, self._on_setup_pack, setup_item)
@@ -811,6 +825,7 @@ class GenericMudFrame(wx.Frame):
 
         self.book = wx.Simplebook(self)  # no tab strip -> nothing in the keyboard Tab order
         self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)  # Ctrl+Tab cycles sessions
+        self.Bind(wx.EVT_CLOSE, self._on_frame_close)  # confirm + disconnect before exit
 
     def _on_char_hook(self, event: wx.KeyEvent) -> None:
         # Grab Ctrl+Tab before the focused control sees it; let everything else
@@ -857,6 +872,36 @@ class GenericMudFrame(wx.Frame):
             self._update_active()
             if self.book.GetPageCount():  # no tab strip to fall back on; place focus
                 self.book.GetPage(self.book.GetSelection()).input.SetFocus()
+
+    def _on_disconnect(self, _event: wx.CommandEvent) -> None:
+        index = self.book.GetSelection()
+        if index == wx.NOT_FOUND or not self.book.GetPageCount():
+            return
+        panel = self.book.GetPage(index)
+        if panel.is_connected():
+            panel.disconnect()  # keeps the tab open; stops auto-reconnect
+            self.announce(f"Disconnecting from {panel.world.name}.")
+        else:
+            self.announce("Not connected.")
+
+    def _on_frame_close(self, event: wx.CloseEvent) -> None:
+        """Confirm before quitting if any session is live, then disconnect them all."""
+        connected = [
+            self.book.GetPage(i)
+            for i in range(self.book.GetPageCount())
+            if self.book.GetPage(i).is_connected()
+        ]
+        if connected and event.CanVeto():
+            names = ", ".join(p.world.name for p in connected)
+            if wx.MessageBox(
+                f"Disconnect from {names} and exit genericMud?",
+                "Quit genericMud", wx.YES_NO | wx.ICON_QUESTION, self,
+            ) != wx.YES:
+                event.Veto()
+                return
+        for i in range(self.book.GetPageCount()):
+            self.book.GetPage(i).close()  # graceful teardown: leave hub, stop log, close socket
+        self.Destroy()
 
     def _on_manage_packs(self, _event: wx.CommandEvent) -> None:
         dialog = PackManagerDialog(self, self._packs, load_worlds(), self._active_world_name())

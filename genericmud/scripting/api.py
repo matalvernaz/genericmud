@@ -130,5 +130,7 @@ class ScriptApi:
 
     def _resolve(self, file: str) -> str:
         if self._base_dir and not os.path.isabs(file):
-            return os.path.join(self._base_dir, file)
-        return file
+            file = os.path.join(self._base_dir, file)
+        # normpath collapses the doubled/again-slashed paths MUSHclient packs build from
+        # GetInfo() (e.g. ".../worlds/".."/sounds/x"), so the file actually opens.
+        return os.path.normpath(file) if file else file
