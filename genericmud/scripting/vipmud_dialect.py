@@ -30,6 +30,7 @@ partially but its sound core works.
 
 from __future__ import annotations
 
+import glob
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -253,14 +254,26 @@ class VipMudPack:
             return
         base = Path(self._base_dir).resolve()
         target = Path(reference.replace("\\", "/"))
+        if not target.name:
+            return
         candidate = target if target.is_absolute() else base / target
         try:
             real = candidate.resolve()
         except OSError:
             return
         if not (real.is_file() and real.is_relative_to(base)):
-            matches = sorted(base.rglob(target.name))  # layouts vary: match by filename
-            real = matches[0] if matches else None
+            # Layouts vary: match by filename. Escape glob metachars so a literal name like
+            # "a[1].set" isn't read as a pattern, and re-confirm each hit stays in the pack
+            # (rglob can surface a symlink or directory that escapes base).
+            real = None
+            for match in sorted(base.rglob(glob.escape(target.name))):
+                try:
+                    resolved = match.resolve()
+                except OSError:
+                    continue
+                if resolved.is_file() and resolved.is_relative_to(base):
+                    real = resolved
+                    break
         if real is None:
             return
         key = str(real)

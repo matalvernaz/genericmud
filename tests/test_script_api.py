@@ -29,6 +29,18 @@ def test_resolve_falls_back_to_sounds_folder_by_basename(tmp_path):
     assert api._resolve("boom.wav") == str(real)
 
 
+def test_resolve_finds_windows_authored_path_by_basename(tmp_path):
+    pack, sounds = tmp_path / "pack", tmp_path / "snd"
+    pack.mkdir()
+    sounds.mkdir()
+    (sounds / "boom.wav").write_bytes(b"RIFF")
+    api = _api(str(pack))
+    api.set_var("sppath", str(sounds))
+    # A MUSHclient/VIPMud pack may reference sounds with backslashes; the leaf must still
+    # resolve via the Sounds folder on Linux, where "\" isn't a path separator.
+    assert api._resolve("sub\\boom.wav") == str(sounds / "boom.wav")
+
+
 def test_resolve_returns_expected_path_when_unfound(tmp_path):
     pack = tmp_path / "pack"
     pack.mkdir()

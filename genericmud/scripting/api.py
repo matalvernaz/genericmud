@@ -162,4 +162,7 @@ class ScriptApi:
                     index.setdefault(name.lower(), os.path.join(root, name))
             self._sounds_index = index
             self._sounds_index_key = sounds_dir
-        return self._sounds_index.get(os.path.basename(path).lower())
+        # Split on both separators: a Windows-authored pack path keeps its backslashes when
+        # resolved on Linux, where os.path.basename only honours "/" and would miss the leaf.
+        leaf = path.replace("\\", "/").rsplit("/", 1)[-1]
+        return self._sounds_index.get(leaf.lower())
