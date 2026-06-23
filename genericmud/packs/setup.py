@@ -82,11 +82,13 @@ def entry_problem(pack_dir: str | Path) -> str:
     MUSHclient pack we can't auto-pick a load file for, or no script at all.
     """
     pack_dir = Path(pack_dir)
-    files = list(pack_dir.rglob("*"))
-    if any(f.suffix.lower() in (".exe", ".dll") for f in files):
+    suffixes = {f.suffix.lower() for f in pack_dir.rglob("*")}
+    # Check for MUSHclient content BEFORE .exe: these packs bundle git/perl tooling
+    # (.exe/.dll) alongside the real .mcl world + plugins, so .exe alone is misleading.
+    if {".mcl", ".xml"} & suffixes:
+        return "this is a multi-plugin MUSHclient pack, which genericMud can't run yet"
+    if {".exe", ".dll"} & suffixes:
         return "this download is a Windows installer, not an importable soundpack"
-    if any(f.suffix.lower() == ".xml" for f in files):
-        return "this is a multi-plugin MUSHclient pack; pick its load file with Set Up instead"
     return "no soundpack script (.set/.lua/.xml) was found in this download"
 
 

@@ -714,6 +714,7 @@ class VaultBrowserDialog(wx.Dialog):
             return extracted, None, None
         self._status(f"This is an installer. Fetching the pack from its source: {source}")
         src_dir = tmp / "source"
+        self._last_milestone = 0  # reset progress for the second (source) download
         for archive_url in vault.git_archive_urls(source):
             try:
                 src_zip = vault.download(
@@ -735,12 +736,15 @@ class VaultBrowserDialog(wx.Dialog):
         return src_dir, None, None  # the pack is copied into the store
 
     def _progress(self, done: int, total: int) -> None:  # background thread
-        pct = min(int(done * 100 / total) if total else 0, 100)
-        wx.CallAfter(self._gauge.SetValue, pct)
-        milestone = pct - pct % 25  # log/speak at 25/50/75/100, not on every chunk
+        if total:
+            pct = min(int(done * 100 / total), 100)
+            wx.CallAfter(self._gauge.SetValue, pct)
+            milestone, label = pct - pct % 25, f"{pct - pct % 25} percent"  # 25/50/75/100
+        else:  # no Content-Length (GitLab archives) -> report MB, every 50 MB
+            milestone, label = done // 50_000_000, f"{done // 1_000_000} MB"
         if milestone and milestone != self._last_milestone:
             self._last_milestone = milestone
-            self._status(f"Downloaded {milestone} percent.")
+            self._status(f"Downloaded {label}.")
 
     def _on_setup_done(self, outcome) -> None:
         if isinstance(outcome, Exception):

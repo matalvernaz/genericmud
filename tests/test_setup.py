@@ -101,6 +101,13 @@ def test_entry_problem_distinguishes_dead_ends(tmp_path):
     (empty / "readme.txt").write_text("hi", encoding="utf-8")
     assert "no soundpack script" in entry_problem(empty)
 
+    # A MUSHclient pack bundling git tooling (.exe) is MUSHclient, not an "installer".
+    both = tmp_path / "both"
+    both.mkdir()
+    (both / "git.exe").write_bytes(b"MZ")
+    (both / "LuaAudio.xml").write_text("<muclient/>", encoding="utf-8")
+    assert "MUSHclient" in entry_problem(both)
+
 
 def test_install_records_origin(tmp_path):
     store = PackStore(tmp_path / "store")
