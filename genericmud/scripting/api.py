@@ -134,10 +134,12 @@ class ScriptApi:
     def _resolve(self, file: str) -> str:
         if self._base_dir and not os.path.isabs(file):
             file = os.path.join(self._base_dir, file)
-        # Collapse the doubled slash MUSHclient packs build from GetInfo() (a trailing slash
-        # plus a plugin's leading one). NOT os.path.normpath -- on Windows it flips / to \,
-        # mangling the forward-slash paths packs use (and breaking exact-path tests).
-        resolved = re.sub(r"/{2,}", "/", file) if file else file
+        # Force forward slashes and collapse the doubled slash MUSHclient packs build from
+        # GetInfo() (a trailing slash plus a plugin's leading one). os.path.join above emits
+        # "\" on Windows while packs hardcode "/", so normalize for cross-platform consistency
+        # (Windows file APIs accept "/"). NOT os.path.normpath -- it would flip "/" back to "\"
+        # on Windows, mangling pack paths and breaking exact-path matching.
+        resolved = re.sub(r"/{2,}", "/", file.replace("\\", "/")) if file else file
         if resolved and not os.path.exists(resolved):
             fallback = self._find_in_sounds_dir(resolved)
             if fallback is not None:
