@@ -234,6 +234,14 @@ def test_get_info_resolves_sound_path():
     assert any(played["file"] == "/packs/demo/snd/x.ogg" for played in sink.played)
 
 
+def test_resolve_keeps_forward_slashes_and_collapses_doubles():
+    # GetInfo() builds ".../worlds/".."/sounds/x" with a doubled slash; _resolve must collapse
+    # it to a single FORWARD slash on every OS. os.path.normpath would flip / to \ on Windows
+    # -- the dev host is Linux so only the Windows CI catches that; this pins the contract.
+    api = ScriptApi(AutomationEngine(RecordingSink()), base_dir="/p")
+    assert api._resolve("/p/sounds//x.ogg") == "/p/sounds/x.ogg"
+
+
 def test_get_info_anchors_on_the_world_dir_not_pack_root(tmp_path):
     # Erion's layout: the world + sounds are nested under the pack (base_dir), not at its
     # root. GetInfo(67) must return the WORLD file's dir (with a trailing slash, so a plugin
@@ -254,9 +262,9 @@ def test_get_info_anchors_on_the_world_dir_not_pack_root(tmp_path):
     pack.load_file(str(worlds / "w.MCL"))
     engine.process_line(Line("boom"))
     assert sink.played, "no sound played"
-    played = sink.played[0]["file"]
+    played = sink.played[0]["file"].replace("\\", "/")  # normalize separators for a portable check
     assert played.endswith("MUSHclient/worlds/sounds/boom.wav")  # beside the world, not the root
-    assert "//" not in played  # normpath collapsed the trailing-slash join
+    assert "//" not in played  # the doubled-slash join was collapsed
 
 
 @pytest.mark.skipif(not os.path.exists(ERION), reason="erion plugin not present")

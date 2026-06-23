@@ -10,6 +10,7 @@ dialect authored a rule.
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Callable
 
 from genericmud.automation.channels import ChannelPolicy
@@ -131,6 +132,7 @@ class ScriptApi:
     def _resolve(self, file: str) -> str:
         if self._base_dir and not os.path.isabs(file):
             file = os.path.join(self._base_dir, file)
-        # normpath collapses the doubled/again-slashed paths MUSHclient packs build from
-        # GetInfo() (e.g. ".../worlds/".."/sounds/x"), so the file actually opens.
-        return os.path.normpath(file) if file else file
+        # Collapse the doubled slash MUSHclient packs build from GetInfo() (a trailing slash
+        # plus a plugin's leading one). NOT os.path.normpath -- on Windows it flips / to \,
+        # mangling the forward-slash paths packs use (and breaking exact-path tests).
+        return re.sub(r"/{2,}", "/", file) if file else file
