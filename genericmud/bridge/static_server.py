@@ -39,13 +39,20 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
     def translate_path(self, path: str) -> str:
         server: _AppServer = self.server  # type: ignore[assignment]
         clean = urllib.parse.unquote(path.split("?", 1)[0].split("#", 1)[0])
+        clean = clean.replace("\\", "/")  # backslash is a path separator on Windows -- split it too
         if clean.startswith(SOUNDS_PREFIX) and server.sound_root:
             base, relative = server.sound_root, clean[len(SOUNDS_PREFIX) :]
         else:
             base, relative = server.frontend_dir, clean.lstrip("/")
-        # Drop '.'/'..'/empty segments so the chosen root can't be escaped.
+        # Drop '.'/'..'/empty segments, then confirm the result really stays under the root. The
+        # filter alone isn't enough: on Windows a drive letter or backslash survives it and escapes
+        # os.path.join, and a symlink can point outside -- realpath + containment is the real guard.
         parts = [p for p in relative.split("/") if p and p not in (".", "..")]
-        return os.path.join(base, *parts)
+        root = os.path.realpath(base)
+        candidate = os.path.realpath(os.path.join(root, *parts))
+        if candidate != root and not candidate.startswith(root + os.sep):
+            return root
+        return candidate
 
 
 def serve_static(
