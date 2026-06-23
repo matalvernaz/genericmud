@@ -21,17 +21,19 @@ from genericmud.scripting.mushclient_compat import MushclientPack
 from genericmud.scripting.vipmud_dialect import VipMudPack
 
 
-def _load_lua(api: ScriptApi, entry: str) -> None:
+def _load_lua(api: ScriptApi, entry: str, trusted: bool) -> None:
     LuaPackRuntime(api).run_file(entry)
 
 
-def _load_vipmud(api: ScriptApi, entry: str) -> None:
+def _load_vipmud(api: ScriptApi, entry: str, trusted: bool) -> None:
     with open(entry, encoding="utf-8") as handle:
         VipMudPack(api).load_source(handle.read())
 
 
-def _load_mushclient(api: ScriptApi, entry: str) -> None:
-    MushclientPack(api).load_file(entry)
+def _load_mushclient(api: ScriptApi, entry: str, trusted: bool) -> None:
+    # Trusted packs run with the full Lua stdlib their libraries assume; untrusted
+    # ones (a dry-run with require_trust=False) stay sandboxed.
+    MushclientPack(api, full_stdlib=trusted).load_file(entry)
 
 
 DIALECT_LOADERS = {"lua": _load_lua, "vipmud": _load_vipmud, "mushclient": _load_mushclient}
@@ -52,9 +54,11 @@ class ActivationResult:
     skipped_untrusted: list[str] = field(default_factory=list)  # enabled but not trusted
 
 
-def activate_pack(manifest: PackManifest, api: ScriptApi, entry: str) -> None:
+def activate_pack(
+    manifest: PackManifest, api: ScriptApi, entry: str, *, trusted: bool = False
+) -> None:
     """Run one pack's entry through its dialect front-end (raises on a bad pack)."""
-    DIALECT_LOADERS[manifest.dialect](api, entry)
+    DIALECT_LOADERS[manifest.dialect](api, entry, trusted)
 
 
 def activate_world(
@@ -67,12 +71,13 @@ def activate_world(
     """
     result = ActivationResult()
     for manifest in store.enabled(world):
-        if require_trust and not store.is_trusted(manifest.id):
+        trusted = store.is_trusted(manifest.id)
+        if require_trust and not trusted:
             result.skipped_untrusted.append(manifest.id)
             continue
         api = ScriptApi(engine, source=manifest.id, base_dir=str(store.pack_dir(manifest.id)))
         try:
-            activate_pack(manifest, api, str(store.entry_path(manifest.id)))
+            activate_pack(manifest, api, str(store.entry_path(manifest.id)), trusted=trusted)
             result.loaded.append(manifest.id)
         except Exception as exc:  # noqa: BLE001 - one bad pack must not sink the others
             result.failed[manifest.id] = f"{type(exc).__name__}: {exc}"

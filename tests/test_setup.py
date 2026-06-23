@@ -85,6 +85,17 @@ def test_detect_entry_finds_plugin_named_after_pack(tmp_path):
     assert detect_entry(tmp_path / "toastush") == "worlds/plugins/toastush.xml"
 
 
+def test_detect_entry_prefers_mcl_world(tmp_path):
+    # A MUSHclient pack: the lone .MCL world is the entry (it <include>s the plugins),
+    # even though the plugin .xml files alone would be ambiguous.
+    pack = tmp_path / "erionish"
+    (pack / "worlds" / "plugins").mkdir(parents=True)
+    (pack / "worlds" / "erion.MCL").write_text(MCL, encoding="latin-1")
+    (pack / "worlds" / "plugins" / "gather.xml").write_text("<muclient/>", encoding="utf-8")
+    (pack / "worlds" / "plugins" / "combat.xml").write_text("<muclient/>", encoding="utf-8")
+    assert detect_entry(pack) == "worlds/erion.MCL"
+
+
 def test_entry_problem_distinguishes_dead_ends(tmp_path):
     installer = tmp_path / "inst"
     installer.mkdir()

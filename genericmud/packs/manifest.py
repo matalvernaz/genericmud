@@ -17,7 +17,8 @@ from pathlib import Path
 MANIFEST_NAME = "pack.toml"
 
 # Script extension -> dialect front-end key (see scripting.* and the loader).
-DIALECT_BY_SUFFIX = {".lua": "lua", ".set": "vipmud", ".xml": "mushclient"}
+# .mcl is a MUSHclient world file (same dialect as .xml); it <include>s its plugins.
+DIALECT_BY_SUFFIX = {".lua": "lua", ".set": "vipmud", ".xml": "mushclient", ".mcl": "mushclient"}
 KNOWN_DIALECTS = frozenset(DIALECT_BY_SUFFIX.values())
 
 

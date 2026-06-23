@@ -59,6 +59,79 @@ def test_a_failing_pack_is_isolated_not_fatal(tmp_path):
     assert sink.sent == ["pong"]  # the good pack still works
 
 
+def test_activate_mushclient_world_includes_its_plugins(tmp_path):
+    # The real multi-file MUSHclient path: a .MCL world (the entry) <include>s a plugin,
+    # which must load on the shared runtime and arm its trigger after activation.
+    sink, engine, store = _engine_and_store(tmp_path)
+    pack = tmp_path / "erionish"
+    pack.mkdir()
+    (pack / "boom.xml").write_text(
+        '<?xml version="1.0" encoding="iso-8859-1"?>\n'
+        '<muclient><plugin name="boom" id="boompack"/>\n'
+        '<triggers><trigger match="boom" enabled="y" regexp="n" send_to="12">'
+        '<send>Sound("boom.wav")</send></trigger></triggers></muclient>',
+        encoding="latin-1",
+    )
+    (pack / "world.MCL").write_text(
+        '<?xml version="1.0" encoding="iso-8859-1"?>\n<!DOCTYPE muclient>\n'
+        '<muclient><include name="boom.xml"/></muclient>',
+        encoding="latin-1",
+    )
+    store.install(pack, world="mud", entry="world.MCL", trust=True)
+    result = activate_world(store, "mud", engine)
+    assert result.loaded == ["erionish"]  # the .MCL world loaded as a mushclient pack
+    engine.process_line(Line("boom"))
+    assert any(p["file"].endswith("boom.wav") for p in sink.played)
+
+
+def test_trusted_mushclient_pack_gets_full_stdlib(tmp_path):
+    # A trusted pack's script uses stdlib the sandbox normally strips: os.time, loadstring,
+    # and a module(..., package.seeall) library (whose own ipairs needs seeall). activate_world
+    # threads trusted -> full_stdlib, so all of it works and the guarded Send fires.
+    sink, engine, store = _engine_and_store(tmp_path)
+    pack = tmp_path / "stdlibpack"
+    (pack / "lib").mkdir(parents=True)
+    (pack / "lib" / "mylib.lua").write_text(
+        "module(..., package.seeall)\n"
+        "function count() local n=0 for _ in ipairs({1,2,3}) do n=n+1 end return n end\n",
+        encoding="latin-1",
+    )
+    (pack / "world.MCL").write_text(
+        '<?xml version="1.0" encoding="iso-8859-1"?>\n<!DOCTYPE muclient>\n'
+        "<muclient><script><![CDATA[\n"
+        'local m = require("mylib")\n'
+        "local now = os.time()\n"
+        'local f = loadstring("return 42")\n'
+        'if m and m.count() == 3 and now and f and f() == 42 then Send("stdlib-ok") end\n'
+        "]]></script></muclient>",
+        encoding="latin-1",
+    )
+    store.install(pack, world="mud", entry="world.MCL", trust=True)
+    result = activate_world(store, "mud", engine)
+    assert result.loaded == ["stdlibpack"]
+    assert result.failed == {}
+    assert "stdlib-ok" in sink.sent
+
+
+def test_untrusted_mushclient_pack_stays_sandboxed(tmp_path):
+    # The same stdlib reliance, untrusted: loaded with require_trust=False it stays
+    # sandboxed (os/loadstring black-holed to no-ops), so the guarded Send never fires.
+    sink, engine, store = _engine_and_store(tmp_path)
+    pack = tmp_path / "stdlibpack"
+    pack.mkdir()
+    (pack / "world.MCL").write_text(
+        '<?xml version="1.0" encoding="iso-8859-1"?>\n<!DOCTYPE muclient>\n'
+        "<muclient><script><![CDATA[\n"
+        'local f = loadstring("return 42")\n'
+        'if os.time() and f and f() == 42 then Send("stdlib-ok") end\n'
+        "]]></script></muclient>",
+        encoding="latin-1",
+    )
+    store.install(pack, world="mud", entry="world.MCL", trust=False)
+    activate_world(store, "mud", engine, require_trust=False)
+    assert "stdlib-ok" not in sink.sent
+
+
 def test_detect_key_conflict_between_two_packs(tmp_path):
     _sink, engine, store = _engine_and_store(tmp_path)
     _install(store, tmp_path, "packa.lua", 'mud.key("f1", function() mud.send("a") end)')

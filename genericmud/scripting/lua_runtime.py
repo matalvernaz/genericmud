@@ -37,7 +37,9 @@ _SANDBOX_REMOVE = (
 )
 
 
-def make_sandboxed_runtime(*, lua51: bool = False) -> tuple[LuaRuntime, object | None]:
+def make_sandboxed_runtime(
+    *, lua51: bool = False, full_stdlib: bool = False
+) -> tuple[LuaRuntime, object | None]:
     """A sandboxed LuaRuntime plus an install_hook callable for the script guard.
 
     install_hook(check, n) registers a Lua debug count-hook (a Lua closure, since
@@ -47,6 +49,13 @@ def make_sandboxed_runtime(*, lua51: bool = False) -> tuple[LuaRuntime, object |
     ``lua51=True`` uses lupa's Lua 5.1 backend, which is the dialect MUSHclient
     embeds — its plugin scripts assume 5.1 semantics (e.g. writable for-loop
     variables) that 5.4 rejects.
+
+    ``full_stdlib=True`` keeps the rest of the Lua standard library (``os``/``io``/
+    ``loadstring``/``package``) instead of stripping it — real MUSHclient soundpacks
+    assume the full stdlib (MUSHclient runs them unsandboxed), and the ``module(...,
+    package.seeall)`` idiom their libraries use needs ``package``. Only the lupa
+    Python bridge is removed (host-process escape; not part of any MUSHclient
+    environment). Reserved for *trusted* packs; untrusted packs get the locked set.
     """
     runtime_cls = LuaRuntime
     if lua51:
@@ -57,7 +66,7 @@ def make_sandboxed_runtime(*, lua51: bool = False) -> tuple[LuaRuntime, object |
     globals_ = lua.globals()
     install_hook = None
     if globals_.debug is not None:
-        # Capture debug.sethook as an upvalue NOW, before `debug` is removed below;
+        # Capture debug.sethook as an upvalue NOW, before `debug` is (possibly) removed;
         # the returned installer sets a Lua count-hook that calls `check`.
         installer_src = (
             "(function()"
@@ -66,7 +75,7 @@ def make_sandboxed_runtime(*, lua51: bool = False) -> tuple[LuaRuntime, object |
             " end)()"
         )
         install_hook = lua.eval(installer_src)
-    for name in _SANDBOX_REMOVE:
+    for name in ("python",) if full_stdlib else _SANDBOX_REMOVE:
         globals_[name] = None
     return lua, install_hook
 
@@ -102,8 +111,15 @@ def install_pack_require(
             raise FileNotFoundError(f"pack module {key!r} not found")
         cache[key] = None  # sentinel: break a require cycle before executing
         code = path.read_text(encoding="latin-1", errors="ignore")
-        cache[key] = lua.eval("function(...)\n" + code + "\nend")(key)
-        return cache[key]
+        result = lua.eval("function(...)\n" + code + "\nend")(key)
+        if result is None:
+            # A module(..., package.seeall)-style lib (Lua 5.1) registers itself in
+            # package.loaded under its name and returns nothing; hand back that table.
+            package = lua.globals().package
+            if package is not None and package.loaded is not None:
+                result = package.loaded[key]
+        cache[key] = result
+        return result
 
     lua.globals().require = _require
 

@@ -42,9 +42,10 @@ def detect_entry(pack_dir: str | Path) -> str | None:
     """Best-guess load script for a multi-file pack, relative to ``pack_dir``.
 
     Real packs rarely match a single naming rule, so try, in order: a conventional
-    ``main.*``/``start.*`` name; a VIPMud ``.set`` that ``#load``s the others (the
-    loader); a script named after the pack (e.g. ``toastush.xml`` in a toastush
-    pack); finally a lone script. None means ambiguous — the caller explains why.
+    ``main.*``/``start.*`` name; a lone MUSHclient ``.MCL`` world (it ``<include>``s
+    its own plugins); a VIPMud ``.set`` that ``#load``s the others (the loader); a
+    script named after the pack (e.g. ``toastush.xml`` in a toastush pack); finally a
+    lone script. None means ambiguous — the caller explains why.
     Entry paths are POSIX (forward slashes) so they're portable; pathlib accepts
     them on every OS.
     """
@@ -60,6 +61,9 @@ def detect_entry(pack_dir: str | Path) -> str | None:
         for script in scripts:
             if script.name.lower() == preferred:
                 return rel(script)
+    worlds = [s for s in scripts if s.suffix.lower() == ".mcl"]
+    if len(worlds) == 1:
+        return rel(worlds[0])  # the MUSHclient world; it <include>s the plugins
     loaders = [(s, _count(s, "#load")) for s in scripts if s.suffix.lower() == ".set"]
     loaders = [(s, n) for s, n in loaders if n]  # .set files that #load others
     if loaders:  # the pack's main loader pulls in the most files
@@ -86,7 +90,7 @@ def entry_problem(pack_dir: str | Path) -> str:
     # Check for MUSHclient content BEFORE .exe: these packs bundle git/perl tooling
     # (.exe/.dll) alongside the real .mcl world + plugins, so .exe alone is misleading.
     if {".mcl", ".xml"} & suffixes:
-        return "this is a multi-plugin MUSHclient pack, which genericMud can't run yet"
+        return "couldn't identify a single MUSHclient world file to load from this pack"
     if {".exe", ".dll"} & suffixes:
         return "this download is a Windows installer, not an importable soundpack"
     return "no soundpack script (.set/.lua/.xml) was found in this download"

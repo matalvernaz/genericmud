@@ -41,13 +41,15 @@ _DIR_INFO_CODES = frozenset({56, 60, 64, 66, 67})
 
 
 class MushclientPack:
-    def __init__(self, api: ScriptApi) -> None:
+    def __init__(self, api: ScriptApi, *, full_stdlib: bool = False) -> None:
         self._api = api
         self._base_dir = api.base_dir
         self._exposed: dict[str, dict] = {}  # ppi: plugin id -> {exposed name -> Lua fn}
         self._current_plugin = "world"  # whose script is loading now (for ppi.Expose)
         self._loaded_includes: set[str] = set()
-        self._lua, install_hook = make_sandboxed_runtime(lua51=True)  # MUSHclient targets Lua 5.1
+        # MUSHclient targets Lua 5.1; trusted packs keep the full stdlib their
+        # libraries assume (os/io/loadstring + the module(..., package.seeall) idiom).
+        self._lua, install_hook = make_sandboxed_runtime(lua51=True, full_stdlib=full_stdlib)
         self._guard = ScriptGuard(install_hook)
         self._install_api()
         # Hand each plugin our own ppi (its bundled ppi.lua needs package.seeall, which the
@@ -172,7 +174,9 @@ class MushclientPack:
     # --- loading ---
 
     def load_file(self, path: str) -> None:
-        with open(path, encoding="utf-8") as handle:
+        # MUSHclient world/plugin files are iso-8859-1 (a .MCL declares it); latin-1
+        # decodes any byte without error, and load_source strips the encoding decl.
+        with open(path, encoding="latin-1") as handle:
             self.load_source(handle.read())
 
     def load_source(self, xml: str) -> None:
