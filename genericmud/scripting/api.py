@@ -46,12 +46,21 @@ class ScriptApi:
         pan: float = 0.0,
         loop: bool = False,
     ) -> None:
+        if self._engine.diag is not None:
+            self._engine.diag.event(
+                "play.entry", source=self._source or "?", file=file,
+                channel=channel, gain=gain, loop=loop,
+            )
         self._engine.sink.play(self._resolve(file), channel, gain, pan, loop)
 
     def stop(self, channel: str = "sound") -> None:
         self._engine.sink.stop(channel)
 
     def music(self, file: str, channel: str = "music") -> None:
+        if self._engine.diag is not None:
+            self._engine.diag.event(
+                "play.entry", source=self._source or "?", file=file, channel=channel, kind="music"
+            )
         self._engine.sink.music(self._resolve(file), channel)
 
     # --- variables ---
@@ -132,17 +141,24 @@ class ScriptApi:
         return self._base_dir
 
     def _resolve(self, file: str) -> str:
+        original = file
         if self._base_dir and not os.path.isabs(file):
             file = os.path.join(self._base_dir, file)
         # Collapse the doubled slash MUSHclient packs build from GetInfo() (a trailing slash
         # plus a plugin's leading one). NOT os.path.normpath -- on Windows it flips / to \,
         # mangling the forward-slash paths packs use (and breaking exact-path tests).
         resolved = re.sub(r"/{2,}", "/", file) if file else file
-        if resolved and not os.path.exists(resolved):
-            fallback = self._find_in_sounds_dir(resolved)
-            if fallback is not None:
-                return fallback
-        return resolved
+        exists = bool(resolved) and os.path.exists(resolved)
+        fallback = self._find_in_sounds_dir(resolved) if resolved and not exists else None
+        final = fallback if fallback is not None else resolved
+        if self._engine.diag is not None:
+            self._engine.diag.event(
+                "play.resolve", input=original, resolved=final,
+                exists=(exists or fallback is not None),
+                fallback=("sppath" if fallback is not None else "none"),
+                sppath=self._engine.get_var("sppath") or "",
+            )
+        return final
 
     def _find_in_sounds_dir(self, path: str) -> str | None:
         """Locate a missing sound by basename under the user's Sounds folder (``@sppath``).

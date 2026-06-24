@@ -16,7 +16,10 @@ const statusEl = document.getElementById("status");
 const announceEl = document.getElementById("sr-announce");
 
 const output = new Output(outputEl);
-const audio = new Audio();
+// onError reaches `bridge` lazily: it only fires on a later sound failure, by which
+// point the const below is assigned. Errors land in the engine's diagnostic trace.
+const audio = new Audio((e) =>
+  bridge.send({ type: "client_error", scope: "audio", file: e.file, error: e.error }));
 const status = new Status(statusEl);
 
 const handlers = {

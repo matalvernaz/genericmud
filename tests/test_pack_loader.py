@@ -7,7 +7,7 @@ import os
 from genericmud.automation.engine import AutomationEngine
 from genericmud.model.buffer import Line
 from genericmud.packs import PackStore, activate_world
-from tests.helpers import RecordingSink
+from tests.helpers import RecordingDiag, RecordingSink
 
 
 def _install(store, tmp_path, name, body, *, world="mud", trust=True):
@@ -162,6 +162,19 @@ def test_untrusted_enabled_pack_is_skipped(tmp_path):
     assert result.skipped_untrusted == ["hunt"]
     engine.process_line(Line("ping"))
     assert sink.sent == []  # untrusted pack never armed its trigger
+
+
+def test_diag_pack_counts_distinguishes_armed_from_inert(tmp_path):
+    # The diag trace must make an inert pack (loaded, zero triggers) visible -- that's the
+    # signature of a silent soundpack that loaded but can never fire (candidate D).
+    sink, engine, store = _engine_and_store(tmp_path)
+    engine.diag = RecordingDiag()
+    _install(store, tmp_path, "armed.lua",
+             'mud.trigger("ping", function() mud.play("p.wav") end)')
+    _install(store, tmp_path, "inert.lua", 'mud.send("loaded")')  # no trigger registered
+    activate_world(store, "mud", engine)
+    counts = {f["id"]: f["triggers"] for stage, f in engine.diag.events if stage == "pack.counts"}
+    assert counts == {"armed": 1, "inert": 0}
 
 
 def test_require_trust_false_loads_untrusted(tmp_path):

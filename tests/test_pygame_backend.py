@@ -13,6 +13,7 @@ from genericmud.sound.pygame_backend import (
     make_pygame_backend,
     stereo_volume,
 )
+from tests.helpers import RecordingDiag
 
 
 class _FakeChannel:
@@ -157,6 +158,53 @@ def test_music_failure_warns():
     messages: list[str] = []
     PygameSoundBackend(mixer, on_error=messages.append).music("/abs/theme.ogg", "music", 0.5)
     assert len(messages) == 1 and "/abs/theme.ogg" in messages[0]
+
+
+def test_diag_traces_backend_play_results():
+    diag = RecordingDiag()
+    PygameSoundBackend(_FakeMixer(), diag=diag).play("/abs/hit.wav", "sound", 0.5, 0.0, False)
+    assert diag.fields("backend.play")["result"] == "OK"
+
+    skip_mixer = _FakeMixer()
+
+    def boom(_path):
+        raise RuntimeError("undecodable")
+
+    skip_mixer.Sound = boom
+    skip_diag = RecordingDiag()
+    PygameSoundBackend(skip_mixer, diag=skip_diag).play("/abs/miss.wav", "sound", 1.0, 0.0, False)
+    assert skip_diag.fields("backend.play")["result"] == "SKIP"
+
+
+def test_diag_traces_backend_play_exc_on_mixer_fault():
+    # A mixer that decodes fine but faults on channel play -> EXC, and the line doesn't crash.
+    class _DeadChannel:
+        def play(self, *_a, **_k):
+            raise RuntimeError("channel dead")
+
+        def set_volume(self, *_a):
+            pass
+
+    mixer = _FakeMixer()
+    mixer.Channel = lambda _index: _DeadChannel()
+    diag = RecordingDiag()
+    PygameSoundBackend(mixer, diag=diag).play("/abs/x.wav", "sound", 1.0, 0.0, False)
+    fields = diag.fields("backend.play")
+    assert fields["result"] == "EXC" and "channel dead" in fields["exc"]
+
+
+def test_diag_traces_backend_select_no_device(monkeypatch):
+    pygame = pytest.importorskip("pygame")
+    monkeypatch.setattr(pygame.mixer, "get_init", lambda: False)
+
+    def boom(*_a, **_k):
+        raise pygame.error("no device")
+
+    monkeypatch.setattr(pygame.mixer, "init", boom)
+    diag = RecordingDiag()
+    assert make_pygame_backend(diag=diag) is None
+    fields = diag.fields("backend.select")
+    assert fields["result"] == "none" and fields["reason"] == "no-audio-device"
 
 
 def test_make_pygame_backend_reports_no_device(monkeypatch):

@@ -26,6 +26,7 @@ INPUT = "input"
 KEY = "key"
 CONNECT = "connect"
 DISCONNECT = "disconnect"
+CLIENT_ERROR = "client_error"  # renderer reporting a failure (e.g. Web Audio load/decode)
 
 
 def line(
@@ -80,3 +81,7 @@ def input_message(text: str) -> dict[str, Any]:
 
 def key_message(key: str) -> dict[str, Any]:
     return {"type": KEY, "key": key}
+
+
+def client_error(scope: str, file: str = "", error: str = "") -> dict[str, Any]:
+    return {"type": CLIENT_ERROR, "scope": scope, "file": file, "error": error}

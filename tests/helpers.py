@@ -71,3 +71,20 @@ class RecordingBackend:
 
     def stop(self) -> None:
         self.stops += 1
+
+
+@dataclass
+class RecordingDiag:
+    """A DiagnosticLog stand-in that captures events instead of writing a file."""
+
+    events: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
+
+    def event(self, stage: str, **fields: Any) -> None:
+        self.events.append((stage, fields))
+
+    def stages(self) -> list[str]:
+        return [stage for stage, _ in self.events]
+
+    def fields(self, stage: str) -> dict[str, Any]:
+        """The fields of the first event with this stage (for single-occurrence asserts)."""
+        return next(f for s, f in self.events if s == stage)

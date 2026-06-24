@@ -71,19 +71,36 @@ def activate_world(
     With ``require_trust`` (the default, matching connect), an enabled-but-untrusted
     pack is held back and listed in ``skipped_untrusted`` instead of running.
     """
+    diag = engine.diag
     result = ActivationResult()
     for manifest in store.enabled(world):
         trusted = store.is_trusted(manifest.id)
         if require_trust and not trusted:
             result.skipped_untrusted.append(manifest.id)
+            if diag is not None:
+                diag.event("pack.load", id=manifest.id, dialect=manifest.dialect,
+                           status="skipped_untrusted")
             continue
         api = ScriptApi(engine, source=manifest.id, base_dir=str(store.pack_dir(manifest.id)))
         try:
             activate_pack(manifest, api, str(store.entry_path(manifest.id)), trusted=trusted)
             result.loaded.append(manifest.id)
+            if diag is not None:
+                diag.event("pack.load", id=manifest.id, dialect=manifest.dialect, status="loaded")
         except Exception as exc:  # noqa: BLE001 - one bad pack must not sink the others
             result.failed[manifest.id] = f"{type(exc).__name__}: {exc}"
+            if diag is not None:
+                diag.event("pack.load", id=manifest.id, dialect=manifest.dialect,
+                           status="failed", error=f"{type(exc).__name__}: {exc}")
     result.conflicts = detect_conflicts(engine)
+    if diag is not None:
+        reg = engine.registrations_by_source()
+        for pack_id in result.loaded:
+            # A pack that loaded but registered zero triggers is inert -- its sounds can never
+            # fire. This line is the signature of that case (candidate D for silent soundpacks).
+            counts = reg.get(pack_id, {"trigger": [], "alias": [], "key": []})
+            diag.event("pack.counts", id=pack_id, triggers=len(counts["trigger"]),
+                       aliases=len(counts["alias"]), keys=len(counts["key"]))
     return result
 
 

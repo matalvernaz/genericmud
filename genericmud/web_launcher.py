@@ -15,6 +15,7 @@ from genericmud.bridge.static_server import STATIC_HOST, STATIC_PORT, serve_stat
 from genericmud.bridge.ws_server import DEFAULT_PORT, WsBridge
 from genericmud.config.keymap import load_keymap
 from genericmud.resources import resource_root
+from genericmud.session.diaglog import make_diagnostic_log
 from genericmud.transport.connection import MudConnection
 from genericmud.voice.factory import make_voice_backend
 from genericmud.voice.router import VoiceRouter
@@ -37,6 +38,7 @@ def run(args) -> None:
             post=bridge.post,
             schedule=loop.call_later,
             keymap=load_keymap("vipmud"),
+            diag=make_diagnostic_log(),
         )
         holder["app"] = app
         connection._on_event = app.on_telnet_event

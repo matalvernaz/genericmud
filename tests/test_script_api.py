@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from genericmud.automation.engine import AutomationEngine
 from genericmud.scripting.api import ScriptApi
-from tests.helpers import RecordingSink
+from tests.helpers import RecordingDiag, RecordingSink
 
 
 def _api(base_dir: str) -> ScriptApi:
@@ -55,3 +55,27 @@ def test_resolve_without_sppath_is_unchanged(tmp_path):
     pack = tmp_path / "pack"
     pack.mkdir()
     assert _api(str(pack))._resolve("ghost.wav") == str(pack / "ghost.wav")
+
+
+def test_resolve_traces_the_sppath_fallback(tmp_path):
+    pack, sounds = tmp_path / "pack", tmp_path / "snd"
+    pack.mkdir()
+    sounds.mkdir()
+    (sounds / "boom.wav").write_bytes(b"RIFF")
+    engine = AutomationEngine(RecordingSink())
+    engine.diag = RecordingDiag()
+    api = ScriptApi(engine, base_dir=str(pack))
+    api.set_var("sppath", str(sounds))
+    api._resolve("boom.wav")  # missing in pack, rescued from the Sounds folder
+    fields = engine.diag.fields("play.resolve")
+    assert fields["fallback"] == "sppath" and fields["exists"] is True
+
+
+def test_resolve_traces_a_total_miss(tmp_path):
+    pack = tmp_path / "pack"
+    pack.mkdir()
+    engine = AutomationEngine(RecordingSink())
+    engine.diag = RecordingDiag()
+    ScriptApi(engine, base_dir=str(pack))._resolve("ghost.wav")  # nowhere
+    fields = engine.diag.fields("play.resolve")
+    assert fields["exists"] is False and fields["fallback"] == "none"

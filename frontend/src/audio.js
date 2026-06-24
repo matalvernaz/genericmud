@@ -2,11 +2,12 @@
 // looping music. Sound files are fetched from URLs the engine provides.
 
 export class Audio {
-  constructor() {
+  constructor(onError) {
     const Ctx = window.AudioContext || window.webkitAudioContext;
     this.ctx = new Ctx();
     this.buffers = new Map();
     this.channels = new Map();
+    this.onError = onError || (() => {});  // report load/decode failures, don't swallow them
   }
 
   _soundUrl(file) {
@@ -16,7 +17,9 @@ export class Audio {
 
   async _load(file) {
     if (this.buffers.has(file)) return this.buffers.get(file);
-    const response = await fetch(this._soundUrl(file));
+    const url = this._soundUrl(file);
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`fetch ${response.status} for ${url}`);
     const bytes = await response.arrayBuffer();
     const buffer = await this.ctx.decodeAudioData(bytes);
     this.buffers.set(file, buffer);
@@ -25,7 +28,12 @@ export class Audio {
 
   async play(message) {
     let buffer;
-    try { buffer = await this._load(message.file); } catch { return; }
+    try {
+      buffer = await this._load(message.file);
+    } catch (e) {
+      this.onError({ file: message.file, error: String((e && e.message) || e) });
+      return;
+    }
     const source = this.ctx.createBufferSource();
     source.buffer = buffer;
     source.loop = !!message.loop;

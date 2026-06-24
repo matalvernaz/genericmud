@@ -13,6 +13,7 @@ import re
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from genericmud.automation.channels import ChannelPolicy
 from genericmud.automation.engine import AutomationEngine, Callback, EngineSink, MatchContext
@@ -32,6 +33,9 @@ from genericmud.session.log import SessionLogger
 from genericmud.session.login import AutoLogin
 from genericmud.sound.bus import SoundBackend, SoundBus
 from genericmud.voice.router import VoiceRouter
+
+if TYPE_CHECKING:
+    from genericmud.session.diaglog import DiagnosticLog
 
 REVIEW_CHANNEL = "review"
 SPEEDWALK_PREFIX = "."  # ".3n2e" expands to n,n,n,e,e (leading char disambiguates)
@@ -71,7 +75,8 @@ class AppSink(EngineSink):
     """Routes engine side effects to the MUD, the renderer, and the voice router."""
 
     def __init__(
-        self, *, send, post, schedule, voice: VoiceRouter, buffer: Buffer, sound: SoundBus
+        self, *, send, post, schedule, voice: VoiceRouter, buffer: Buffer, sound: SoundBus,
+        diag: DiagnosticLog | None = None,
     ) -> None:
         self._send = send
         self._post = post
@@ -79,6 +84,8 @@ class AppSink(EngineSink):
         self._voice = voice
         self._buffer = buffer
         self._sound = sound
+        self._diag = diag
+        self.cues = 0  # play/music calls reaching the bus -- 0 means no cue ever fired
 
     def send(self, text: str) -> None:
         self._send(text)
@@ -98,12 +105,28 @@ class AppSink(EngineSink):
         pan: float = 0.0,
         loop: bool = False,
     ) -> None:
+        self.cues += 1
+        if self._diag is not None:
+            policy = self._sound.policy(channel)
+            self._diag.event(
+                "sink.gain", file=file, channel=channel, master=self._sound.master,
+                cat_gain=policy.gain, muted=policy.muted, cue_gain=gain,
+                effective=self._sound.effective_gain(channel, gain),
+            )
         self._sound.play(file, channel, gain, pan, loop)
 
     def stop(self, channel: str) -> None:
         self._sound.stop(channel)
 
     def music(self, file: str, channel: str = "music") -> None:
+        self.cues += 1
+        if self._diag is not None:
+            policy = self._sound.policy(channel)
+            self._diag.event(
+                "sink.gain", file=file, channel=channel, kind="music",
+                master=self._sound.master, cat_gain=policy.gain, muted=policy.muted,
+                effective=self._sound.effective_gain(channel),
+            )
         self._sound.music(file, channel)
 
     def schedule(self, delay: float, callback: Callable[[], None]) -> None:
@@ -125,6 +148,7 @@ class EngineApp:
         log_dir: Path | None = None,
         credentials: CredentialStore | None = None,
         hub: SessionHub | None = None,
+        diag: DiagnosticLog | None = None,
     ) -> None:
         self.buffer = Buffer()
         self.voice = voice
@@ -132,7 +156,10 @@ class EngineApp:
         self._send = send or (lambda _text: None)
         self._post = post or (lambda _message: None)
         self._schedule = schedule or _default_schedule
-        # Native (wx) injects a pygame backend; otherwise sounds post to the renderer.
+        self._diag = diag
+        # Native (wx) injects a pygame backend; otherwise sounds post to the renderer (which
+        # nothing consumes in native mode -- so a "post" backend there is candidate A for silence).
+        self._diag_backend_kind = "native" if sound_backend is not None else "post"
         self.sound = SoundBus(sound_backend or _PostSoundBackend(self._post))
         self.sink = AppSink(
             send=self._send,
@@ -141,8 +168,12 @@ class EngineApp:
             voice=voice,
             buffer=self.buffer,
             sound=self.sound,
+            diag=diag,
         )
         self.engine = AutomationEngine(self.sink, sound=self.sound)
+        self.engine.diag = diag  # sound-path trace, reached by ScriptApi/loader via the engine
+        if diag is not None:
+            diag.event("backend.active", kind=self._diag_backend_kind)
         self.hub = hub
         self.engine.hub = hub  # cross-session bus, scriptable via ScriptApi
         self.engine.session_name = name
@@ -165,6 +196,8 @@ class EngineApp:
         self._dispatch_depth = 0  # recursion guard for alias/trigger -> command -> alias
         self._pending = ""
         self._gauges: dict[str, object] = {}
+        self._last_activation: ActivationResult | None = None  # for the diag:where summary
+        self._client_error_spoken = False  # speak the first renderer error, echo the rest
 
     # --- soundpacks ---
 
@@ -177,6 +210,7 @@ class EngineApp:
         if self.packs is None:
             return None
         result = activate_world(self.packs, world, self.engine)
+        self._last_activation = result
         self._announce_activation(result)
         return result
 
@@ -208,9 +242,26 @@ class EngineApp:
         self._login = AutoLogin(username, password, self._send)
 
     def _announce_activation(self, result: ActivationResult) -> None:
+        triggers = sum(
+            len(bucket["trigger"]) for bucket in self.engine.registrations_by_source().values()
+        )
+        if self._diag is not None:
+            self._diag.event(
+                "pack.summary",
+                loaded=",".join(result.loaded) or "none",
+                failed=",".join(result.failed) or "none",
+                untrusted=",".join(result.skipped_untrusted) or "none",
+                conflicts=len(result.conflicts),
+                triggers=triggers,
+                sppath=self.engine.get_var("sppath") or "",
+            )
         parts: list[str] = []
         if result.loaded:
             parts.append(f"{len(result.loaded)} soundpack{'s' if len(result.loaded) != 1 else ''}")
+        # Packs loaded but armed no triggers can never make a sound -- say so at connect, not
+        # only in the trace, so a blind user learns the pack is inert without reading a file.
+        if result.loaded and triggers == 0:
+            parts.append("packs loaded but no triggers registered")
         for pack_id in result.skipped_untrusted:
             parts.append(f"{pack_id} not loaded, not trusted")
         for pack_id, error in result.failed.items():
@@ -248,6 +299,8 @@ class EngineApp:
     def _emit_line(self, text: str) -> None:
         text, cues = parse_msp_line(text)  # strip MSP markers before colour parsing
         for cue in cues:
+            if self._diag is not None:
+                self._diag.event("msp.cue", kind=cue.kind, file=cue.file, volume=cue.volume)
             if cue.kind == "music":
                 self.sound.music(cue.file)
             else:
@@ -320,6 +373,21 @@ class EngineApp:
                 self._dispatch_command(command)
         elif kind == protocol.KEY:
             self._handle_key(message.get("key", ""))
+        elif kind == protocol.CLIENT_ERROR:
+            self._handle_client_error(message)
+
+    def _handle_client_error(self, message: dict) -> None:
+        """A renderer-side failure (e.g. Web Audio couldn't load/decode a sound)."""
+        scope = message.get("scope", "client")
+        file = message.get("file", "")
+        detail = message.get("error", "")
+        if self._diag is not None:
+            self._diag.event("client.error", scope=scope, file=file, error=detail)
+        summary = f"{scope} error: {file} {detail}".strip()
+        self._post(protocol.echo(f"* {summary}"))
+        if not self._client_error_spoken:  # speak the first; the rest stay in the output
+            self._client_error_spoken = True
+            self.voice.speak(summary, channel="system", interrupt=False)
 
     def _split_commands(self, text: str) -> list[str]:
         """Split stacked input on the separator ("n;n;look"); empty separator = off."""
@@ -484,7 +552,21 @@ class EngineApp:
             self._handle_nav(argument)
         elif namespace == "log" and argument == "toggle":
             self._toggle_log()
+        elif namespace == "diag" and argument == "where":
+            self._diag_where()
         # "soundpack:toggle" and other namespaces are wired as features land.
+
+    def _diag_where(self) -> None:
+        """Speak the diagnostic log path + a one-line summary (often names the failure)."""
+        triggers = sum(
+            len(bucket["trigger"]) for bucket in self.engine.registrations_by_source().values()
+        )
+        packs = len(self._last_activation.loaded) if self._last_activation else 0
+        name = self._diag.path.name if self._diag is not None else "off"
+        self._speak_system(
+            f"diagnostic log {name}; backend {self._diag_backend_kind}; "
+            f"{packs} packs, {triggers} triggers; {self.sink.cues} cues attempted"
+        )
 
     def _handle_nav(self, action: str) -> None:
         if action == "mark":

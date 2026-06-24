@@ -47,6 +47,7 @@ from genericmud.packs import (
     world_from_pack,
 )
 from genericmud.session.credentials import PlaintextCredentialStore
+from genericmud.session.diaglog import DiagnosticLog, make_diagnostic_log
 from genericmud.session.hub import SessionHub
 from genericmud.sound.pygame_backend import make_pygame_backend
 from genericmud.transport.connection import MudConnection
@@ -110,6 +111,7 @@ class SessionPanel(wx.Panel):
         packs: PackStore | None = None,
         credentials: PlaintextCredentialStore | None = None,
         hub: SessionHub | None = None,
+        diag: DiagnosticLog | None = None,
     ):
         super().__init__(parent)
         self._loop = loop
@@ -118,6 +120,7 @@ class SessionPanel(wx.Panel):
         self._packs = packs
         self._credentials = credentials
         self._hub = hub
+        self._diag = diag
         self.app: EngineApp | None = None
         self._connection: MudConnection | None = None
         self._voice: VoiceRouter | None = None
@@ -162,10 +165,11 @@ class SessionPanel(wx.Panel):
             schedule=self._loop.call_later,
             keymap=self._keymap,
             packs=self._packs,
-            sound_backend=make_pygame_backend(on_error=self._sound_error),  # native SFX
+            sound_backend=make_pygame_backend(on_error=self._sound_error, diag=self._diag),
             name=self.world.name,  # used for the session log filename
             credentials=self._credentials,
             hub=self._hub,
+            diag=self._diag,
         )
         self._connection._on_event = self.app.on_telnet_event
         self._connection.auto_reconnect = True
@@ -811,6 +815,7 @@ class GenericMudFrame(wx.Frame):
         self._credentials = PlaintextCredentialStore(config_dir() / "credentials.json")
         self._hub = SessionHub()  # shared across all open sessions for cross-character play
         self._announcer = make_voice_backend()  # speaks UI status for screen-reader users
+        self._diag = make_diagnostic_log()  # one sound-path trace file for the whole process
 
         menubar = wx.MenuBar()
         file_menu = wx.Menu()
@@ -864,7 +869,7 @@ class GenericMudFrame(wx.Frame):
     def open_session(self, world: World) -> None:
         panel = SessionPanel(
             self.book, self._loop, self._keymap, world,
-            self._packs, self._credentials, self._hub,
+            self._packs, self._credentials, self._hub, self._diag,
         )
         self.book.AddPage(panel, world.name, select=True)
         panel.input.SetFocus()

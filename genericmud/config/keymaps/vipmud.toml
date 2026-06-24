@@ -44,3 +44,7 @@
 # Logging: toggle writing this session's output + sent commands to a timestamped
 # file under ~/.genericmud/logs.
 "alt+shift+l" = "log:toggle"
+
+# Diagnostics: speak the sound-path trace file location + a one-line summary (backend,
+# packs/triggers loaded, cues attempted). The file always records; this just reads it out.
+"alt+shift+d" = "diag:where"

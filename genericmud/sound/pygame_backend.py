@@ -16,6 +16,10 @@ post backend.
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from genericmud.session.diaglog import DiagnosticLog
 
 MUSIC_CATEGORY = "music"
 _DEFAULT_CHANNELS = 32  # the mixer is process-global; give concurrent sessions room
@@ -46,9 +50,15 @@ def stereo_volume(gain: float, pan: float) -> tuple[float, float]:
 class PygameSoundBackend:
     """A SoundBus backend over an injected ``pygame.mixer`` (or a compatible stub)."""
 
-    def __init__(self, mixer, on_error: Callable[[str], None] | None = None) -> None:
+    def __init__(
+        self,
+        mixer,
+        on_error: Callable[[str], None] | None = None,
+        diag: DiagnosticLog | None = None,
+    ) -> None:
         self._mixer = mixer
         self._on_error = on_error
+        self._diag = diag  # separate from on_error: trace every attempt, not deduped
         self._sounds: dict[str, object] = {}  # path -> Sound (decode cache)
         self._channels: dict[str, object] = {}  # category -> Channel
         self._warned: set[str] = set()  # paths already reported, so a missing cue warns once
@@ -56,19 +66,31 @@ class PygameSoundBackend:
     def play(self, file: str, channel: str, gain: float, pan: float, loop: bool) -> None:
         sound = self._sound(file)
         if sound is None:  # missing/undecodable file: skip the cue, don't crash the line
+            self._trace(file, "SKIP", gain=gain)
             return
-        mixer_channel = self._channel(channel)
-        mixer_channel.play(sound, loops=-1 if loop else 0)
-        mixer_channel.set_volume(*stereo_volume(gain, pan))
+        try:
+            mixer_channel = self._channel(channel)
+            mixer_channel.play(sound, loops=-1 if loop else 0)
+            mixer_channel.set_volume(*stereo_volume(gain, pan))
+        except Exception as exc:  # noqa: BLE001 - a mixer fault must not crash the line; record it
+            self._trace(file, "EXC", exc=f"{type(exc).__name__}: {exc}")
+            return
+        self._trace(file, "OK", gain=gain)
 
     def music(self, file: str, channel: str, gain: float) -> None:
         try:
             self._mixer.music.load(file)
         except Exception:  # noqa: BLE001 - a missing/bad music file must not crash the line
             self._warn(file)
+            self._trace(file, "SKIP", kind="music")
             return
         self._mixer.music.set_volume(_clamp(gain))
         self._mixer.music.play(loops=-1)  # background music loops until stopped
+        self._trace(file, "OK", kind="music", gain=gain)
+
+    def _trace(self, file: str, result: str, **fields: object) -> None:
+        if self._diag is not None:
+            self._diag.event("backend.play", file=file, result=result, **fields)
 
     def _warn(self, file: str) -> None:
         """Report a cue we couldn't play, once per path (a flood would fire every line)."""
@@ -108,18 +130,26 @@ class PygameSoundBackend:
 
 def make_pygame_backend(
     on_error: Callable[[str], None] | None = None,
+    diag: DiagnosticLog | None = None,
 ) -> PygameSoundBackend | None:
     """Init the pygame mixer and wrap it, or None if pygame/audio is unavailable.
 
     ``on_error`` receives a human-readable reason when the backend can't be built (so the
     caller can tell the user sound is off, rather than silently dropping every cue) and is
-    forwarded to the backend for per-file failures.
+    forwarded to the backend for per-file failures. ``diag`` records the selection result so
+    a build that silently fell back to the no-op poster is visible after the fact.
     """
+
+    def select(result: str, reason: str) -> None:
+        if diag is not None:
+            diag.event("backend.select", result=result, reason=reason)
+
     try:
         import pygame
     except ImportError:
         if on_error is not None:
             on_error("sound is off: pygame is not installed in this build")
+        select("none", "no-pygame")
         return None
     try:
         if not pygame.mixer.get_init():
@@ -128,5 +158,7 @@ def make_pygame_backend(
     except pygame.error:
         if on_error is not None:
             on_error("sound is off: no audio device is available")
+        select("none", "no-audio-device")
         return None  # no audio device (headless server, locked device, etc.)
-    return PygameSoundBackend(pygame.mixer, on_error=on_error)
+    select("pygame", "ok")
+    return PygameSoundBackend(pygame.mixer, on_error=on_error, diag=diag)

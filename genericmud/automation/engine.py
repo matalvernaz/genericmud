@@ -13,11 +13,15 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from genericmud.automation.channels import ChannelRouter
 from genericmud.model.buffer import Line
 from genericmud.session.hub import SessionHub
 from genericmud.sound.bus import SoundBus
+
+if TYPE_CHECKING:
+    from genericmud.session.diaglog import DiagnosticLog
 
 # A pack-supplied regex trigger is matched against every incoming line, so a catastrophic-
 # backtracking pattern (ReDoS) on a crafted line could hang the engine. The `regex` module is
@@ -121,6 +125,7 @@ class AutomationEngine:
         self.sound = sound or SoundBus()  # per-category audio mixing, scriptable via ScriptApi
         self.hub: SessionHub | None = None  # cross-session bus (set by the app)
         self.session_name = ""  # this session's name, for broadcast-exclude
+        self.diag: DiagnosticLog | None = None  # sound-path trace (set by the app)
 
     # --- registration ---
 
@@ -228,6 +233,11 @@ class AutomationEngine:
                 continue
             if match is None:
                 continue
+            if self.diag is not None:
+                self.diag.event(
+                    "trigger.fire", source=rule.source or "?", pattern=rule.pattern.pattern,
+                    line=line.plain_text,
+                )
             if rule.channel is not None:
                 line.channel = rule.channel
             if rule.gag or rule.gag_but_display:
