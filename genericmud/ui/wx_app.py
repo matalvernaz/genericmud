@@ -46,6 +46,7 @@ from genericmud.packs import (
     vault,
     world_from_pack,
 )
+from genericmud.session.crashlog import install_loop_exception_handler
 from genericmud.session.credentials import PlaintextCredentialStore
 from genericmud.session.diaglog import DiagnosticLog, make_diagnostic_log
 from genericmud.session.hub import SessionHub
@@ -995,6 +996,7 @@ class GenericMudFrame(wx.Frame):
 
 def run(args) -> None:
     loop = asyncio.new_event_loop()
+    install_loop_exception_handler(loop)  # capture engine-thread coroutine crashes
     threading.Thread(target=_run_loop, args=(loop,), daemon=True).start()
 
     wx_app = wx.App(False)

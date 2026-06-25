@@ -15,6 +15,7 @@ from genericmud.bridge.static_server import STATIC_HOST, STATIC_PORT, serve_stat
 from genericmud.bridge.ws_server import DEFAULT_PORT, WsBridge
 from genericmud.config.keymap import load_keymap
 from genericmud.resources import resource_root
+from genericmud.session.crashlog import install_loop_exception_handler
 from genericmud.session.diaglog import make_diagnostic_log
 from genericmud.transport.connection import MudConnection
 from genericmud.voice.factory import make_voice_backend
@@ -25,6 +26,7 @@ def run(args) -> None:
     import webview  # lazy: only needed for the web path
 
     loop = asyncio.new_event_loop()
+    install_loop_exception_handler(loop)  # capture engine-thread coroutine crashes
     ready = threading.Event()
 
     async def boot() -> None:

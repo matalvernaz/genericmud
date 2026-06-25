@@ -25,6 +25,9 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> None:
+    from genericmud.session.crashlog import install_crash_handlers
+
+    install_crash_handlers()  # earliest chokepoint: covers both UIs and an import-time wx fault
     args = _parse_args(argv)
     if args.web:
         from genericmud.web_launcher import run
