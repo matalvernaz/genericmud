@@ -100,6 +100,7 @@ _PASSTHROUGH_COMBOS = frozenset({"alt+f4"})
 
 _OUTPUT_CAP_LINES = 5000  # keep the native control bounded so NVDA/UIA stays responsive
 _FLUSH_INTERVAL_MS = 50  # batch output appends during floods
+_PACK_SOUND_SUFFIXES = frozenset({".wav", ".ogg", ".mp3", ".flac"})  # bundled-audio detection
 
 
 class SessionPanel(wx.Panel):
@@ -1016,7 +1017,7 @@ class GenericMudFrame(wx.Frame):
         missing. A complete world (from the pack or the known-MUD table) is saved and bound,
         then a Yes/No prompt connects -- no form to fill for the common case."""
         world = result.world
-        if world is not None and world.host and world.port:
+        if world is not None and world.host and world.port and self._pack_bundles_sounds(result):
             worlds = [w for w in load_worlds() if w.name != world.name] + [world]
             save_worlds(worlds)
             self._packs.enable(result.manifest.id, world.name)
@@ -1026,7 +1027,20 @@ class GenericMudFrame(wx.Frame):
             self.announce(f"Installed the {world.name} soundpack. Connecting to {world.name}.")
             self.open_session(world)
             return
+        # No bundled audio (e.g. Cosmic Rage streams its cues and ships sounds as a separate
+        # download), or no connection details: open the dialog so the Sounds folder / host can
+        # be set before connecting -- otherwise it would connect silent.
         self._finish_setup_via_dialog(result)
+
+    def _pack_bundles_sounds(self, result) -> bool:
+        """True if the installed pack carries its own audio. A pack with none (Cosmic Rage
+        streams cues, keeping sounds in a separate download) needs the world's Sounds folder
+        pointed at a local copy first, so it routes through the Connect dialog instead."""
+        try:
+            pack_dir = self._packs.pack_dir(result.manifest.id)
+        except Exception:  # noqa: BLE001 - if we can't tell, fall through to the dialog (safe)
+            return False
+        return any(p.suffix.lower() in _PACK_SOUND_SUFFIXES for p in pack_dir.rglob("*"))
 
     def _finish_setup_via_dialog(self, result) -> None:
         """Fallback when the pack has no connection details and the MUD isn't in the known-MUD
@@ -1035,6 +1049,11 @@ class GenericMudFrame(wx.Frame):
             self.announce(
                 f"The {result.world.name} soundpack installed, but carries no connection "
                 "details. Enter the MUD's host and port to connect."
+            )
+        elif result.world is not None and result.world.host:
+            self.announce(
+                f"The {result.world.name} soundpack installed. It ships no sounds of its own — "
+                "set the Sounds folder to your local sound files, then connect."
             )
         connect = ConnectDialog(self, load_worlds(), initial=result.world)
         if connect.ShowModal() == wx.ID_OK:
