@@ -8,6 +8,8 @@ from genericmud.scripting.api import ScriptApi
 from genericmud.scripting.vipmud_dialect import (
     VipMudPack,
     _expand_sound_variant,
+    _parse_vip_settings,
+    _serialize_vip_settings,
     tokenize_statements,
 )
 from tests.helpers import RecordingSink
@@ -216,3 +218,31 @@ def test_sound_variant_expands_to_a_random_numbered_file():
     assert len(picks) >= 2  # the choice varies (P(all 40 equal) is vanishing)
     plain = "Star Conquest\\Music\\plain.wav"  # no *N marker -> unchanged
     assert _expand_sound_variant(plain) == plain
+
+
+def test_file_read_loads_settings_and_opens_the_sound_gate(tmp_path):
+    # Star Conquest gates every #Play on @silent=1, a flag that lives in the pack's binary
+    # Settings.set. Reading it (via #file/#Read) is what makes the pack audible.
+    (tmp_path / "Settings.set").write_bytes(_serialize_vip_settings(["50", "1", "1"]))
+    src = (
+        "#if {NOT %Defined(silent)} {#var silent 0}\n"  # the pack's pre-read default: gated off
+        "#file 6 {Star Conquest/Settings.set} 1\n"
+        "#Read 6 vol 1\n#Read 6 socialson 2\n#Read 6 silent 3\n"
+        "#TRIGGER {bonk} {#if {@silent = 1} {#play {CantGo.wav} @vol}}"
+    )
+    sink = RecordingSink()
+    engine = AutomationEngine(sink)
+    VipMudPack(ScriptApi(engine, source="vip", base_dir=str(tmp_path))).load_source(src)
+    assert engine.get_var("silent") == "1"  # the read overrode the off-by-default
+    assert engine.get_var("vol") == "50"
+    engine.process_line(Line("bonk"))
+    assert sink.played and sink.played[-1]["file"].endswith("CantGo.wav")
+
+
+def test_file_write_close_persists_settings(tmp_path):
+    settings = tmp_path / "Settings.set"
+    settings.write_bytes(_serialize_vip_settings(["50", "0"]))
+    engine = AutomationEngine(RecordingSink())
+    pack = VipMudPack(ScriptApi(engine, source="vip", base_dir=str(tmp_path)))
+    pack.load_source("#file 6 {Settings.set}\n#Write 6 99 1\n#Write 6 1 2\n#Close 6")
+    assert _parse_vip_settings(settings.read_bytes()) == ["99", "1"]  # flushed back in format

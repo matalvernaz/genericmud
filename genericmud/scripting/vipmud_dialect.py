@@ -187,6 +187,42 @@ def _expand_sound_variant(path: str) -> str:
     return path[: match.start()] + str(pick) + match.group(2)
 
 
+_SETTINGS_RECORD = 128  # VIPMud settings files store one value per fixed 128-byte record
+
+
+def _parse_vip_settings(data: bytes) -> list[str]:
+    """Decode a VIPMud settings file into its values, one per record.
+
+    The format is fixed 128-byte records, each a uint16 little-endian length then that many
+    ASCII bytes, null-padded. Reading it (via #file/#Read) is what flips a pack's sound-enable
+    flags on — they otherwise keep the conservative defaults set before the read.
+    """
+    values: list[str] = []
+    for off in range(0, len(data), _SETTINGS_RECORD):
+        record = data[off : off + _SETTINGS_RECORD]
+        if len(record) < 2:
+            break
+        length = int.from_bytes(record[0:2], "little")
+        values.append(record[2 : 2 + length].decode("latin-1", "ignore"))
+    return values
+
+
+def _serialize_vip_settings(values: list[str]) -> bytes:
+    """Re-encode values into the 128-byte-record format (for #Write -> #Close persistence)."""
+    out = bytearray()
+    for value in values:
+        encoded = value.encode("latin-1", "ignore")[: _SETTINGS_RECORD - 2]
+        out += (len(encoded).to_bytes(2, "little") + encoded).ljust(_SETTINGS_RECORD, b"\x00")
+    return bytes(out)
+
+
+@dataclass
+class _VipFile:
+    path: Path | None  # where to flush on #Close (None if unresolved)
+    values: list[str]  # one entry per record, addressed 1-based by #Read/#Write
+    dirty: bool = False
+
+
 class _Abort(Exception):  # noqa: N818 - a control-flow signal (#Abort), not an error condition
     """Raised by ``#Abort`` to stop the current script body (a trigger fire or a load)."""
 
@@ -198,6 +234,7 @@ class VipMudPack:
         self._api = api
         self._base_dir = api.base_dir
         self._loaded: set[str] = set()  # files already #load-ed (cycle/dup guard)
+        self._files: dict[str, _VipFile] = {}  # #file handle -> open settings file
         self._handles: dict[str, str] = {}  # VIPMud play handle -> sound bus channel
         self._next_handle = 1
         self._last_handle = _MASTER_HANDLE
@@ -283,38 +320,53 @@ class VipMudPack:
             self._execute_pc(args, wildcards)
         elif command == "LOAD" and args:
             self._load_file(self._subst(args[0].text, wildcards))
+        elif command == "FILE" and len(args) > 1:
+            self._open_file(args, wildcards)
+        elif command == "READ" and len(args) > 2:
+            self._read_file(args, wildcards)
+        elif command == "WRITE" and len(args) > 2:
+            self._write_file(args, wildcards)
+        elif command == "CLOSE" and args:
+            self._close_file(args, wildcards)
         # Unknown #commands are ignored rather than sent to the MUD (Phase 2 features).
 
-    def _load_file(self, reference: str) -> None:
-        """``#LOAD {file}`` — load another ``.set`` from the pack so a loader script
-        pulls in all the pack's scripts. Confined to the pack dir; each file loads once."""
+    def _resolve_in_pack(self, reference: str, *, must_exist: bool) -> Path | None:
+        """Resolve a pack-relative path: an exact file under the pack dir, else the first match
+        by basename (case-insensitive — Windows-authored packs are careless about case and the
+        in-pack layout rarely matches a script's hardcoded path). When ``must_exist`` is False
+        and nothing matches, return ``base/target`` so a new file (e.g. saved settings) can be
+        created there. Always confined to the pack dir (rglob can surface escaping symlinks)."""
         if not self._base_dir:
-            return
+            return None
         base = Path(self._base_dir).resolve()
         target = Path(reference.replace("\\", "/"))
         if not target.name:
-            return
+            return None
         candidate = target if target.is_absolute() else base / target
         try:
             real = candidate.resolve()
         except OSError:
-            return
-        if not (real.is_file() and real.is_relative_to(base)):
-            # Layouts vary: match by filename. Escape glob metachars so a literal name like
-            # "a[1].set" isn't read as a pattern, and re-confirm each hit stays in the pack
-            # (rglob can surface a symlink or directory that escapes base).
             real = None
-            wanted = target.name.lower()  # Windows-authored packs are careless about case
-            for match in sorted(base.rglob("*")):
-                if match.name.lower() != wanted:
-                    continue
-                try:
-                    resolved = match.resolve()
-                except OSError:
-                    continue
-                if resolved.is_file() and resolved.is_relative_to(base):
-                    real = resolved
-                    break
+        if real is not None and real.is_file() and real.is_relative_to(base):
+            return real
+        wanted = target.name.lower()
+        for match in sorted(base.rglob("*")):
+            if match.name.lower() != wanted:
+                continue
+            try:
+                resolved = match.resolve()
+            except OSError:
+                continue
+            if resolved.is_file() and resolved.is_relative_to(base):
+                return resolved
+        if must_exist:
+            return None
+        return candidate if real is None else real
+
+    def _load_file(self, reference: str) -> None:
+        """``#LOAD {file}`` — load another ``.set`` from the pack so a loader script
+        pulls in all the pack's scripts. Confined to the pack dir; each file loads once."""
+        real = self._resolve_in_pack(reference, must_exist=True)
         if real is None:
             return
         key = str(real)
@@ -322,6 +374,53 @@ class VipMudPack:
             return
         self._loaded.add(key)
         self.load_source(real.read_text(encoding="latin-1", errors="ignore"))
+
+    def _open_file(self, args: list[_Tok], wildcards: list[str]) -> None:
+        """``#file <handle> {path} [mode]`` — open a VIPMud settings file under a handle so
+        #Read/#Write address it by record number. Reading the pack's shipped settings is what
+        turns its sound-enable flags on (e.g. Star Conquest gates every #Play on @silent=1, which
+        lives in Settings.set); without this they keep the off-by-default set before the read."""
+        handle = self._subst(args[0].text, wildcards)
+        path = self._resolve_in_pack(self._subst(args[1].text, wildcards), must_exist=False)
+        values: list[str] = []
+        if path is not None and path.is_file():
+            try:
+                values = _parse_vip_settings(path.read_bytes())
+            except OSError:
+                values = []
+        self._files[handle] = _VipFile(path=path, values=values)
+
+    def _read_file(self, args: list[_Tok], wildcards: list[str]) -> None:
+        """``#Read <handle> <var> <record>`` — read a 1-based record into the variable."""
+        vfile = self._files.get(self._subst(args[0].text, wildcards))
+        if vfile is None:
+            return
+        index = _to_int(self._subst(args[2].text, wildcards), 0) - 1
+        if 0 <= index < len(vfile.values):
+            self._api.set_var(args[1].text, vfile.values[index])
+
+    def _write_file(self, args: list[_Tok], wildcards: list[str]) -> None:
+        """``#Write <handle> <value> <record>`` — set a 1-based record (flushed on #Close)."""
+        vfile = self._files.get(self._subst(args[0].text, wildcards))
+        if vfile is None:
+            return
+        index = _to_int(self._subst(args[2].text, wildcards), 0) - 1
+        if index < 0:
+            return
+        while len(vfile.values) <= index:
+            vfile.values.append("")
+        vfile.values[index] = self._subst(args[1].text, wildcards)
+        vfile.dirty = True
+
+    def _close_file(self, args: list[_Tok], wildcards: list[str]) -> None:
+        """``#Close <handle>`` — flush a written settings file back to disk, then drop it."""
+        vfile = self._files.pop(self._subst(args[0].text, wildcards), None)
+        if vfile is not None and vfile.dirty and vfile.path is not None:
+            try:
+                vfile.path.parent.mkdir(parents=True, exist_ok=True)
+                vfile.path.write_bytes(_serialize_vip_settings(vfile.values))
+            except OSError:
+                pass
 
     def _bare_or_send(self, args: list[_Tok], wildcards: list[str]) -> None:
         if not args:

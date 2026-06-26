@@ -1006,7 +1006,10 @@ class GenericMudFrame(wx.Frame):
         result = dialog.result
         dialog.Destroy()
         if completed and result is not None:
-            self._finish_setup(result)
+            # Defer off the dialog-teardown stack: opening another window here, while the screen
+            # reader is still issuing input-synchronous COM queries against the closing dialog,
+            # raised RPC_E_CANTCALLOUT_ININPUTSYNCCALL (0x8001010d). A fresh loop turn is clean.
+            wx.CallAfter(self._finish_setup, result)
 
     def _finish_setup(self, result) -> None:
         """Create the pack's world and offer to connect; only open the form if details are
@@ -1017,14 +1020,11 @@ class GenericMudFrame(wx.Frame):
             worlds = [w for w in load_worlds() if w.name != world.name] + [world]
             save_worlds(worlds)
             self._packs.enable(result.manifest.id, world.name)
-            answer = wx.MessageBox(
-                f"Installed the {world.name} soundpack and saved the world "
-                f"({world.host}:{world.port}). Connect now?",
-                "Soundpack ready", wx.YES_NO | wx.ICON_QUESTION,
-            )
-            if answer == wx.YES:
-                self.announce(f"Connecting to {world.name}.")
-                self.open_session(world)
+            # Connect straight away with a spoken confirmation, not a modal Yes/No: a MessageBox
+            # here COM-crashed against the screen reader (an input-synchronous callout). The world
+            # is saved, so anyone who didn't want to connect can just close the tab (Ctrl+W).
+            self.announce(f"Installed the {world.name} soundpack. Connecting to {world.name}.")
+            self.open_session(world)
             return
         self._finish_setup_via_dialog(result)
 
