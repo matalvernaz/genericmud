@@ -23,24 +23,26 @@ Substitution at fire time: ``@var`` -> variable, ``%0..%9`` -> positional captur
 Server-controlled packs (e.g. Cosmic Rage) run through this: the MUD streams a
 ``$sphook play:path:vol:...`` line, the trigger captures the fields as ``@action``
 etc., and ``#if`` dispatches to ``#play``/``#playloop``. Unimplemented commands
-(``#math``, the ``%function()`` library, ``#alarm``/``#wait`` timers, ``#ForAll``,
-file I/O, gagging, ``#load`` chaining, ``#Configure``) are ignored, so a pack loads
-partially but its sound core works.
+(``#math``, the ``%function()`` library, ``#wait``, file I/O, ``#Configure``) are
+ignored, so a pack loads partially but its sound core works.
 """
 
 from __future__ import annotations
 
-import glob
+import random
 import re
 from dataclasses import dataclass
 from pathlib import Path
 
 from genericmud.automation.engine import MatchContext
+from genericmud.model.buffer import Line
 from genericmud.scripting.api import ScriptApi
 
 _DEFINITIONS = {"TRIGGER", "TR", "GTRIGGER", "ALIAS", "KEY"}
 _VAR_RE = re.compile(r"@(\w+)")
 _WILDCARD_RE = re.compile(r"%(\d)")
+_FORALL_VAR_RE = re.compile(r"%[Ii]\b")  # #ForAll loop variable (%I / %i), expanded per item
+_SOUND_VARIANT_RE = re.compile(r"\*(\d+)(\.\w+)$")  # "name*N.ext": one random variant of 1..N
 # Named/positional wildcards inside a .set pattern: &{name}, &name, *, ?
 _PATTERN_WILDCARD_RE = re.compile(r"&\{(\w+)\}|&(\w+)|(\*)|(\?)")
 # A bare "@name = value" statement is an assignment, not text to send.
@@ -98,7 +100,7 @@ def tokenize_statements(source: str) -> list[tuple[str | None, list[_Tok]]]:
         if source[i] == "#":
             i += 1
             start = i
-            while i < n and source[i] not in " \t\r\n{":
+            while i < n and source[i] not in " \t\r\n;{":  # ; ends a bare command (e.g. #stop;)
                 i += 1
             command = source[start:i].upper()
             args: list[_Tok] = []
@@ -171,6 +173,24 @@ def _as_number(text: str) -> float | None:
         return None
 
 
+def _expand_sound_variant(path: str) -> str:
+    """VIPMud plays a random variant of ``name*N.ext`` — one of ``name1.ext``..``nameN.ext``.
+
+    Expand to a concrete variant chosen at random (the source of the pack's sound variety);
+    a path without the ``*N`` marker passes through unchanged.
+    """
+    match = _SOUND_VARIANT_RE.search(path)
+    if not match:
+        return path
+    count = int(match.group(1))
+    pick = random.randint(1, count) if count >= 1 else 1
+    return path[: match.start()] + str(pick) + match.group(2)
+
+
+class _Abort(Exception):  # noqa: N818 - a control-flow signal (#Abort), not an error condition
+    """Raised by ``#Abort`` to stop the current script body (a trigger fire or a load)."""
+
+
 class VipMudPack:
     """A loaded VIPMud soundpack/script, registered against a :class:`ScriptApi`."""
 
@@ -197,7 +217,10 @@ class VipMudPack:
             if command in _DEFINITIONS:
                 self._define(command, args)
             else:
-                self._execute_statement(command, args, [])
+                try:
+                    self._execute_statement(command, args, [])
+                except _Abort:
+                    return  # a top-level #Abort stops loading the rest of this script
 
     def _define(self, command: str, args: list[_Tok]) -> None:
         if not args:
@@ -217,16 +240,19 @@ class VipMudPack:
         def run(ctx: MatchContext) -> None:
             for name, value in ctx.named.items():  # named wildcards become @vars
                 self._api.set_var(name, value or "")
-            self._execute_body(body, ctx.wildcards)
+            try:
+                self._execute_body(body, ctx.wildcards, line=ctx.line)
+            except _Abort:
+                pass  # #Abort: stop this trigger body early, leaving prior effects in place
 
         return run
 
-    def _execute_body(self, body: str, wildcards: list[str]) -> None:
+    def _execute_body(self, body: str, wildcards: list[str], line: Line | None = None) -> None:
         for command, args in tokenize_statements(body):
-            self._execute_statement(command, args, wildcards)
+            self._execute_statement(command, args, wildcards, line)
 
     def _execute_statement(
-        self, command: str | None, args: list[_Tok], wildcards: list[str]
+        self, command: str | None, args: list[_Tok], wildcards: list[str], line: Line | None = None
     ) -> None:
         if command is None or command == "SEND":
             self._bare_or_send(args, wildcards)
@@ -240,7 +266,19 @@ class VipMudPack:
         elif command == "STOP":
             self._api.stop()
         elif command == "IF" and args:
-            self._execute_if(args, wildcards)
+            self._execute_if(args, wildcards, line)
+        elif command == "FORALL" and len(args) > 1:
+            self._execute_forall(args, wildcards, line)
+        elif command == "ALARM" and len(args) > 1:
+            self._execute_alarm(args, wildcards)
+        elif command == "GAGLINE" and line is not None:
+            # "#gagline [count] voice" gags self-voice but keeps the line reviewable; without a
+            # "voice" arg ("all", a bare count, or nothing) it removes the line entirely. Packs
+            # play a sound in the gagged line's place. (SC writes "voice"; Prometheus "1 Voice".)
+            line.gagged = True
+            line.display_when_gagged = any(a.text.lower() == "voice" for a in args)
+        elif command == "ABORT":
+            raise _Abort
         elif command == "PC" and len(args) > 1:
             self._execute_pc(args, wildcards)
         elif command == "LOAD" and args:
@@ -266,7 +304,10 @@ class VipMudPack:
             # "a[1].set" isn't read as a pattern, and re-confirm each hit stays in the pack
             # (rglob can surface a symlink or directory that escapes base).
             real = None
-            for match in sorted(base.rglob(glob.escape(target.name))):
+            wanted = target.name.lower()  # Windows-authored packs are careless about case
+            for match in sorted(base.rglob("*")):
+                if match.name.lower() != wanted:
+                    continue
                 try:
                     resolved = match.resolve()
                 except OSError:
@@ -293,7 +334,7 @@ class VipMudPack:
             self._api.send(self._subst(text, wildcards))
 
     def _play(self, args: list[_Tok], wildcards: list[str], *, loop: bool) -> None:
-        file = self._subst(args[0].text, wildcards)
+        file = _expand_sound_variant(self._subst(args[0].text, wildcards))
         volume = _DEFAULT_VOLUME
         if len(args) > 1:
             volume = _to_int(self._subst(args[1].text, wildcards), _DEFAULT_VOLUME)
@@ -304,10 +345,37 @@ class VipMudPack:
         self._last_handle = handle
         self._api.play(file, channel=channel, gain=volume / 100, loop=loop)
 
-    def _execute_if(self, args: list[_Tok], wildcards: list[str]) -> None:
+    def _execute_if(self, args: list[_Tok], wildcards: list[str], line: Line | None = None) -> None:
         branch = 1 if self._eval_condition(args[0].text, wildcards) else 2  # then : else
         if len(args) > branch:
-            self._execute_body(args[branch].text, wildcards)
+            self._execute_body(args[branch].text, wildcards, line)
+
+    def _execute_forall(
+        self, args: list[_Tok], wildcards: list[str], line: Line | None = None
+    ) -> None:
+        """``#ForAll {a|b|c} {body}`` — run ``body`` once per ``|``-separated item with the loop
+        token ``%I`` replaced by the item. VIPMud loaders use it to pull in every script, e.g.
+        ``#ForAll {combat|ground|...} {#load {Scripts\\%I.set}}``."""
+        body = args[1].text
+        for item in self._subst(args[0].text, wildcards).split("|"):
+            item = item.strip()
+            if item:
+                expanded = _FORALL_VAR_RE.sub(lambda _m, it=item: it, body)
+                self._execute_body(expanded, wildcards, line)
+
+    def _execute_alarm(self, args: list[_Tok], wildcards: list[str]) -> None:
+        """``#alarm <delay> {body}`` — run ``body`` after ``delay`` seconds (a VIPMud timer).
+
+        Packs defer loading the rest of the pack until the login line arrives, via
+        ``#alarm 0 {#load ...}`` fired from a login trigger. Cancel/named forms (``#alarm -1``,
+        ``#unalarm``) aren't modelled. Fires only when an event loop drives the engine's
+        scheduler (the live app); under a no-op scheduler the timer simply never runs.
+        """
+        delay = _as_number(self._subst(args[0].text, wildcards))
+        if delay is None or delay < 0:
+            return
+        body = args[1].text
+        self._api.add_timer(delay, lambda: self._execute_body(body, []))
 
     def _eval_condition(self, condition: str, wildcards: list[str]) -> bool:
         match = _CONDITION_RE.match(self._subst(condition, wildcards).strip())

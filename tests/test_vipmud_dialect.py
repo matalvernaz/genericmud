@@ -5,7 +5,11 @@ from __future__ import annotations
 from genericmud.automation.engine import AutomationEngine
 from genericmud.model.buffer import Line
 from genericmud.scripting.api import ScriptApi
-from genericmud.scripting.vipmud_dialect import VipMudPack, tokenize_statements
+from genericmud.scripting.vipmud_dialect import (
+    VipMudPack,
+    _expand_sound_variant,
+    tokenize_statements,
+)
 from tests.helpers import RecordingSink
 
 
@@ -145,3 +149,70 @@ def test_world_sounds_dir_overrides_pack_default_sppath():
     VipMudPack(ScriptApi(engine, source="vip", base_dir="/pack")).load_source(SPHOOK)
     engine.process_line(Line("$sphook play:combat/hit:100:0:0:1"))
     assert sink.played[-1]["file"] == "/my/sounds/combat/hit.wav"
+
+
+def test_forall_iterates_with_loop_variable():
+    # #ForAll runs its body once per |-item, substituting the %I loop token.
+    sink, engine = _load("#KEY f1 {#ForAll {one|two|three} {#say {got %I}}}")
+    engine.press_key("f1")
+    assert [s[0] for s in sink.spoken] == ["got one", "got two", "got three"]
+
+
+def test_forall_loads_each_listed_script(tmp_path):
+    # The real loader idiom: #ForAll {a|b} {#load {Scripts\%I.set}} pulls in every script.
+    (tmp_path / "main.set").write_text(
+        "#ForAll {combat|keys} {#load {Scripts\\%I.set}}", encoding="utf-8"
+    )
+    scripts = tmp_path / "Scripts"
+    scripts.mkdir()
+    (scripts / "combat.set").write_text("#trigger {hit} {#say {boom}}", encoding="utf-8")
+    (scripts / "keys.set").write_text("#key f1 {look}", encoding="utf-8")
+    sink = RecordingSink()
+    engine = AutomationEngine(sink)
+    VipMudPack(ScriptApi(engine, source="vip", base_dir=str(tmp_path))).load_source(
+        (tmp_path / "main.set").read_text(encoding="utf-8")
+    )
+    engine.process_line(Line("hit"))
+    assert sink.spoken and sink.spoken[-1][0] == "boom"
+    engine.press_key("f1")
+    assert sink.sent == ["look"]
+
+
+def test_gagline_voice_gags_speech_but_keeps_line_reviewable():
+    sink, engine = _load("#TRIGGER {chatter *} {#gagline voice}")
+    line = engine.process_line(Line("chatter from afar"))
+    assert line.gagged is True
+    assert line.display_when_gagged is True
+
+
+def test_gagline_count_then_all_removes_line_entirely():
+    # Prometheus writes "#gagline 1 all" (a count precedes the mode); no "voice" -> full gag.
+    sink, engine = _load("#TRIGGER {spam} {#gagline 1 all}")
+    line = engine.process_line(Line("spam"))
+    assert line.gagged is True
+    assert line.display_when_gagged is False
+
+
+def test_alarm_defers_body_until_the_scheduler_fires():
+    # Packs defer loading via "#alarm 0 {#load ...}" off a login trigger; nothing runs until
+    # an event loop drives the scheduler (RecordingSink.run_pending stands in for it).
+    sink, engine = _load("#TRIGGER {login} {#alarm 0 {#say {ready}}}")
+    engine.process_line(Line("login"))
+    assert sink.spoken == [] and sink.scheduled, "alarm body ran early or wasn't scheduled"
+    sink.run_pending()
+    assert sink.spoken == [("ready", "main", False)]
+
+
+def test_abort_stops_the_rest_of_the_body():
+    sink, engine = _load("#TRIGGER {go} {#say {first}; #abort; #say {second}}")
+    engine.process_line(Line("go"))
+    assert [s[0] for s in sink.spoken] == ["first"]
+
+
+def test_sound_variant_expands_to_a_random_numbered_file():
+    # VIPMud "name*N.wav" picks one of name1..nameN at random; plain names pass through.
+    picks = {_expand_sound_variant("beep*3.wav") for _ in range(40)}
+    assert picks <= {"beep1.wav", "beep2.wav", "beep3.wav"}
+    assert len(picks) >= 2  # the choice varies (P(all 40 equal) is vanishing)
+    plain = "Star Conquest\\Music\\plain.wav"  # no *N marker -> unchanged
+    assert _expand_sound_variant(plain) == plain

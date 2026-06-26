@@ -6,7 +6,7 @@ import shutil
 import zipfile
 
 from genericmud.packs.setup import detect_entry, entry_problem, setup_pack, update_pack
-from genericmud.packs.store import PackStore
+from genericmud.packs.store import PackStore, extract_pack
 
 MCL = """<?xml version="1.0" encoding="iso-8859-1"?>
 <!DOCTYPE muclient>
@@ -194,3 +194,48 @@ def test_setup_bare_set_pack_has_no_world(tmp_path):
     assert result.world is None  # no world file -> caller prompts for host/port
     assert result.enabled_for is None
     assert store.is_trusted(result.manifest.id)  # still installed + trusted
+
+
+def test_detect_entry_top_level_loader_beats_deeper_alias_loads(tmp_path):
+    # The Star Conquest bug: the root loader uses one #ForAll/#load, but a deeper script has
+    # more literal #loads inside reload aliases. Ranking shallowest-first keeps the real entry.
+    pack = tmp_path / "p"
+    (pack / "Scripts").mkdir(parents=True)
+    (pack / "star conquest.set").write_text(
+        "#ForAll {combat|keys} {#load {Scripts\\%I.set}}", encoding="utf-8"
+    )
+    (pack / "Scripts" / "combat.set").write_text(
+        "#alias reload {#load Scripts/combat.set; #load Scripts/keys.set}", encoding="utf-8"
+    )
+    (pack / "Scripts" / "keys.set").write_text("#key f1 {look}", encoding="utf-8")
+    assert detect_entry(pack) == "star conquest.set"
+
+
+def test_detect_entry_mud_name_hint_picks_the_named_loader(tmp_path):
+    # Two root-level loaders: without a hint the one with more #loads wins, but the MUD-name
+    # hint selects the script named after the MUD (VIPMud's "star conquest.set" convention).
+    pack = tmp_path / "p"
+    pack.mkdir()
+    (pack / "bigloader.set").write_text(
+        "#load {a.set}\n#load {b.set}\n#load {c.set}", encoding="utf-8"
+    )
+    (pack / "star conquest.set").write_text("#load {a.set}", encoding="utf-8")
+    for n in "abc":
+        (pack / f"{n}.set").write_text(f"#say {{{n}}}", encoding="utf-8")
+    assert detect_entry(pack) == "bigloader.set"
+    assert detect_entry(pack, mud_name="Star Conquest") == "star conquest.set"
+
+
+def test_extract_pack_descends_nested_zips(tmp_path):
+    # Miriani ships a wrapper zip holding a separate scripts zip; extract_pack must descend
+    # so the scripts are found, and must not leave the nested archive behind.
+    inner = tmp_path / "inner.zip"
+    with zipfile.ZipFile(inner, "w") as bundle:
+        bundle.writestr("PackName/main.set", "#trigger {x} {#say {hi}}")
+    outer = tmp_path / "outer.zip"
+    with zipfile.ZipFile(outer, "w") as bundle:
+        bundle.write(inner, "PackName Scripts.zip")
+    dest = tmp_path / "out"
+    extract_pack(outer, dest)
+    assert list(dest.rglob("main.set")), "nested .set was not extracted"
+    assert not list(dest.rglob("*.zip")), "nested zip left behind"

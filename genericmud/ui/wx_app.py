@@ -22,6 +22,7 @@ import asyncio
 import shutil
 import tempfile
 import threading
+import traceback
 import webbrowser
 import zipfile
 from pathlib import Path
@@ -40,6 +41,7 @@ from genericmud.packs import (
     activate_world,
     detect_entry,
     entry_problem,
+    known_muds,
     setup_pack,
     slugify,
     update_pack,
@@ -410,10 +412,12 @@ class PackManagerDialog(wx.Dialog):
     )
 
     def __init__(
-        self, parent: wx.Window, store: PackStore, worlds: list[World], active: str | None
+        self, parent: wx.Window, store: PackStore, worlds: list[World], active: str | None,
+        diag=None,
     ) -> None:
         super().__init__(parent, title="Manage Soundpacks", size=(560, 440))
         self._store = store
+        self._diag = diag  # durable install trace (DiagnosticLog or None)
         self._ids: list[str] = []  # pack ids, parallel to the list box rows
 
         names = [w.name for w in worlds]
@@ -490,11 +494,18 @@ class PackManagerDialog(wx.Dialog):
             self._list.SetSelection(min(keep if keep != wx.NOT_FOUND else 0, len(self._ids) - 1))
 
     def _install(self, source: str) -> None:
+        if self._diag is not None:
+            self._diag.event("install.start", source=source)
         try:
             manifest = self._store.install(source, replace=True)
         except (PackError, OSError) as error:
+            if self._diag is not None:
+                self._diag.event("install.failed", source=source, error=repr(error),
+                                 trace="".join(traceback.format_exception(error)))
             wx.MessageBox(str(error), "Install failed", wx.OK | wx.ICON_ERROR)
             return
+        if self._diag is not None:
+            self._diag.event("install.done", id=manifest.id, dialect=manifest.dialect)
         self._refresh_packs()
         wx.MessageBox(
             f"Installed {manifest.id} ({manifest.dialect}). Enable it for a world and "
@@ -621,10 +632,11 @@ class VaultBrowserDialog(wx.Dialog):
     frame can confirm the world and connect. Build-blind (no wx on the dev host).
     """
 
-    def __init__(self, parent: wx.Window, store: PackStore, announce) -> None:
+    def __init__(self, parent: wx.Window, store: PackStore, announce, diag=None) -> None:
         super().__init__(parent, title="Browse soundpacks (mudsoundpack.com)", size=(640, 480))
         self._store = store
         self._announce = announce  # speak status for screen-reader users
+        self._diag = diag  # durable install trace (DiagnosticLog or None)
         self._last_milestone = 0  # throttle spoken download progress to 25% steps
         self._packs: list = []  # VaultPack list, parallel to the list box
         self.result = None  # SetupResult once a pack is downloaded + set up
@@ -667,6 +679,8 @@ class VaultBrowserDialog(wx.Dialog):
 
     def _status(self, message: str) -> None:
         """Append a step to the readable status log and speak it; safe from any thread."""
+        if self._diag is not None:  # durable copy of every step, survives a later crash
+            self._diag.event("vault", msg=message)
         wx.CallAfter(self._append_status, message)
 
     def _append_status(self, message: str) -> None:  # main thread
@@ -713,15 +727,26 @@ class VaultBrowserDialog(wx.Dialog):
         self._status(f"Downloading {pack.name}. Large packs can take a while.")
         _run_async(lambda: self._fetch_and_setup(pack), self._on_setup_done)
 
+    def _fill_world(self, result: SetupResult, mud_name: str) -> SetupResult:
+        """Pack carried no world (a VIPMud .set): fall back to the known-MUD table, else a
+        name-only stub, so the setup flow can still create and offer the world."""
+        if result.world is not None:
+            return result
+        world = known_muds.lookup(mud_name) or World(name=mud_name, host="", port=0)
+        return SetupResult(result.manifest, world, result.enabled_for)
+
     def _fetch_and_setup(self, pack):  # background thread
         pack_id = slugify(pack.name)
         if pack_id in {manifest.id for manifest in self._store.installed()}:
             self._status(f"{pack.name} is already installed; using the cached copy.")
             world = world_from_pack(self._store.pack_dir(pack_id))
-            return SetupResult(
-                manifest=self._store.manifest(pack_id),
-                world=world,
-                enabled_for=world.name if world else None,
+            return self._fill_world(
+                SetupResult(
+                    manifest=self._store.manifest(pack_id),
+                    world=world,
+                    enabled_for=world.name if world else None,
+                ),
+                pack.mud,
             )
         best = vault.best_download(vault.pack_downloads(pack.id))
         if best is None:
@@ -747,7 +772,9 @@ class VaultBrowserDialog(wx.Dialog):
             if entry is None:
                 raise PackError(entry_problem(extracted))
             self._status(f"Setting up {pack.name}.")
-            return setup_pack(self._store, extracted, entry=entry, origin=origin)
+            return self._fill_world(
+                setup_pack(self._store, extracted, entry=entry, origin=origin), pack.mud
+            )
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
@@ -793,10 +820,18 @@ class VaultBrowserDialog(wx.Dialog):
 
     def _on_setup_done(self, outcome) -> None:
         if isinstance(outcome, Exception):
+            if self._diag is not None:
+                self._diag.event("vault.failed", error=repr(outcome),
+                                 trace="".join(traceback.format_exception(outcome)))
             self._status(f"Setup failed: {outcome}")
             self._setup_btn.Enable()
             return
         self.result = outcome
+        if self._diag is not None:
+            w = outcome.world
+            world_str = f"{w.host}:{w.port}" if w and w.host else (w.name if w else "")
+            self._diag.event("vault.done", id=outcome.manifest.id,
+                             dialect=outcome.manifest.dialect, world=world_str)
         # speak directly (not via the deferred log) -- the dialog is about to close
         self._announce("Download and set up complete. Confirm the connection details.")
         self.EndModal(wx.ID_OK)
@@ -927,7 +962,9 @@ class GenericMudFrame(wx.Frame):
         self.Destroy()
 
     def _on_manage_packs(self, _event: wx.CommandEvent) -> None:
-        dialog = PackManagerDialog(self, self._packs, load_worlds(), self._active_world_name())
+        dialog = PackManagerDialog(
+            self, self._packs, load_worlds(), self._active_world_name(), self._diag
+        )
         dialog.ShowModal()
         dialog.Destroy()
 
@@ -964,7 +1001,7 @@ class GenericMudFrame(wx.Frame):
 
     def _on_browse_online(self, _event: wx.CommandEvent) -> None:
         """Browse mudsoundpack.com, download a pack, then confirm the world and connect."""
-        dialog = VaultBrowserDialog(self, self._packs, self.announce)
+        dialog = VaultBrowserDialog(self, self._packs, self.announce, self._diag)
         completed = dialog.ShowModal() == wx.ID_OK
         result = dialog.result
         dialog.Destroy()
@@ -972,7 +1009,33 @@ class GenericMudFrame(wx.Frame):
             self._finish_setup(result)
 
     def _finish_setup(self, result) -> None:
-        """Confirm the pack-derived world (host/port prefilled), save it, enable, connect."""
+        """Create the pack's world and offer to connect; only open the form if details are
+        missing. A complete world (from the pack or the known-MUD table) is saved and bound,
+        then a Yes/No prompt connects -- no form to fill for the common case."""
+        world = result.world
+        if world is not None and world.host and world.port:
+            worlds = [w for w in load_worlds() if w.name != world.name] + [world]
+            save_worlds(worlds)
+            self._packs.enable(result.manifest.id, world.name)
+            answer = wx.MessageBox(
+                f"Installed the {world.name} soundpack and saved the world "
+                f"({world.host}:{world.port}). Connect now?",
+                "Soundpack ready", wx.YES_NO | wx.ICON_QUESTION,
+            )
+            if answer == wx.YES:
+                self.announce(f"Connecting to {world.name}.")
+                self.open_session(world)
+            return
+        self._finish_setup_via_dialog(result)
+
+    def _finish_setup_via_dialog(self, result) -> None:
+        """Fallback when the pack has no connection details and the MUD isn't in the known-MUD
+        table: open the Connect form with the world name prefilled, explaining what's needed."""
+        if result.world is not None and not result.world.host:
+            self.announce(
+                f"The {result.world.name} soundpack installed, but carries no connection "
+                "details. Enter the MUD's host and port to connect."
+            )
         connect = ConnectDialog(self, load_worlds(), initial=result.world)
         if connect.ShowModal() == wx.ID_OK:
             world = connect.get_world()

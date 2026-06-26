@@ -8,6 +8,7 @@ so it is testable headless; the caller persists the returned world and connects.
 
 from __future__ import annotations
 
+import re
 import tempfile
 import zipfile
 from collections.abc import Callable
@@ -24,6 +25,11 @@ _ENTRY_PREFERENCE = ("main.set", "main.lua", "main.xml", "start.set", "startup.s
 _MIN_NAMED_STEM = 4  # only match a script "named after the pack" if the stem is this long
 
 
+def _normalize_name(text: str) -> str:
+    """Lowercase, strip non-alphanumerics: 'star conquest' == 'Star Conquest' == 'StarConquest'."""
+    return re.sub(r"[^a-z0-9]", "", text.lower())
+
+
 @dataclass
 class SetupResult:
     manifest: PackManifest
@@ -38,16 +44,20 @@ def _count(path: Path, needle: str) -> int:
         return 0
 
 
-def detect_entry(pack_dir: str | Path) -> str | None:
+def detect_entry(pack_dir: str | Path, *, mud_name: str | None = None) -> str | None:
     """Best-guess load script for a multi-file pack, relative to ``pack_dir``.
 
     Real packs rarely match a single naming rule, so try, in order: the MUSHclient ``.MCL``
     world that ``<include>``s the most plugins, when the pack has no VIPMud ``.set`` (a
     MUSHclient pack — the world wins over a stray ``main.*`` plugin, and over a bundle's
-    extra captures/sandbox worlds); a conventional ``main.*``/``start.*`` name; a VIPMud
-    ``.set`` that ``#load``s the others (the loader); a script named after the pack (e.g.
-    ``toastush.xml`` in a toastush pack); finally a lone script. None means ambiguous —
-    the caller explains why.
+    extra captures/sandbox worlds); a conventional ``main.*``/``start.*`` name; a script
+    named after the MUD (``mud_name``: VIPMud loaders are named for the MUD, e.g.
+    ``star conquest.set`` for Star Conquest); a VIPMud ``.set`` that ``#load``s the others,
+    ranked shallowest-first (the loader sits above the ``Scripts/`` dir it pulls in — a
+    ``#ForAll {list} {#load {Scripts\\%I.set}}`` reads as one literal ``#load`` but drives
+    many, so a deeper script that ``#load``s from inside a reload alias must not outrank it);
+    a script named after the pack dir; finally a lone script. None means ambiguous — the
+    caller explains why.
     Entry paths are POSIX (forward slashes) so they're portable; pathlib accepts
     them on every OS.
     """
@@ -71,10 +81,15 @@ def detect_entry(pack_dir: str | Path) -> str | None:
         for script in scripts:
             if script.name.lower() == preferred:
                 return rel(script)
+    if mud_name:  # a VIPMud loader is named after the MUD ("star conquest.set" -> Star Conquest)
+        target = _normalize_name(mud_name)
+        for script in scripts:
+            if target and _normalize_name(script.stem) == target:
+                return rel(script)
     loaders = [(s, _count(s, "#load")) for s in scripts if s.suffix.lower() == ".set"]
     loaders = [(s, n) for s, n in loaders if n]  # .set files that #load others
-    if loaders:  # the pack's main loader pulls in the most files
-        loaders.sort(key=lambda pair: (-pair[1], rel(pair[0])))
+    if loaders:  # shallowest first: the entry loader sits above the Scripts/ dir it pulls in
+        loaders.sort(key=lambda pair: (rel(pair[0]).count("/"), -pair[1], rel(pair[0])))
         return rel(loaders[0][0])
     root = pack_dir.name.lower()  # a plugin named after the pack (toastush.xml in toastush/)
     for script in scripts:

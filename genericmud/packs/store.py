@@ -74,8 +74,7 @@ class PackStore:
         if source.is_file() and source.suffix.lower() == ".zip":
             with tempfile.TemporaryDirectory() as tmp:
                 try:
-                    with zipfile.ZipFile(source) as archive:
-                        archive.extractall(tmp)  # CPython sanitizes member paths (no zip-slip)
+                    extract_pack(source, tmp)
                 except zipfile.BadZipFile as exc:
                     raise PackError(f"not a valid zip: {source} ({exc})") from exc
                 return self._install_from(_pack_root(Path(tmp)), **opts)
@@ -217,6 +216,30 @@ class PackStore:
 
     def _save_trust(self, trusted: set[str]) -> None:
         _save_json(self._trust_path, {"trusted": sorted(trusted)})
+
+
+_MAX_NEST_DEPTH = 2  # a pack nests at most one level: sounds.zip + scripts.zip inside a wrapper
+
+
+def extract_pack(zip_path: str | Path, dest: str | Path, *, _depth: int = 0) -> None:
+    """Extract a pack zip into ``dest``, descending into any nested zips.
+
+    Some packs (e.g. Miriani) ship a wrapper zip holding a separate sounds zip and scripts
+    zip rather than the files directly; without descending, no script is found. Each nested
+    zip is expanded into a sibling folder named after it and then removed, so the tree holds
+    files, not archives. CPython sanitises member paths on extract (no zip-slip).
+    """
+    dest = Path(dest)
+    with zipfile.ZipFile(zip_path) as archive:
+        archive.extractall(dest)
+    if _depth >= _MAX_NEST_DEPTH:
+        return
+    for nested in sorted(dest.rglob("*.zip")):
+        try:
+            extract_pack(nested, nested.with_suffix(""), _depth=_depth + 1)
+        except zipfile.BadZipFile:
+            continue  # a stray non-zip named .zip: leave it, it just won't be a pack source
+        nested.unlink(missing_ok=True)
 
 
 def _pack_root(extracted: Path) -> Path:
