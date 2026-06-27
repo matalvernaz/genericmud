@@ -61,11 +61,18 @@ class MushclientPack:
         # sandbox strips). Then make any still-unimplemented host name a "black hole" that is
         # callable AND indexable (returns itself) -- so Window/InfoBox/etc. we don't implement
         # no-op (even Foo.bar.baz()) and the plugin loads + its sound path runs.
-        install_pack_require(self._lua, self._base_dir, builtins={"ppi": self._make_ppi()})
-        self._lua.execute(
-            "local bh = setmetatable({}, {__call=function() end, "
-            "__index=function(t) return t end});"
-            "setmetatable(_G, { __index = function() return bh end })"
+        # A black hole: callable AND self-indexing (returns itself), so Window/InfoBox/socket
+        # and any other host API we don't implement no-op, even Foo.bar.baz(). It backs both an
+        # unresolved require (native/external modules) and any unknown global, so a plugin loads
+        # + its sound path runs regardless of the peripheral features it reaches for.
+        black_hole = self._lua.eval(
+            "setmetatable({}, {__call=function(t) return t end, __index=function(t) return t end})"
+        )
+        install_pack_require(
+            self._lua, self._base_dir, builtins={"ppi": self._make_ppi()}, fallback=black_hole
+        )
+        self._lua.eval("function(bh) setmetatable(_G, {__index = function() return bh end}) end")(
+            black_hole
         )
 
     def _make_ppi(self):
@@ -200,6 +207,7 @@ class MushclientPack:
         # subset (<!ENTITY foo "...">) and reference them as &foo;, which ET expands. (An
         # earlier strip of the whole DOCTYPE corrupted that subset -> ParseError.)
         xml = re.sub(r"<\?xml[^>]*\?>", "", xml)
+        xml = _sanitize_attr_markup(xml)  # MUSHclient regex attrs carry raw < (named groups)
         self._load_plugin(ET.fromstring(xml))
 
     def _load_plugin(self, root: ET.Element) -> None:
@@ -309,6 +317,37 @@ class MushclientPack:
             return call_send
 
         return lambda _ctx: None
+
+
+_CDATA_RE = re.compile(r"<!\[CDATA\[.*?\]\]>", re.DOTALL)
+_ATTR_VALUE_RE = re.compile(r'="([^"]*)"')
+_BARE_AMP_RE = re.compile(r"&(?!(?:[A-Za-z][\w.-]*|#\d+|#x[0-9A-Fa-f]+);)")
+
+
+def _sanitize_attr_markup(xml: str) -> str:
+    """Escape raw ``<`` and bare ``&`` inside double-quoted attribute values (outside CDATA).
+
+    MUSHclient plugins put regexes with named groups in ``match="(?P<name>...)"`` attributes;
+    the raw ``<`` is illegal XML and trips ElementTree even though MUSHclient tolerates it.
+    Script bodies live in CDATA and are left untouched; well-formed packs have nothing to
+    escape (entities already use ``&...;``), so this is a no-op for them.
+    """
+    out: list[str] = []
+    last = 0
+    for cdata in _CDATA_RE.finditer(xml):
+        out.append(_escape_attr_values(xml[last : cdata.start()]))
+        out.append(cdata.group(0))
+        last = cdata.end()
+    out.append(_escape_attr_values(xml[last:]))
+    return "".join(out)
+
+
+def _escape_attr_values(segment: str) -> str:
+    def fix(match: re.Match[str]) -> str:
+        value = _BARE_AMP_RE.sub("&amp;", match.group(1)).replace("<", "&lt;")
+        return f'="{value}"'
+
+    return _ATTR_VALUE_RE.sub(fix, segment)
 
 
 def _substitute(text: str, wildcards: list[str]) -> str:

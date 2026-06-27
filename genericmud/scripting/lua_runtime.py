@@ -114,7 +114,7 @@ def make_sandboxed_runtime(
 
 
 def install_pack_require(
-    lua: LuaRuntime, base_dir: str | None, builtins: dict | None = None
+    lua: LuaRuntime, base_dir: str | None, builtins: dict | None = None, fallback: object = None
 ) -> None:
     """Install a ``require()`` scoped to the pack directory (+ optional builtins).
 
@@ -127,7 +127,7 @@ def install_pack_require(
     *load* — a lib that then calls unimplemented MUSHclient APIs still fails in use.
     """
     builtins = dict(builtins or {})
-    if not base_dir and not builtins:
+    if not base_dir and not builtins and fallback is None:
         return
     index = {path.name.lower(): path for path in Path(base_dir).rglob("*.lua")} if base_dir else {}
     cache: dict[str, object] = {}
@@ -139,6 +139,11 @@ def install_pack_require(
         " local l = rawget(p, 'loaded'); if type(l) ~= 'table' then return nil end;"
         " return rawget(l, key) end"
     )
+    # Stdlib (string/table/math/os/io/...) is a raw global, not a pack file; rawget bypasses the
+    # compat layer's black-hole _G metatable so we hand back the real library, not a no-op.
+    _global_module = lua.eval(
+        "function(key) local v = rawget(_G, key); if type(v) == 'table' then return v end end"
+    )
 
     def _require(name: object = "", *_args: object) -> object:
         key = str(name)
@@ -149,11 +154,30 @@ def install_pack_require(
         target = key.replace(".", "/").rsplit("/", 1)[-1].lower() + ".lua"
         path = index.get(target)
         if path is None:
+            stdlib = _loaded_module(key) or _global_module(key)  # require "string"/"table"/...
+            if stdlib is not None:
+                cache[key] = stdlib
+                return stdlib
+            if fallback is not None:
+                # A native/external module (socket.core, luacom, ...) we can't provide: hand back
+                # a black-hole so the plugin loads and its sound path runs, that feature no-op'd.
+                cache[key] = fallback
+                return fallback
             raise FileNotFoundError(f"pack module {key!r} not found")
         cache[key] = None  # sentinel: break a require cycle before executing
         try:
             code = path.read_text(encoding="latin-1", errors="ignore")
             result = lua.eval("function(...)\n" + code + "\nend")(key)
+        except Exception:
+            # A bundled module that errors on load (e.g. luasocket's pure-Lua layer without its
+            # native core) must not kill the plugin that required it: black-hole it if we can.
+            # (Catch Exception, not a specific lupa.LuaError -- the class differs per Lua backend;
+            # the loop guard raises BaseException, which still propagates below.)
+            cache.pop(key, None)
+            if fallback is not None:
+                cache[key] = fallback
+                return fallback
+            raise
         except BaseException:
             cache.pop(key, None)  # a failed load must not stay cached as if it returned nil
             raise
