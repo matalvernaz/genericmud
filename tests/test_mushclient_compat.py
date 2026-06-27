@@ -12,6 +12,27 @@ from genericmud.scripting.api import ScriptApi
 from genericmud.scripting.mushclient_compat import MushclientPack
 from tests.helpers import RecordingSink
 
+
+def test_loads_despite_regex_attr_and_unresolvable_require(tmp_path):
+    # Two things that used to abort a real MUSHclient pack at load: a regex named group in an
+    # attribute (raw '<' -> ElementTree ParseError) and a require of a stdlib/native module with
+    # no pack file ("string" / "socket.core"). Both must now degrade, not kill the plugin.
+    world = (
+        "<muclient><script><![CDATA[\n"
+        'local _ = require "string"\n'  # stdlib: resolves to the real library
+        'require "socket.core"\n'  # native module, no pack file: black-holed, must not error
+        "function bonk() Send('ouch') end\n"
+        "]]></script>\n"
+        '<triggers><trigger match="(?P<who>\\w+) bonks you" enabled="y" regexp="y"'
+        ' script="bonk" sequence="50"/></triggers></muclient>'
+    )
+    sink = RecordingSink()
+    engine = AutomationEngine(sink)
+    pack = MushclientPack(ScriptApi(engine, source="p", base_dir=str(tmp_path)), full_stdlib=True)
+    pack.load_source(world)  # neither the raw '<' nor the unresolvable require aborts the load
+    engine.process_line(Line("Goblin bonks you"))
+    assert sink.sent == ["ouch"]  # plugin loaded and the named-group regex trigger fired
+
 INLINE = """<?xml version="1.0"?>
 <muclient>
 <triggers>
@@ -287,3 +308,27 @@ def test_real_erion_plugin_end_to_end():
     engine.process_line(Line("The cluster breaks apart."))
     sink.run_pending()
     assert "mine cluster" in sink.sent
+
+
+def test_regex_attr_and_native_require_do_not_kill_the_plugin(tmp_path):
+    # Two things that used to abort a real MUSHclient pack at load: a regex named group in an
+    # attribute (the raw "<" is illegal XML -> ParseError) and a require of a stdlib/native
+    # module with no pack file ("string"/"socket.core" -> module-not-found). Both must now
+    # degrade (sanitise the attr; resolve stdlib; black-hole the native module), not kill it.
+    world = (
+        "<muclient><script><![CDATA[\n"
+        'local s = require "string"\n'  # stdlib -> the real library
+        'require "socket.core"\n'  # native, no pack file -> black-holed, must not raise
+        'function bonk() Send("ouch") end\n'
+        "]]></script>\n"
+        "<triggers>\n"
+        ' <trigger match="(?P<who>\\w+) bonks you" enabled="y" regexp="y"\n'
+        '  script="bonk" sequence="50"/>\n'
+        "</triggers></muclient>"
+    )
+    sink = RecordingSink()
+    engine = AutomationEngine(sink)
+    pack = MushclientPack(ScriptApi(engine, source="p", base_dir=str(tmp_path)), full_stdlib=True)
+    pack.load_source(world)  # must not raise (ParseError) or abort on the requires
+    engine.process_line(Line("Goblin bonks you"))
+    assert sink.sent == ["ouch"]  # the named-group trigger registered and fired
