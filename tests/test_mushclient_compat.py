@@ -288,6 +288,47 @@ def test_get_info_anchors_on_the_world_dir_not_pack_root(tmp_path):
     assert "//" not in played  # the doubled-slash join was collapsed
 
 
+def test_sppath_defaults_to_pack_dir_for_the_sounds_fallback(tmp_path):
+    # The fix for the Erion installer case (loaded with @sppath=''): default @sppath to the pack
+    # dir so _find_in_sounds_dir has somewhere to walk, mirroring the VIPMud default.
+    engine = AutomationEngine(RecordingSink())
+    MushclientPack(ScriptApi(engine, source="m", base_dir=str(tmp_path)))
+    assert engine.get_var("sppath") == str(tmp_path)
+
+
+def test_world_sounds_dir_is_not_clobbered_by_the_sppath_default(tmp_path):
+    # The session sets @sppath from world.sounds before packs load; the pack must preserve it.
+    engine = AutomationEngine(RecordingSink())
+    engine.set_var("sppath", "/my/sounds")
+    MushclientPack(ScriptApi(engine, source="m", base_dir=str(tmp_path)))
+    assert engine.get_var("sppath") == "/my/sounds"
+
+
+def test_sppath_fallback_finds_a_sound_the_world_anchored_path_misses(tmp_path):
+    # Erion's real failure: cues build GetInfo(67).."sounds/.." (beside the world), but the file
+    # lives in a SEPARATE sounds tree under the pack. With @sppath defaulted to the pack dir, the
+    # basename fallback (_find_in_sounds_dir) locates it where the world-anchored path missed.
+    worlds = tmp_path / "MUSHclient" / "worlds"
+    worlds.mkdir(parents=True)
+    (worlds / "w.MCL").write_text(
+        "<muclient><triggers>"
+        '<trigger match="boom" enabled="y" send_to="12">'
+        '<send>Sound(GetInfo(67).."sounds/boom.wav")</send></trigger>'
+        "</triggers></muclient>",
+        encoding="latin-1",
+    )
+    real_sound = tmp_path / "MUSHclient" / "sounds" / "boom.wav"  # a separate tree, not beside the world
+    real_sound.parent.mkdir(parents=True)
+    real_sound.write_bytes(b"RIFF")
+    sink = RecordingSink()
+    engine = AutomationEngine(sink)
+    pack = MushclientPack(ScriptApi(engine, source="m", base_dir=str(tmp_path)))
+    pack.load_file(str(worlds / "w.MCL"))
+    engine.process_line(Line("boom"))
+    assert sink.played, "no sound played"
+    assert sink.played[0]["file"] == str(real_sound)
+
+
 @pytest.mark.skipif(not os.path.exists(ERION), reason="erion plugin not present")
 def test_real_erion_plugin_end_to_end():
     sink = RecordingSink()

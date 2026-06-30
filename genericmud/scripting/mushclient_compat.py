@@ -45,6 +45,12 @@ class MushclientPack:
     def __init__(self, api: ScriptApi, *, full_stdlib: bool = False) -> None:
         self._api = api
         self._base_dir = api.base_dir
+        # Default @sppath to the pack dir when the session didn't pre-set it from world.sounds, so
+        # _find_in_sounds_dir can locate bundled audio by basename when the pack's own
+        # GetInfo()-anchored paths miss (e.g. Erion's split sounds/ + worlds/sounds/ layout). Mirrors
+        # the VIPMud default; the guard keeps a session-set world.sounds path from being clobbered.
+        if self._base_dir and not api.get_var("sppath"):
+            api.set_var("sppath", self._base_dir)
         self._world_dir: str | None = None  # dir of the loaded world file; anchors GetInfo() paths
         self._exposed: dict[str, dict] = {}  # ppi: plugin id -> {exposed name -> Lua fn}
         self._current_plugin = "world"  # whose script is loading now (for ppi.Expose)
