@@ -24,6 +24,27 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _recover_pending_upgrade():
+    """Verify a pending in-app upgrade and roll it back if the swap only partly landed.
+
+    Runs before the native UI (wxPython/pygame) is imported: a half-overlaid install could
+    otherwise crash on a mismatched extension load. Frozen Windows build only, and never
+    raises -- a recovery fault must not stop the app from starting.
+    """
+    import sys
+
+    if not getattr(sys, "frozen", False):
+        return None
+    try:
+        from pathlib import Path
+
+        from genericmud.update.upgrade_manager import recover_pending_upgrade
+
+        return recover_pending_upgrade(Path(sys.executable).resolve().parent)
+    except Exception:  # noqa: BLE001 - recovery is best-effort; never block startup
+        return None
+
+
 def main(argv: list[str] | None = None) -> None:
     from genericmud.session.crashlog import install_crash_handlers
 
@@ -31,9 +52,13 @@ def main(argv: list[str] | None = None) -> None:
     args = _parse_args(argv)
     if args.web:
         from genericmud.web_launcher import run
+
+        run(args)
     else:
+        recovery = _recover_pending_upgrade()  # before importing wx: roll back a bad swap first
         from genericmud.ui.wx_app import run
-    run(args)
+
+        run(args, recovery=recovery)
 
 
 if __name__ == "__main__":

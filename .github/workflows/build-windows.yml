@@ -21,9 +21,36 @@ jobs:
         run: pip install ".[gui,voice,audio,package,dev]"
       - name: Test
         run: python -m pytest -q
+
+      # Build ZipExtractor.exe from ravibpatel/AutoUpdater.NET (MIT) -- the self-update
+      # helper (the same one Libation uses): it waits on our PID, overlays the update zip on
+      # the install, uses Windows Restart Manager to diagnose locked files, and relaunches us.
+      # The upstream csproj targets net45, whose targeting pack isn't on the runner; retarget
+      # to net48 (present on Win10 1803+). VS MSBuild, not `dotnet build`: the .NET SDK's
+      # resource pipeline errors on net48 WinForms .resx with non-string resources.
+      - uses: microsoft/setup-msbuild@v3
+      - name: Build ZipExtractor.exe
+        shell: pwsh
+        run: |
+          $tag = 'v1.9.2'
+          git clone --depth 1 --branch $tag https://github.com/ravibpatel/AutoUpdater.NET.git zipextractor_src
+          $csproj = 'zipextractor_src/ZipExtractor/ZipExtractor.csproj'
+          $text = Get-Content $csproj -Raw
+          $text = $text.Replace('<TargetFramework>net45</TargetFramework>', '<TargetFramework>net48</TargetFramework>')
+          $text = $text.Replace("'net45'", "'net48'")
+          Set-Content $csproj $text
+          msbuild $csproj /restore /p:Configuration=Release /p:SignAssembly=false /v:minimal
+          New-Item -ItemType Directory -Force -Path zipextractor_bin | Out-Null
+          Copy-Item zipextractor_src/AutoUpdater.NET/Resources/ZipExtractor.exe zipextractor_bin/
+          Get-ChildItem zipextractor_bin/
+
+      # --copy-metadata genericmud bundles the dist-info so importlib.metadata.version()
+      # resolves in the frozen build -- the self-updater needs the real installed version to
+      # compare against releases (and it fixes the diagnostic banner's "version=unknown").
       - name: Build
         run: >
           pyinstaller --onedir --name genericMud --console
+          --copy-metadata genericmud
           --add-data "frontend;frontend"
           --add-data "genericmud/config/keymaps;genericmud/config/keymaps"
           --collect-all webview
@@ -32,6 +59,11 @@ jobs:
           --collect-all lupa --hidden-import websockets
           --hidden-import win32com.client --hidden-import pythoncom
           run_genericmud.py
+      # Drop the helper beside genericMud.exe so self_update.py can copy it to %TEMP% and
+      # spawn it. Must land before Zip so it's inside the release archive the updater fetches.
+      - name: Bundle ZipExtractor.exe
+        shell: pwsh
+        run: Copy-Item zipextractor_bin/ZipExtractor.exe dist/genericMud/
       - name: Zip
         shell: pwsh
         run: Compress-Archive -Path dist/genericMud -DestinationPath dist/genericMud-windows.zip

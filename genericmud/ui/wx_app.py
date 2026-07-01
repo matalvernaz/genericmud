@@ -33,6 +33,7 @@ from genericmud.app import EngineApp
 from genericmud.automation.engine import AutomationEngine
 from genericmud.bridge import protocol
 from genericmud.config.keymap import load_keymap
+from genericmud.config.update_prefs import is_snoozed, load_prefs, save_prefs, snooze_timestamp
 from genericmud.config.worlds import World, config_dir, load_worlds, save_worlds
 from genericmud.packs import (
     PackError,
@@ -54,6 +55,7 @@ from genericmud.session.diaglog import DiagnosticLog, make_diagnostic_log
 from genericmud.session.hub import SessionHub
 from genericmud.sound.pygame_backend import make_pygame_backend
 from genericmud.transport.connection import MudConnection
+from genericmud.update import self_update
 from genericmud.voice.factory import make_voice_backend
 from genericmud.voice.router import VoiceRouter
 
@@ -843,6 +845,58 @@ class VaultBrowserDialog(wx.Dialog):
             webbrowser.open(f"{vault.BASE_URL}/pack.php?id={pack.id}")
 
 
+# ShowModal return values for UpdateNotificationDialog (distinct from wx.ID_OK/CANCEL so the
+# caller can tell the buttons apart). wx.ID_HIGHEST is the top of wx's own reserved range.
+_ID_UPDATE_NOW = wx.ID_HIGHEST + 101
+_ID_RELEASE_PAGE = wx.ID_HIGHEST + 102
+_ID_SNOOZE = wx.ID_HIGHEST + 103
+_ID_SKIP = wx.ID_HIGHEST + 104
+
+
+class UpdateNotificationDialog(wx.Dialog):
+    """Announce a newer genericMud and offer what to do about it.
+
+    Follows ConnectDialog's accessibility pattern: a StaticText precedes each control and
+    every control gets SetName so NVDA reads it. Release notes sit in a focusable read-only
+    text box the user can review line by line. ShowModal returns one of the module ``_ID_*``
+    actions, or wx.ID_CANCEL if the dialog is closed. "Update Now" only appears on a build
+    that can self-replace; elsewhere the release page is the only install route.
+    """
+
+    def __init__(self, parent: wx.Window, info: dict, current: str) -> None:
+        super().__init__(parent, title="genericMud update available")
+        heading = f"genericMud {info['tag']} is available. You have {current}."
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        sizer.Add(wx.StaticText(self, label=heading), 0, wx.ALL, 8)
+
+        sizer.Add(wx.StaticText(self, label="Release &notes:"), 0, wx.LEFT, 8)
+        notes = wx.TextCtrl(
+            self, value=info.get("notes") or "(no release notes)",
+            style=wx.TE_MULTILINE | wx.TE_READONLY, size=(460, 180),
+        )
+        notes.SetName("Release notes")
+        sizer.Add(notes, 1, wx.EXPAND | wx.ALL, 8)
+
+        buttons = wx.BoxSizer(wx.HORIZONTAL)
+        default_button = None
+        if self_update.can_self_replace():
+            default_button = self._button(buttons, "&Update Now", _ID_UPDATE_NOW)
+        page_button = self._button(buttons, "Open Release &Page", _ID_RELEASE_PAGE)
+        self._button(buttons, "&Remind Me Later", _ID_SNOOZE)
+        self._button(buttons, "&Skip This Version", _ID_SKIP)
+        buttons.Add(wx.Button(self, wx.ID_CANCEL, "&Close"), 0)
+        sizer.Add(buttons, 0, wx.ALL, 8)
+
+        (default_button or page_button).SetDefault()
+        self.SetSizerAndFit(sizer)
+
+    def _button(self, sizer: wx.BoxSizer, label: str, action_id: int) -> wx.Button:
+        button = wx.Button(self, action_id, label)
+        button.Bind(wx.EVT_BUTTON, lambda _event, a=action_id: self.EndModal(a))
+        sizer.Add(button, 0, wx.RIGHT, 4)
+        return button
+
+
 class GenericMudFrame(wx.Frame):
     def __init__(self, loop: asyncio.AbstractEventLoop, keymap: dict):
         super().__init__(None, title="genericMud", size=(900, 600))
@@ -862,6 +916,7 @@ class GenericMudFrame(wx.Frame):
         packs_item = file_menu.Append(wx.ID_ANY, "&Manage Soundpacks...\tCtrl+P")
         setup_item = file_menu.Append(wx.ID_ANY, "Set &Up a Soundpack...")
         browse_item = file_menu.Append(wx.ID_ANY, "&Browse Soundpacks Online...")
+        updates_item = file_menu.Append(wx.ID_ANY, "Check for &Updates...")
         file_menu.AppendSeparator()
         quit_item = file_menu.Append(wx.ID_EXIT, "E&xit\tCtrl+Q")
         menubar.Append(file_menu, "&File")
@@ -879,12 +934,16 @@ class GenericMudFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, self._on_manage_packs, packs_item)
         self.Bind(wx.EVT_MENU, self._on_setup_pack, setup_item)
         self.Bind(wx.EVT_MENU, self._on_browse_online, browse_item)
+        self.Bind(wx.EVT_MENU, lambda _e: self.check_for_updates(manual=True), updates_item)
         self.Bind(wx.EVT_MENU, lambda _e: self.Close(), quit_item)
         self.Bind(wx.EVT_MENU, self._on_toggle_self_voice, self._self_voice_item)
 
         self.book = wx.Simplebook(self)  # no tab strip -> nothing in the keyboard Tab order
         self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)  # Ctrl+Tab cycles sessions
         self.Bind(wx.EVT_CLOSE, self._on_frame_close)  # confirm + disconnect before exit
+
+        self._update_progress_dialog: wx.ProgressDialog | None = None
+        self._update_cancelled = threading.Event()
 
     def _on_char_hook(self, event: wx.KeyEvent) -> None:
         # Grab Ctrl+Tab before the focused control sees it; let everything else
@@ -978,6 +1037,115 @@ class GenericMudFrame(wx.Frame):
     def announce(self, text: str) -> None:
         """Speak a UI status update through the screen reader (the app's self-voice)."""
         self._announcer.speak(text)
+
+    # --- self-update ---
+
+    def check_for_updates(self, *, manual: bool) -> None:
+        """Kick off a background release check.
+
+        A manual check (menu) reports "up to date" or an error; the automatic startup check
+        stays silent unless there is a release to offer, so it never interrupts a launch.
+        """
+        if manual:
+            self.announce("Checking for updates.")
+        _run_async(
+            self_update.check_for_update,
+            lambda outcome: self._on_update_checked(outcome, manual=manual),
+        )
+
+    def _on_update_checked(self, outcome, *, manual: bool) -> None:
+        if isinstance(outcome, Exception):
+            if manual:
+                wx.MessageBox(
+                    f"Couldn't check for updates: {outcome}", "Check for Updates",
+                    wx.OK | wx.ICON_ERROR,
+                )
+            return
+        if outcome is None:
+            if manual:
+                self.announce("genericMud is up to date.")
+                wx.MessageBox(
+                    "genericMud is up to date.", "Check for Updates", wx.OK | wx.ICON_INFORMATION
+                )
+            return
+        prefs = load_prefs()
+        if not manual and (outcome["tag"] == prefs.skipped_version or is_snoozed(prefs)):
+            return  # user asked not to be reminded about this release yet
+        self._offer_update(outcome)
+
+    def _offer_update(self, info: dict) -> None:
+        current = self_update.current_version() or "an earlier version"
+        dialog = UpdateNotificationDialog(self, info, current)
+        action = dialog.ShowModal()
+        dialog.Destroy()
+        if action == _ID_UPDATE_NOW:
+            self._perform_update(info)
+        elif action == _ID_RELEASE_PAGE:
+            if info.get("release_url"):
+                webbrowser.open(info["release_url"])
+        elif action == _ID_SNOOZE:
+            prefs = load_prefs()
+            prefs.snoozed_until = snooze_timestamp()
+            save_prefs(prefs)
+        elif action == _ID_SKIP:
+            prefs = load_prefs()
+            prefs.skipped_version = info["tag"]
+            save_prefs(prefs)
+
+    def _perform_update(self, info: dict) -> None:
+        self._update_cancelled = threading.Event()
+        self._update_progress_dialog = wx.ProgressDialog(
+            "Updating genericMud", "Downloading the update…", maximum=100, parent=self,
+            style=wx.PD_APP_MODAL | wx.PD_AUTO_HIDE | wx.PD_CAN_ABORT,
+        )
+        self.announce(f"Downloading genericMud {info['tag']}.")
+
+        def work():
+            return self_update.download_and_replace(info, progress_cb=self._on_update_progress)
+
+        _run_async(work, self._on_update_finished)
+
+    def _on_update_progress(self, done: int, total: int) -> None:  # background thread
+        # Raising here aborts the download; download_and_replace cleans up and re-raises, so
+        # _on_update_finished sees the cancellation. The Cancel button is read on the main
+        # thread in _pump_update_progress, which sets the flag this checks.
+        if self._update_cancelled.is_set():
+            raise RuntimeError("Update cancelled by user.")
+        pct = min(int(done * 100 / total), 100) if total else 0
+        wx.CallAfter(self._pump_update_progress, pct)
+
+    def _pump_update_progress(self, pct: int) -> None:  # main thread
+        dialog = self._update_progress_dialog
+        if dialog is None:
+            return
+        kept, _ = dialog.Update(pct)
+        if not kept:  # user pressed Cancel
+            self._update_cancelled.set()
+
+    def _on_update_finished(self, outcome) -> None:
+        if self._update_progress_dialog is not None:
+            self._update_progress_dialog.Destroy()
+            self._update_progress_dialog = None
+        if isinstance(outcome, Exception):
+            if self._update_cancelled.is_set():
+                self.announce("Update cancelled.")
+            else:
+                wx.MessageBox(f"Update failed: {outcome}", "Update", wx.OK | wx.ICON_ERROR)
+            return
+        # Success: the helper is blocked on our PID; it overlays the files and relaunches us
+        # once we exit.
+        self.announce("Update downloaded. genericMud will restart to finish installing.")
+        wx.CallAfter(self._quit_for_update)
+
+    def _quit_for_update(self) -> None:
+        for i in range(self.book.GetPageCount()):
+            self.book.GetPage(i).close()  # graceful teardown before we exit for the swap
+        self.Destroy()  # ends MainLoop -> process exits -> the helper swaps and relaunches
+
+    def show_recovery(self, recovery) -> None:
+        """Tell the user a failed update was rolled back (called once at startup)."""
+        self.announce(recovery.title)
+        wx.MessageBox(recovery.message, recovery.title, wx.OK | wx.ICON_WARNING)
 
     def _on_setup_pack(self, _event: wx.CommandEvent) -> None:
         """Wizard: pick an extracted pack folder, derive its world, confirm, connect."""
@@ -1076,7 +1244,7 @@ class GenericMudFrame(wx.Frame):
             self.book.GetPage(i).set_active(i == selected and self._self_voice)
 
 
-def run(args) -> None:
+def run(args, recovery=None) -> None:
     loop = asyncio.new_event_loop()
     install_loop_exception_handler(loop)  # capture engine-thread coroutine crashes
     threading.Thread(target=_run_loop, args=(loop,), daemon=True).start()
@@ -1088,6 +1256,11 @@ def run(args) -> None:
         frame.open_session(
             World(name=args.host, host=args.host, port=args.port, tls=args.tls)
         )
+    if recovery is not None:  # a prior in-app update was rolled back at startup; tell the user
+        wx.CallAfter(frame.show_recovery, recovery)
+    prefs = load_prefs()
+    if self_update.is_frozen() and prefs.check_enabled and not is_snoozed(prefs):
+        frame.check_for_updates(manual=False)
     wx_app.MainLoop()
     loop.call_soon_threadsafe(loop.stop)
 
