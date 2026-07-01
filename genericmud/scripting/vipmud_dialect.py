@@ -36,6 +36,7 @@ from pathlib import Path
 
 from genericmud.automation.engine import MatchContext
 from genericmud.model.buffer import Line
+from genericmud.safepath import confine
 from genericmud.scripting.api import ScriptApi
 
 _DEFINITIONS = {"TRIGGER", "TR", "GTRIGGER", "ALIAS", "KEY"}
@@ -361,7 +362,10 @@ class VipMudPack:
                 return resolved
         if must_exist:
             return None
-        return candidate if real is None else real
+        # Creating a new file (a settings file #Write will flush): confine it strictly to the
+        # pack dir. Refuse an absolute/UNC/.. reference or anything resolving outside the pack,
+        # so #file/#write can't create or overwrite a file elsewhere on disk.
+        return confine(base, reference)
 
     def _load_file(self, reference: str) -> None:
         """``#LOAD {file}`` — load another ``.set`` from the pack so a loader script

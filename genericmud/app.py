@@ -218,7 +218,7 @@ class EngineApp:
     def on_connect(self, world: str) -> ActivationResult | None:
         """The on-connect sequence: register with the hub, activate packs, arm login."""
         if self.hub is not None and self.name:
-            self.hub.register(self.name, self._dispatch_command)
+            self.hub.register(self.name, self._dispatch_remote)
         result = self.activate_packs(world)
         self.begin_login(world)
         return result
@@ -405,16 +405,25 @@ class EngineApp:
             return [text]
         return [part for part in text.split(separator) if part != ""]
 
-    def _dispatch_command(self, text: str) -> None:
+    def _dispatch_command(self, text: str, *, allow_client: bool = True) -> None:
         if text.strip():
             self._log(f"> {text}")
-        if self._client_command(text):
+        if allow_client and self._client_command(text):
             return
         if self._safe_speedwalk(text) or self._speedwalk(text):
             return
         for line in self.engine.process_input(text):
             self._send(line)
             self.nav.record(line)  # build the breadcrumb trail from manual walking
+
+    def _dispatch_remote(self, text: str) -> None:
+        """Deliver a command sent from ANOTHER session (mud.send_to / mud.broadcast).
+
+        Cross-session text must NOT run this session's client commands (/alias, /trigger, ...):
+        a pack loaded for one world could otherwise reprogram the user's other sessions. It's
+        treated as game input (aliases still expand); a leading '/' goes to the MUD literally.
+        """
+        self._dispatch_command(text, allow_client=False)
 
     def _safe_speedwalk(self, text: str) -> bool:
         """Walk a "..3n2e" run step-by-step, halting if blocked; False if not one."""

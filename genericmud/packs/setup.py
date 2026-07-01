@@ -24,6 +24,12 @@ from genericmud.packs.world_import import world_from_pack
 _ENTRY_PREFERENCE = ("main.set", "main.lua", "main.xml", "start.set", "startup.set", "load.set")
 _MIN_NAMED_STEM = 4  # only match a script "named after the pack" if the stem is this long
 
+# Dialects where "trusted" grants full-stdlib code execution (os/io) on connect. Setting a pack
+# up -- especially a one-click vault download -- is a weak vouch, so these are NOT auto-trusted:
+# the user must consciously enable them in the Pack Manager. Sandboxed dialects (native Lua,
+# VIPMud .set) are safe to auto-trust; there "trusted" only means auto-run, I/O stays confined.
+_CODE_EXEC_DIALECTS = frozenset({"mushclient"})
+
 
 def _normalize_name(text: str) -> str:
     """Lowercase, strip non-alphanumerics: 'star conquest' == 'Star Conquest' == 'StarConquest'."""
@@ -145,7 +151,10 @@ def setup_pack(
             world.sounds = sounds
         store.enable(manifest.id, world.name)
         enabled_for = world.name
-    if trust:
+    # Auto-trust the vouch -- but never a code-executing dialect (MUSHclient runs the full Lua
+    # stdlib when trusted). A one-click vault download is too weak a vouch to grant os/io on
+    # connect, so such packs install enabled-but-untrusted; the user trusts them deliberately.
+    if trust and manifest.dialect not in _CODE_EXEC_DIALECTS:
         store.trust(manifest.id)
     return SetupResult(manifest=manifest, world=world, enabled_for=enabled_for)
 
