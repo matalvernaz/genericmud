@@ -22,6 +22,12 @@ MSDP_TABLE_CLOSE = 4
 MSDP_ARRAY_OPEN = 5
 MSDP_ARRAY_CLOSE = 6
 
+# Tables and arrays nest via mutual recursion. A hostile server can send thousands of nested
+# MSDP_TABLE_OPEN bytes; without a bound that is a RecursionError on the read-loop thread. Real
+# MSDP is a shallow gauge/room structure, so cap the depth and stop recursing past it (the
+# remaining bytes are still consumed iteratively -- best-effort data, never a crash).
+_MAX_DEPTH = 32
+
 _CONTROL = bytes(
     [MSDP_VAR, MSDP_VAL, MSDP_TABLE_OPEN, MSDP_TABLE_CLOSE, MSDP_ARRAY_OPEN, MSDP_ARRAY_CLOSE]
 )
@@ -29,6 +35,10 @@ _CONTROL = bytes(
 
 def parse_msdp(payload: bytes) -> dict[str, Any]:
     return _MsdpParser(payload).parse_table_body(top=True)
+
+
+def _too_deep(depth: int) -> bool:
+    return depth >= _MAX_DEPTH
 
 
 class _MsdpParser:
@@ -40,7 +50,7 @@ class _MsdpParser:
     def _peek(self) -> int | None:
         return self._data[self._i] if self._i < self._n else None
 
-    def parse_table_body(self, top: bool = False) -> dict[str, Any]:
+    def parse_table_body(self, top: bool = False, depth: int = 0) -> dict[str, Any]:
         out: dict[str, Any] = {}
         while self._i < self._n:
             b = self._data[self._i]
@@ -53,7 +63,7 @@ class _MsdpParser:
                 name = self._read_string()
                 if self._peek() == MSDP_VAL:
                     self._i += 1
-                    out[name] = self._read_value()
+                    out[name] = self._read_value(depth)
             else:
                 self._i += 1  # skip stray control byte
         return out
@@ -64,17 +74,21 @@ class _MsdpParser:
             self._i += 1
         return self._data[start : self._i].decode("utf-8", "replace")
 
-    def _read_value(self) -> Any:
+    def _read_value(self, depth: int) -> Any:
         b = self._peek()
         if b == MSDP_TABLE_OPEN:
             self._i += 1
-            return self.parse_table_body()
+            if _too_deep(depth):
+                return ""  # too deep: stop recursing; the bytes are still consumed iteratively
+            return self.parse_table_body(depth=depth + 1)
         if b == MSDP_ARRAY_OPEN:
             self._i += 1
-            return self._read_array()
+            if _too_deep(depth):
+                return ""
+            return self._read_array(depth + 1)
         return self._read_string()
 
-    def _read_array(self) -> list[Any]:
+    def _read_array(self, depth: int) -> list[Any]:
         arr: list[Any] = []
         while self._i < self._n:
             b = self._data[self._i]
@@ -83,7 +97,7 @@ class _MsdpParser:
                 return arr
             if b == MSDP_VAL:
                 self._i += 1
-                arr.append(self._read_value())
+                arr.append(self._read_value(depth))
             else:
                 self._i += 1
         return arr

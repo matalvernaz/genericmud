@@ -89,6 +89,15 @@ _S_SB_OPT = 3  # after IAC SB, awaiting option
 _S_SB_DATA = 4  # collecting subnegotiation payload
 _S_SB_IAC = 5  # saw IAC inside subnegotiation payload
 
+# A real GMCP/MSDP/MSSP payload is at most a few KB. A server that opens IAC SB and then streams
+# bytes forever without IAC SE would otherwise grow _sb_buffer unbounded across reads, so cap it
+# and fail closed (the transport closes the connection) rather than exhaust memory.
+_MAX_SUBNEGOTIATION = 1 << 20  # 1 MiB
+
+
+class TelnetProtocolError(Exception):
+    """The telnet stream can't be parsed safely (e.g. a subnegotiation with no IAC SE)."""
+
 
 @dataclass
 class TelnetParser:
@@ -151,7 +160,7 @@ class TelnetParser:
                 if b == IAC:
                     self._state = _S_SB_IAC
                 else:
-                    self._sb_buffer.append(b)
+                    self._sb_append(b)
 
             elif state == _S_SB_IAC:
                 if b == SE:
@@ -169,18 +178,23 @@ class TelnetParser:
                         n = len(data)
                         continue
                 elif b == IAC:
-                    self._sb_buffer.append(IAC)  # escaped 0xFF inside payload
+                    self._sb_append(IAC)  # escaped 0xFF inside payload
                     self._state = _S_SB_DATA
                 else:
                     # Malformed (IAC X, X != SE/IAC) inside SB: be lenient, keep both.
-                    self._sb_buffer.append(IAC)
-                    self._sb_buffer.append(b)
+                    self._sb_append(IAC, b)
                     self._state = _S_SB_DATA
 
             i += 1
 
         self._flush_text(events)
         return events
+
+    def _sb_append(self, *payload: int) -> None:
+        """Append payload byte(s) to the current subnegotiation, capped against a no-SE flood."""
+        if len(self._sb_buffer) + len(payload) > _MAX_SUBNEGOTIATION:
+            raise TelnetProtocolError("subnegotiation exceeded the maximum length without IAC SE")
+        self._sb_buffer.extend(payload)
 
     def _flush_text(self, events: list[Event]) -> None:
         if self._text:
