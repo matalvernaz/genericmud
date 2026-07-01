@@ -27,6 +27,7 @@ from genericmud.protocol.msp import parse_msp_line
 from genericmud.protocol.oob import OobMessage, ServerStatus, from_subnegotiation
 from genericmud.render.ansi import parse_ansi
 from genericmud.review.cursor import ReviewCursor
+from genericmud.safepath import is_unsafe
 from genericmud.session.credentials import CredentialStore
 from genericmud.session.hub import SessionHub
 from genericmud.session.log import SessionLogger
@@ -299,6 +300,14 @@ class EngineApp:
     def _emit_line(self, text: str) -> None:
         text, cues = parse_msp_line(text)  # strip MSP markers before colour parsing
         for cue in cues:
+            # MSP filenames come straight from the untrusted server. Block the dangerous shapes
+            # (absolute / UNC / drive / ..) so a hostile MUD can't open an arbitrary file -- a
+            # Windows UNC path leaks the NTLM hash on open, before decode even fails. A safe
+            # relative name passes through to the backend as before.
+            if is_unsafe(cue.file):
+                if self._diag is not None:
+                    self._diag.event("msp.cue", kind=cue.kind, file=cue.file, blocked=True)
+                continue
             if self._diag is not None:
                 self._diag.event("msp.cue", kind=cue.kind, file=cue.file, volume=cue.volume)
             if cue.kind == "music":

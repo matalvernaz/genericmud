@@ -125,6 +125,18 @@ def test_msp_line_emits_sound_and_strips_tag():
     assert any("A thud" in s and "!!SOUND" not in s for s in backend.spoken)
 
 
+def test_msp_blocks_unsafe_sound_paths():
+    app, _backend, _sent, posted = _app()
+    # A hostile MUD sends absolute / UNC / traversal sound paths; none may be played.
+    app.on_telnet_event(DataReceived(rb"a !!SOUND(\\attacker\share\x.wav)" + b"\r\n"))
+    app.on_telnet_event(DataReceived(b"b !!SOUND(/etc/evil.wav)\r\n"))
+    app.on_telnet_event(DataReceived(rb"c !!SOUND(../../secret.wav)" + b"\r\n"))
+    assert [m for m in posted if m["type"] == "sound"] == []
+    # a safe relative cue still plays
+    app.on_telnet_event(DataReceived(b"d !!SOUND(hit.wav)\r\n"))
+    assert any(m["type"] == "sound" and m["file"] == "hit.wav" for m in posted)
+
+
 def test_ansi_stripped_from_output():
     app, backend, _sent, posted = _app()
     app.on_telnet_event(DataReceived(b"\x1b[1;32mGreen room\x1b[0m\r\n"))

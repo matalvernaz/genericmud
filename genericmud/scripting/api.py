@@ -15,6 +15,7 @@ from collections.abc import Callable
 
 from genericmud.automation.channels import ChannelPolicy
 from genericmud.automation.engine import AutomationEngine, Callback
+from genericmud.safepath import is_absolute, is_traversal, is_unc, within
 
 
 class ScriptApi:
@@ -142,14 +143,11 @@ class ScriptApi:
 
     def _resolve(self, file: str) -> str:
         original = file
-        if self._base_dir and not os.path.isabs(file):
-            file = os.path.join(self._base_dir, file)
-        # Collapse the doubled slash MUSHclient packs build from GetInfo() (a trailing slash
-        # plus a plugin's leading one). NOT os.path.normpath -- on Windows it flips / to \,
-        # mangling the forward-slash paths packs use (and breaking exact-path tests).
-        resolved = re.sub(r"/{2,}", "/", file) if file else file
+        resolved = self._confine_media(file)
         exists = bool(resolved) and os.path.exists(resolved)
-        fallback = self._find_in_sounds_dir(resolved) if resolved and not exists else None
+        # The @sppath basename lookup only ever returns files walked under the Sounds folder, so
+        # it's a safe fallback for both a missing file and a rejected (unsafe/escaping) path.
+        fallback = self._find_in_sounds_dir(original) if not exists else None
         final = fallback if fallback is not None else resolved
         if self._engine.diag is not None:
             self._engine.diag.event(
@@ -159,6 +157,35 @@ class ScriptApi:
                 sppath=self._engine.get_var("sppath") or "",
             )
         return final
+
+    def _confine_media(self, file: str) -> str:
+        """Confine a pack/dialect sound path to the pack dir or @sppath; "" if it escapes.
+
+        This is the only filesystem reach the sandboxed dialects (native Lua, VIPMud .set) have
+        through the sound API, so it must hold (a Windows UNC path also leaks the NTLM hash on
+        open). UNC, ``..`` and NUL are always refused. The dialects pre-resolve against
+        @sppath/the pack dir and hand us an ABSOLUTE path, which is allowed only when it lands
+        inside an allowed root -- so ``\\\\attacker\\share``, ``C:\\Windows``, ``/etc/...`` are
+        rejected. A relative path is joined under the pack dir and confined.
+        """
+        if not file or "\x00" in file or is_unc(file) or is_traversal(file):
+            return ""
+        # Build the path exactly as before: join a relative name under the pack dir, then collapse
+        # the doubled slash MUSHclient makes from GetInfo() (a trailing slash plus a plugin's
+        # leading one). NOT os.path.normpath -- on Windows it flips / to \, mangling the
+        # forward-slash paths packs use (and breaking exact-path tests).
+        if self._base_dir and not is_absolute(file):
+            file = os.path.join(self._base_dir, file)
+        resolved = re.sub(r"/{2,}", "/", file)
+        # The dialects pre-resolve against @sppath / the pack dir and hand us an absolute path;
+        # allow it only when it lands inside an allowed root, so \\attacker\share, C:\Windows and
+        # /etc/... are rejected. A bare relative name (no pack dir) can't escape (.. already
+        # refused above), so it passes through to the backend as before.
+        if is_absolute(resolved):
+            roots = [root for root in (self._base_dir, self._engine.get_var("sppath")) if root]
+            if not any(within(root, resolved) for root in roots):
+                return ""
+        return resolved
 
     def _find_in_sounds_dir(self, path: str) -> str | None:
         """Locate a missing sound by basename under the user's Sounds folder (``@sppath``).
