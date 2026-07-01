@@ -23,7 +23,6 @@ from genericmud.protocol.telnet import (
 )
 from genericmud.transport.mccp import MCCPError, MCCPState
 
-
 # --- MCCP decompression bomb (#5) ---
 
 
