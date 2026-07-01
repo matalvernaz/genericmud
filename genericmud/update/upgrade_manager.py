@@ -8,17 +8,18 @@ libraries -- which then crashes or misbehaves in ways that are hard to diagnose.
 download path can verify the *bytes it downloaded*, but nothing verifies the *result of
 the extraction*.
 
-This closes that gap. Immediately before the overlay we snapshot the critical install
-files and record the SHA-256 each one *should* have afterwards (read straight out of the
-upgrade zip). At the next startup -- before the UI's native extensions load -- we
-re-hash those files on disk; if any critical file was not actually replaced we restore
-the snapshot and surface a recovery message instead of running a broken install.
+This closes that gap. Immediately before the overlay we diff the upgrade zip against the
+current install and, for every file whose content will CHANGE, record the SHA-256 it should
+have afterwards and back up its current version. At the next startup -- before the UI's
+native extensions load -- we re-hash those files on disk; if any was not actually replaced
+we restore the backup and surface a recovery message instead of running a broken install.
 
-"Critical files" is a small named subset (the exe, the helper, the Python runtime DLL,
-``base_library.zip``), not the whole ``_internal`` tree. A partial overlay almost always
-leaves the running exe or a core runtime file stale -- those are the ones most likely to
-be locked -- so verifying the subset catches the failure without hashing hundreds of
-files on every launch.
+The verified set is exactly the files the overlay must touch (not a hard-coded handful of
+exe/DLL names), so a partial swap of ANY file is caught, while files that don't change are
+skipped -- nothing to hash, nothing to back up. Verification only runs when a pending
+marker exists (the first launch after an update), so the extra hashing is a one-off cost.
+Rollback is best-effort: a file that can't be restored keeps the marker so the next launch
+retries, rather than clearing it and booting a half-restored install.
 
 Everything here is pure ``pathlib``/``hashlib``/``zipfile``/``json`` -- no Windows API
 and no new dependency -- so it runs and is tested on any platform even though the swap it
@@ -44,13 +45,6 @@ logger = logging.getLogger(__name__)
 STATE_DIR_NAME = ".genericmud-upgrade"
 PENDING_FILE_NAME = "pending.json"
 BACKUP_DIR_NAME = "backup"
-
-# The main executable's name is passed in per-call (the caller knows it); these are the
-# extra install files whose replacement proves the overlay landed, checked when present.
-_HELPER_EXE = "ZipExtractor.exe"
-_INTERNAL_DIR = "_internal"
-_INTERNAL_CORE = "base_library.zip"  # PyInstaller's stdlib bundle -- always present
-_PYTHON_DLL_GLOB = "python3*.dll"  # the interpreter itself, e.g. python313.dll
 
 _HASH_CHUNK = 1 << 20  # 1 MiB: stream large files instead of loading them whole
 
@@ -81,34 +75,44 @@ def _backup_dir(install_dir: Path) -> Path:
     return _state_dir(install_dir) / BACKUP_DIR_NAME
 
 
-def critical_files(install_dir: Path, exe_name: str) -> list[str]:
-    """Relative POSIX paths whose post-overlay content proves the swap succeeded.
+def files_to_verify(install_dir: Path, upgrade_zip: Path) -> dict[str, str]:
+    """Map each upgrade-zip member that must CHANGE on disk to its expected SHA-256.
 
-    The set is the main exe, the update helper, and the two load-bearing runtime files
-    under ``_internal`` -- discovered from what is actually on disk so the check adapts to
-    the PyInstaller layout without a hard-coded interpreter version.
+    A member is included when its content differs from the current install (or is missing on
+    disk) -- i.e. exactly the files the overlay has to replace. That is the precise set a partial
+    swap could leave stale, so verifying it catches a broken overlay of ANY file (not just a
+    hard-coded handful of exe/DLL names). Files identical in old and new are skipped: no risk,
+    and nothing to back up. Directories and our own state folder are ignored.
     """
-    names: set[str] = {exe_name}
-    if (install_dir / _HELPER_EXE).is_file():
-        names.add(_HELPER_EXE)
-    internal = install_dir / _INTERNAL_DIR
-    if internal.is_dir():
-        if (internal / _INTERNAL_CORE).is_file():
-            names.add(f"{_INTERNAL_DIR}/{_INTERNAL_CORE}")
-        for dll in internal.glob(_PYTHON_DLL_GLOB):
-            names.add(f"{_INTERNAL_DIR}/{dll.name}")
-    return sorted(names)
+    install_dir = Path(install_dir)
+    changed: dict[str, str] = {}
+    with zipfile.ZipFile(upgrade_zip) as archive:
+        for info in archive.infolist():
+            if info.is_dir():
+                continue
+            rel = info.filename
+            if rel.split("/", 1)[0] == STATE_DIR_NAME:
+                continue  # never verify/overwrite our own marker or backup
+            with archive.open(info) as stream:
+                expected = _sha256_stream(stream)
+            on_disk = install_dir / rel
+            current = _sha256_file(on_disk) if on_disk.is_file() else None
+            if current != expected:
+                changed[rel] = expected
+    return changed
 
 
 def prepare_for_upgrade(
-    install_dir: Path, upgrade_zip: Path, target_version: str, *, exe_name: str
+    install_dir: Path, upgrade_zip: Path, target_version: str, *, exe_name: str = ""
 ) -> None:
-    """Snapshot critical files and record their expected post-upgrade hashes.
+    """Back up the files this upgrade will change and record their expected post-swap hashes.
 
-    Call immediately before launching the extractor. ``upgrade_zip`` is the *flat* zip the
-    helper will overlay onto ``install_dir`` (entries at the archive root), so its critical
-    entries are exactly what the on-disk files should become. Writes a ``pending.json``
-    marker that :func:`recover_pending_upgrade` reads on the next launch.
+    Call immediately before launching the extractor. ``upgrade_zip`` is the *flat* zip the helper
+    overlays onto ``install_dir`` (entries at the archive root), so its members line up with the
+    install layout. Every member whose content differs from the current install is recorded and
+    its current version backed up, so :func:`recover_pending_upgrade` can both detect a partial
+    swap and restore the previous version. ``exe_name`` (if given) is always included as an
+    anchor, even when this upgrade doesn't change it.
     """
     install_dir = Path(install_dir)
     upgrade_zip = Path(upgrade_zip)
@@ -117,8 +121,13 @@ def prepare_for_upgrade(
     if not upgrade_zip.is_file():
         raise FileNotFoundError(f"upgrade zip not found: {upgrade_zip}")
 
-    names = critical_files(install_dir, exe_name)
-    expected = _expected_hashes_from_zip(upgrade_zip, names)
+    expected = files_to_verify(install_dir, upgrade_zip)
+    if exe_name and exe_name not in expected:
+        exe_path = install_dir / exe_name
+        if exe_path.is_file():  # anchor on the exe even if this build didn't change it
+            expected[exe_name] = _sha256_file(exe_path)
+    if not expected:
+        raise UpgradeIntegrityError("upgrade zip changes nothing verifiable in the install")
 
     state_dir = _state_dir(install_dir)
     backup_dir = _backup_dir(install_dir)
@@ -127,10 +136,10 @@ def prepare_for_upgrade(
     backup_dir.mkdir(parents=True)
 
     backed_up: list[str] = []
-    for rel in names:
+    for rel in expected:
         source = install_dir / rel
         if not source.is_file():
-            continue
+            continue  # a brand-new file has no prior version; its absence IS the rollback
         destination = backup_dir / rel
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)
@@ -144,7 +153,7 @@ def prepare_for_upgrade(
     }
     _pending_path(install_dir).write_text(json.dumps(pending, indent=2), encoding="utf-8")
     logger.info(
-        "Prepared in-app upgrade to %s: backed up %d file(s), expecting %d to change.",
+        "Prepared in-app upgrade to %s: backed up %d file(s), verifying %d.",
         target_version, len(backed_up), len(expected),
     )
 
@@ -195,9 +204,18 @@ def verify_install(install_dir: Path, expected: dict[str, str]) -> list[str]:
 
 
 def _rollback(install_dir: Path, target: str, failed: list[str]) -> RecoveryResult:
-    restored = _restore_from_backup(install_dir)
-    _clear_state(install_dir)
-    logger.error("Rolled back %d file(s) after a failed upgrade to %s.", len(restored), target)
+    restored, restore_failures = _restore_from_backup(install_dir)
+    if restore_failures:
+        # Couldn't fully restore (a locked file, disk full). KEEP the marker so the next launch
+        # retries the rollback, rather than clearing it and booting a half-restored install.
+        logger.error(
+            "Rollback of upgrade to %s incomplete: restored %d, failed %d.",
+            target, len(restored), len(restore_failures),
+        )
+    else:
+        _clear_state(install_dir)
+        logger.error("Rolled back %d file(s) after a failed upgrade to %s.", len(restored), target)
+    detail = failed + [f"could not restore {item}" for item in restore_failures]
     title = "Update failed — genericMud was restored"
     message = (
         f"genericMud tried to update to version {target}, but one or more program files "
@@ -206,60 +224,35 @@ def _rollback(install_dir: Path, target: str, failed: list[str]) -> RecoveryResu
         "touched.\n\n"
         "To update, quit genericMud, download the latest release zip, and unzip it into a "
         "fresh folder.\n\n"
-        "Details:\n" + "\n".join(f"  - {item}" for item in failed)
+        "Details:\n" + "\n".join(f"  - {item}" for item in detail)
     )
-    return RecoveryResult(rolled_back=True, title=title, message=message, failed_files=failed)
+    return RecoveryResult(rolled_back=True, title=title, message=message, failed_files=detail)
 
 
-def _restore_from_backup(install_dir: Path) -> list[str]:
+def _restore_from_backup(install_dir: Path) -> tuple[list[str], list[str]]:
+    """Copy every backed-up file back over the install. Best-effort: a per-file failure is
+    collected, not raised, so recovery runs before the UI/voice load and never blocks startup."""
     backup_dir = _backup_dir(install_dir)
     restored: list[str] = []
+    failures: list[str] = []
     if not backup_dir.is_dir():
-        return restored
+        return restored, failures
     for source in backup_dir.rglob("*"):
         if not source.is_file():
             continue
-        rel = source.relative_to(backup_dir)
+        rel = source.relative_to(backup_dir).as_posix()
         destination = install_dir / rel
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, destination)
-        restored.append(rel.as_posix())
-    return restored
+        try:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+            restored.append(rel)
+        except OSError as exc:
+            failures.append(f"{rel}: {exc}")
+    return restored, failures
 
 
 def _clear_state(install_dir: Path) -> None:
     shutil.rmtree(_state_dir(install_dir), ignore_errors=True)
-
-
-def _expected_hashes_from_zip(upgrade_zip: Path, names: list[str]) -> dict[str, str]:
-    expected: dict[str, str] = {}
-    with zipfile.ZipFile(upgrade_zip) as archive:
-        for rel in names:
-            info = _find_entry(archive, rel)
-            if info is None:
-                logger.warning("Upgrade zip is missing an expected file: %s", rel)
-                continue
-            with archive.open(info) as stream:
-                expected[rel] = _sha256_stream(stream)
-    if not expected:
-        raise UpgradeIntegrityError("Upgrade zip contains none of the verifiable install files.")
-    return expected
-
-
-def _find_entry(archive: zipfile.ZipFile, rel: str) -> zipfile.ZipInfo | None:
-    """Match a critical file in the zip by exact path, falling back to basename.
-
-    The flat zip mirrors the install layout so the exact path normally hits; the basename
-    fallback covers a release packaged with a stray top-level folder.
-    """
-    try:
-        return archive.getinfo(rel)
-    except KeyError:
-        base = rel.rsplit("/", 1)[-1]
-        for info in archive.infolist():
-            if not info.is_dir() and info.filename.rsplit("/", 1)[-1] == base:
-                return info
-        return None
 
 
 def _sha256_file(path: Path) -> str:

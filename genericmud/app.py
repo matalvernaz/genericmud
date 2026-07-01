@@ -27,7 +27,7 @@ from genericmud.protocol.msp import parse_msp_line
 from genericmud.protocol.oob import OobMessage, ServerStatus, from_subnegotiation
 from genericmud.render.ansi import parse_ansi
 from genericmud.review.cursor import ReviewCursor
-from genericmud.safepath import is_unsafe
+from genericmud.safepath import is_unsafe, sanitize_component
 from genericmud.session.credentials import CredentialStore
 from genericmud.session.hub import SessionHub
 from genericmud.session.log import SessionLogger
@@ -632,7 +632,10 @@ class EngineApp:
             self._speak_system(f"logging stopped: {name}")
             return
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        path = self.log_dir / f"{self.name or 'session'}-{stamp}.log"
+        # Sanitize the world name -- a pack-derived world could be named "../.." and escape the
+        # logs directory when joined onto the path.
+        safe_name = sanitize_component(self.name or "session")
+        path = self.log_dir / f"{safe_name}-{stamp}.log"
         self.logger = SessionLogger(path)
         self.logger.start()
         self._speak_system(f"logging to {path.name}")

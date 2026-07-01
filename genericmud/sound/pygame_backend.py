@@ -15,6 +15,7 @@ post backend.
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
@@ -23,6 +24,9 @@ if TYPE_CHECKING:
 
 MUSIC_CATEGORY = "music"
 _DEFAULT_CHANNELS = 32  # the mixer is process-global; give concurrent sessions room
+# Bound the decode cache so a hostile MSP stream / noisy pack that plays thousands of unique
+# filenames can't grow memory for the life of the session. LRU: least-recently-played is evicted.
+_MAX_CACHED_SOUNDS = 256
 
 # Process-wide cursor so a category in session A and one in session B don't land on
 # the same pygame channel (which would let B's sound cut A's). Distinctness is what
@@ -59,7 +63,7 @@ class PygameSoundBackend:
         self._mixer = mixer
         self._on_error = on_error
         self._diag = diag  # separate from on_error: trace every attempt, not deduped
-        self._sounds: dict[str, object] = {}  # path -> Sound (decode cache)
+        self._sounds: OrderedDict[str, object] = OrderedDict()  # path -> Sound (bounded LRU cache)
         self._channels: dict[str, object] = {}  # category -> Channel
         self._warned: set[str] = set()  # paths already reported, so a missing cue warns once
 
@@ -117,14 +121,18 @@ class PygameSoundBackend:
         return channel
 
     def _sound(self, file: str):
-        sound = self._sounds.get(file)
-        if sound is None:
-            try:
-                sound = self._mixer.Sound(file)
-            except Exception:  # noqa: BLE001 - missing/undecodable file: caller skips the cue
-                self._warn(file)
-                return None
-            self._sounds[file] = sound
+        cached = self._sounds.get(file)
+        if cached is not None:
+            self._sounds.move_to_end(file)  # most-recently-used
+            return cached
+        try:
+            sound = self._mixer.Sound(file)
+        except Exception:  # noqa: BLE001 - missing/undecodable file: caller skips the cue
+            self._warn(file)
+            return None
+        self._sounds[file] = sound
+        while len(self._sounds) > _MAX_CACHED_SOUNDS:
+            self._sounds.popitem(last=False)  # evict least-recently-used
         return sound
 
 

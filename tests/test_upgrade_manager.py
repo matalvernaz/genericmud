@@ -1,7 +1,7 @@
-"""Transactional upgrade: snapshot, verify, and roll back a (simulated) zip overlay.
+"""Transactional upgrade: diff-based verify set, backup, and best-effort rollback.
 
-The overlay itself is ZipExtractor's job on Windows; here we fake it by writing files onto
-the "install" directory, so the backup/verify/rollback logic is exercised on any platform.
+The overlay itself is ZipExtractor's job on Windows; here we fake it by writing files onto the
+"install" directory, so the diff/backup/verify/rollback logic is exercised on any platform.
 """
 
 from __future__ import annotations
@@ -15,17 +15,18 @@ from genericmud.update import upgrade_manager as um
 
 _OLD = {
     "genericMud.exe": b"old-exe",
-    "ZipExtractor.exe": b"helper-v1",
     "_internal/base_library.zip": b"old-base",
     "_internal/python313.dll": b"old-dll",
-    "_internal/plugin.pyd": b"noncritical",  # not in the critical set
+    "_internal/unchanged.pyd": b"same-bytes",  # identical in NEW -> skipped
 }
 _NEW = {
     "genericMud.exe": b"new-exe",
-    "ZipExtractor.exe": b"helper-v1",  # unchanged helper still verifies fine
     "_internal/base_library.zip": b"new-base",
     "_internal/python313.dll": b"new-dll",
+    "_internal/unchanged.pyd": b"same-bytes",  # identical -> not verified/backed up
+    "_internal/added.pyd": b"brand-new-file",  # a file the upgrade adds
 }
+_CHANGED = {"genericMud.exe", "_internal/base_library.zip", "_internal/python313.dll"}
 
 
 def _write_tree(root: Path, contents: dict[str, bytes]) -> None:
@@ -51,37 +52,36 @@ def _prepared_install(tmp_path: Path) -> tuple[Path, Path]:
     return install, upgrade_zip
 
 
-def test_critical_files_discovery(tmp_path):
+def test_files_to_verify_is_the_changed_set(tmp_path):
     install = tmp_path / "app"
     _write_tree(install, _OLD)
-    names = um.critical_files(install, "genericMud.exe")
-    assert set(names) == {
-        "genericMud.exe",
-        "ZipExtractor.exe",
-        "_internal/base_library.zip",
-        "_internal/python313.dll",
-    }
-    assert "_internal/plugin.pyd" not in names
+    upgrade_zip = _make_zip(tmp_path / "u.zip", _NEW)
+    changed = um.files_to_verify(install, upgrade_zip)
+    assert set(changed) == _CHANGED | {"_internal/added.pyd"}
+    assert "_internal/unchanged.pyd" not in changed  # identical -> skipped
 
 
-def test_prepare_writes_pending_marker(tmp_path):
+def test_prepare_backs_up_only_changed_existing_files(tmp_path):
     install, _ = _prepared_install(tmp_path)
+    backup = install / um.STATE_DIR_NAME / um.BACKUP_DIR_NAME
     assert (install / um.STATE_DIR_NAME / um.PENDING_FILE_NAME).is_file()
-    assert (install / um.STATE_DIR_NAME / um.BACKUP_DIR_NAME / "genericMud.exe").is_file()
+    for rel in _CHANGED:
+        assert (backup / rel).is_file()
+    assert not (backup / "_internal/unchanged.pyd").exists()  # unchanged -> not backed up
+    assert not (backup / "_internal/added.pyd").exists()  # new file -> nothing to back up
 
 
-def test_prepare_raises_when_zip_lacks_critical_files(tmp_path):
+def test_prepare_raises_when_nothing_changes(tmp_path):
     install = tmp_path / "app"
     _write_tree(install, _OLD)
-    empty_zip = _make_zip(tmp_path / "junk.zip", {"README.txt": b"nothing useful"})
+    same_zip = _make_zip(tmp_path / "same.zip", _OLD)  # identical content
     with pytest.raises(um.UpgradeIntegrityError):
-        um.prepare_for_upgrade(install, empty_zip, "v1.0.0", exe_name="genericMud.exe")
+        um.prepare_for_upgrade(install, same_zip, "v1", exe_name="")  # no exe anchor
 
 
 def test_recover_clean_when_overlay_succeeds(tmp_path):
     install, _ = _prepared_install(tmp_path)
-    _write_tree(install, _NEW)  # a complete overlay: every critical file now matches the zip
-
+    _write_tree(install, _NEW)  # a complete overlay: every changed file now matches the zip
     assert um.recover_pending_upgrade(install) is None
     assert not (install / um.STATE_DIR_NAME).exists()  # state cleared on success
 
@@ -97,7 +97,7 @@ def test_recover_rolls_back_partial_overlay(tmp_path):
     assert result is not None and result.rolled_back
     assert any("base_library" in item for item in result.failed_files)
     # Everything restored to the pre-upgrade snapshot, not left half-new.
-    for rel in ("genericMud.exe", "_internal/python313.dll", "_internal/base_library.zip"):
+    for rel in _CHANGED:
         assert (install / rel).read_bytes() == _OLD[rel]
     assert not (install / um.STATE_DIR_NAME).exists()
 

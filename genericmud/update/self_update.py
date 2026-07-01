@@ -61,6 +61,10 @@ _USER_AGENT = f"genericMud-updater (+https://github.com/{REPO})"
 _API_TIMEOUT_S = 15
 _DOWNLOAD_TIMEOUT_S = 30  # per socket read; a healthy slow link still completes
 _DOWNLOAD_CHUNK = 1 << 20  # 1 MiB
+# The portable build is ~50 MB; cap the download and the uncompressed extraction well above that
+# so a bad/hostile asset can't fill the disk (the digest check already covers our own releases).
+_MAX_DOWNLOAD_BYTES = 500 * 1024 * 1024  # 500 MiB
+_MAX_EXTRACTED_BYTES = 1024 * 1024 * 1024  # 1 GiB uncompressed
 
 
 def _parse_version(tag: str) -> tuple[int, int, int] | None:
@@ -218,15 +222,17 @@ def _download(url: str, dest: Path, progress_cb=None, expected_size: int = 0) ->
                 f"reports {api_size}. Refusing to install."
             )
         max_expected = max((size for size in (header_size, api_size) if size > 0), default=0)
+        # Cap the stream even when neither size is known (a malformed API response), so a bad
+        # redirect / hostile asset can't fill the disk before the hash check.
+        cap = max_expected or _MAX_DOWNLOAD_BYTES
         done = 0
         with open(dest, "wb") as handle:
             while chunk := response.read(_DOWNLOAD_CHUNK):
                 handle.write(chunk)
                 done += len(chunk)
-                if max_expected and done > max_expected:
+                if done > cap:
                     raise RuntimeError(
-                        f"Update download exceeded expected size: got at least {done} bytes, "
-                        f"expected {max_expected}."
+                        f"Update download exceeded {cap} bytes; refusing (possible bad asset)."
                     )
                 if progress_cb is not None:
                     progress_cb(done, max_expected)
@@ -325,11 +331,17 @@ def _safe_extract(zip_path: Path, dest: Path) -> None:
 
     Stdlib ``extractall`` does not block ``../`` or absolute members. The digest already
     authenticates the bytes, but if a compromised release ever delivered a traversal payload
-    we refuse it rather than write outside the extract dir (defense in depth).
+    we refuse it rather than write outside the extract dir (defense in depth). A total
+    uncompressed-size cap likewise refuses a decompression bomb before writing anything.
     """
     dest.mkdir(parents=True, exist_ok=True)
     dest_root = dest.resolve()
     with zipfile.ZipFile(zip_path) as archive:
+        total = sum(info.file_size for info in archive.infolist())
+        if total > _MAX_EXTRACTED_BYTES:
+            raise RuntimeError(
+                f"Refusing to extract update — uncompressed size {total} exceeds the cap."
+            )
         for info in archive.infolist():
             name = info.filename
             if name.startswith(("/", "\\")) or ".." in name.replace("\\", "/").split("/"):

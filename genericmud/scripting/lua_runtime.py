@@ -20,7 +20,7 @@ from lupa import LuaRuntime
 
 from genericmud.automation.engine import MatchContext
 from genericmud.scripting.api import ScriptApi
-from genericmud.scripting.guard import ScriptGuard
+from genericmud.scripting.guard import ScriptGuard, ScriptTimeout
 
 # Removed from the sandbox: filesystem, process, dynamic code loading, lupa bridge.
 _SANDBOX_REMOVE = (
@@ -168,6 +168,11 @@ def install_pack_require(
         try:
             code = path.read_text(encoding="latin-1", errors="ignore")
             result = lua.eval("function(...)\n" + code + "\nend")(key)
+        except ScriptTimeout:
+            # A runaway loop in a required module is a real failure of a hostile/broken pack, not
+            # a missing optional module -- surface it (fail the pack load), don't black-hole it.
+            cache.pop(key, None)
+            raise
         except Exception:
             # A bundled module that errors on load (e.g. luasocket's pure-Lua layer without its
             # native core) must not kill the plugin that required it: black-hole it if we can.

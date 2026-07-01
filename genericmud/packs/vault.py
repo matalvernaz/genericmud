@@ -11,18 +11,51 @@ breaks only this module, not the rest of the app.
 from __future__ import annotations
 
 import html
+import ipaddress
 import re
+import socket
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 BASE_URL = "https://mudsoundpack.com"
 _USER_AGENT = "genericMud-soundpack-browser"
 _DOWNLOAD_CHUNK = 65536
+_ALLOWED_SCHEMES = frozenset({"http", "https"})  # urllib also honours file://, gopher:// etc.
+_MAX_DOWNLOAD_BYTES = 2 * 1024 * 1024 * 1024  # 2 GiB default cap on any pack/source download
 
 
 class DownloadTooLarge(Exception):
     """A download passed its size cap (e.g. an installer's source repo is huge)."""
+
+
+class BlockedUrl(Exception):
+    """A download URL was refused (non-web scheme, or a private/loopback host)."""
+
+
+def _validate_url(url: str) -> None:
+    """Refuse SSRF-shaped download URLs before urlopen sees them.
+
+    urllib will happily open ``file://`` (local file read) and reach loopback/RFC1918 hosts, so a
+    compromised vault page or a malicious pack installer could point us at ``file:///etc/...`` or an
+    intranet service. Allow only http(s), and reject a host that resolves to a non-public address.
+    An unresolvable host isn't our SSRF concern -- the real fetch fails on its own -- so we skip it.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in _ALLOWED_SCHEMES:
+        raise BlockedUrl(f"refusing non-web URL scheme: {parsed.scheme or '(none)'!r}")
+    host = parsed.hostname
+    if not host:
+        raise BlockedUrl("download URL has no host")
+    try:
+        infos = socket.getaddrinfo(host, parsed.port, type=socket.SOCK_STREAM)
+    except OSError:
+        return  # unresolvable: let the actual fetch fail normally, not an SSRF risk
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+            raise BlockedUrl(f"refusing to fetch from a non-public address ({ip})")
 
 # Clients genericMud can actually load (one of the three script dialects); others
 # (Mudlet, TinTin++, MonkeyTerm) are listed but flagged as unsupported.
@@ -177,14 +210,17 @@ def git_archive_urls(clone_url: str) -> list[str]:
 
 
 def download(
-    url: str, dest_path: str | Path, opener=urlopen, progress=None, max_bytes=None
+    url: str, dest_path: str | Path, opener=urlopen, progress=None, max_bytes=_MAX_DOWNLOAD_BYTES
 ) -> Path:
     """Stream ``url`` to ``dest_path`` in chunks; call ``progress(done, total)`` as it goes.
 
-    ``max_bytes`` aborts with :class:`DownloadTooLarge` once exceeded — used when
-    following an installer's source repo, which can be huge (Erion's is ~1 GB).
+    ``max_bytes`` aborts with :class:`DownloadTooLarge` once exceeded — defaults to a 2 GiB cap
+    (lowered when following an installer's source repo, e.g. Erion's ~1 GB). Real network fetches
+    are SSRF-checked by :func:`_validate_url`; an injected ``opener`` (a test double) skips that.
     """
     dest_path = Path(dest_path)
+    if opener is urlopen:
+        _validate_url(url)
     request = Request(url, headers={"User-Agent": _USER_AGENT})
     with opener(request) as response:
         total = int(response.headers.get("Content-Length", 0) or 0)

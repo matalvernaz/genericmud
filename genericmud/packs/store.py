@@ -220,6 +220,35 @@ class PackStore:
 
 _MAX_NEST_DEPTH = 2  # a pack nests at most one level: sounds.zip + scripts.zip inside a wrapper
 
+# Quotas so a malicious/broken pack zip can't fill the disk or OOM during install (this host
+# hard-reboots on OOM). Soundpacks can be large (Miriani bundles ~870 MB of audio), so the caps
+# are generous; a zip bomb blows past them by orders of magnitude.
+_MAX_PACK_MEMBERS = 50_000
+_MAX_PACK_TOTAL_BYTES = 2 * 1024 * 1024 * 1024  # 2 GiB uncompressed, across the whole (nested) tree
+_MAX_PACK_FILE_BYTES = 1024 * 1024 * 1024  # 1 GiB per member
+_MAX_COMPRESSION_RATIO = 200  # refuse a member that inflates >200x (audio never does; a bomb does)
+_RATIO_MIN_SIZE = 1_000_000  # only ratio-check members big enough to matter
+
+
+def _check_zip_quota(archive: zipfile.ZipFile) -> None:
+    """Reject an archive that would exhaust disk/memory before we extract anything."""
+    members = archive.infolist()
+    if len(members) > _MAX_PACK_MEMBERS:
+        raise PackError(f"pack has too many files ({len(members)} > {_MAX_PACK_MEMBERS})")
+    total = 0
+    for info in members:
+        if info.file_size > _MAX_PACK_FILE_BYTES:
+            raise PackError(f"pack member too large: {info.filename} ({info.file_size} bytes)")
+        if (
+            info.compress_size > 0
+            and info.file_size > _RATIO_MIN_SIZE
+            and info.file_size / info.compress_size > _MAX_COMPRESSION_RATIO
+        ):
+            raise PackError(f"pack member has a bomb-like compression ratio: {info.filename}")
+        total += info.file_size
+        if total > _MAX_PACK_TOTAL_BYTES:
+            raise PackError("pack uncompressed size exceeds the limit")
+
 
 def extract_pack(zip_path: str | Path, dest: str | Path, *, _depth: int = 0) -> None:
     """Extract a pack zip into ``dest``, descending into any nested zips.
@@ -227,10 +256,12 @@ def extract_pack(zip_path: str | Path, dest: str | Path, *, _depth: int = 0) -> 
     Some packs (e.g. Miriani) ship a wrapper zip holding a separate sounds zip and scripts
     zip rather than the files directly; without descending, no script is found. Each nested
     zip is expanded into a sibling folder named after it and then removed, so the tree holds
-    files, not archives. CPython sanitises member paths on extract (no zip-slip).
+    files, not archives. CPython sanitises member paths on extract (no zip-slip); a quota check
+    (:func:`_check_zip_quota`) refuses a decompression bomb before any bytes are written.
     """
     dest = Path(dest)
     with zipfile.ZipFile(zip_path) as archive:
+        _check_zip_quota(archive)
         archive.extractall(dest)
     if _depth >= _MAX_NEST_DEPTH:
         return
