@@ -12,11 +12,13 @@ import re
 import tempfile
 import zipfile
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from genericmud.config.worlds import World
+from genericmud.packs import manifest_sync
 from genericmud.packs.manifest import DIALECT_BY_SUFFIX, PackManifest
+from genericmud.packs.manifest_sources import ManifestSource
 from genericmud.packs.store import PackError, PackStore
 from genericmud.packs.world_import import world_from_pack
 
@@ -182,3 +184,43 @@ def update_pack(
         if entry is None:
             raise PackError(f"the updated download for {pack_id} has no load script")
         return setup_pack(store, extracted, entry=entry, origin=manifest.origin)
+
+
+def setup_pack_from_manifest(
+    store: PackStore, source: ManifestSource, *, progress=None, download=None
+) -> SetupResult:
+    """Install or update a manifest-style pack (e.g. Mush-Z) by syncing its files in place.
+
+    Syncs the pack's file tree from its remote manifest into ``packs_dir/<id>`` — a fresh
+    install downloads everything, a re-run fetches only what changed — then registers and
+    enables it for its curated world. Deliberately NOT auto-trusted: like any MUSHclient pack
+    it runs its own Lua, so the caller must ``store.trust(id)`` before it auto-loads on connect.
+    ``progress(done, total, relpath)`` reports per file; ``download`` is injectable for tests.
+    Re-running is the update path (same call, only changed files move).
+    """
+    kwargs = {"progress": progress}
+    if download is not None:
+        kwargs["download"] = download
+    manifest_sync.sync(source, store.pack_dir(source.id), **kwargs)
+    _write_pack_toml(store.pack_dir(source.id), source)
+    manifest = store.register(source.id, origin=source.manifest_url)
+    world = replace(source.world)  # a copy; the caller persists/edits it, don't mutate the registry
+    store.enable(manifest.id, world.name)
+    return SetupResult(manifest=manifest, world=world, enabled_for=world.name)
+
+
+def _write_pack_toml(pack_dir: Path, source: ManifestSource) -> None:
+    """Write the pack.toml that lets the store register a synced tree (id/dialect/entry/origin)."""
+    lines = [
+        f"id = {_toml_str(source.id)}",
+        f"name = {_toml_str(source.name)}",
+        f"dialect = {_toml_str(source.dialect)}",
+        f"entry = {_toml_str(source.entry)}",
+        f"origin = {_toml_str(source.manifest_url)}",
+    ]
+    (Path(pack_dir) / "pack.toml").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _toml_str(value: str) -> str:
+    """A double-quoted TOML string literal (escape backslash then quote)."""
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'

@@ -43,7 +43,9 @@ from genericmud.packs import (
     detect_entry,
     entry_problem,
     known_muds,
+    manifest_sources,
     setup_pack,
+    setup_pack_from_manifest,
     slugify,
     update_pack,
     vault,
@@ -755,6 +757,9 @@ class VaultBrowserDialog(wx.Dialog):
         return SetupResult(result.manifest, world, result.enabled_for)
 
     def _fetch_and_setup(self, pack):  # background thread
+        source = manifest_sources.for_labels(pack.mud, pack.name)
+        if source is not None:  # served as an HTTP file tree (Mush-Z): sync it, don't fetch a zip
+            return self._setup_from_manifest(source, pack)
         pack_id = slugify(pack.name)
         if pack_id in {manifest.id for manifest in self._store.installed()}:
             self._status(f"{pack.name} is already installed; using the cached copy.")
@@ -796,6 +801,34 @@ class VaultBrowserDialog(wx.Dialog):
             )
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+    def _setup_from_manifest(self, source, pack):  # background thread
+        """Install/update a manifest-style pack (Mush-Z): sync its file tree in place.
+
+        A fresh install pulls the whole tree; re-running fetches only what changed. The pack
+        installs enabled-but-untrusted (it runs its own Lua), so the user is told to trust it.
+        """
+        installed = source.id in {manifest.id for manifest in self._store.installed()}
+        verb = "Updating" if installed else "Downloading"
+        self._status(f"{verb} {source.name}. The first install fetches the whole pack.")
+        result = setup_pack_from_manifest(self._store, source, progress=self._sync_progress)
+        if not self._store.is_trusted(result.manifest.id):
+            self._status(
+                f"{source.name} is installed. Open Manage Soundpacks and trust it so its "
+                "sounds load when you connect."
+            )
+        return self._fill_world(result, pack.mud)
+
+    def _sync_progress(self, done: int, total: int, relpath: str) -> None:  # background thread
+        """Per-file sync progress: drive the gauge and speak every 10% (packs have ~9000 files)."""
+        if not total:
+            return
+        pct = min(int(done * 100 / total), 100)
+        wx.CallAfter(self._set_gauge, pct)
+        milestone = pct - pct % 10
+        if milestone and milestone != self._last_milestone:
+            self._last_milestone = milestone
+            self._status(f"Synced {done} of {total} files ({pct} percent).")
 
     def _follow_installer(self, extracted, tmp):  # background thread
         """If the download is just a Windows installer, fetch the repo it git-clones

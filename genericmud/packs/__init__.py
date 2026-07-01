@@ -27,6 +27,7 @@ from genericmud.packs.setup import (
     detect_entry,
     entry_problem,
     setup_pack,
+    setup_pack_from_manifest,
     update_pack,
 )
 from genericmud.packs.store import PackError, PackExists, PackStore, UnknownPack
@@ -51,6 +52,7 @@ __all__ = [
     "infer_manifest",
     "load_manifest",
     "setup_pack",
+    "setup_pack_from_manifest",
     "slugify",
     "update_pack",
     "world_from_pack",

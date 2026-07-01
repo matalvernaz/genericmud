@@ -118,6 +118,27 @@ class PackStore:
             self.trust(manifest.id)
         return manifest
 
+    def register(self, pack_id: str, *, origin: str | None = None) -> PackManifest:
+        """Record an already-populated ``packs_dir/<id>`` in the index without copying.
+
+        For content synced into place (see :mod:`genericmud.packs.manifest_sync`) rather than
+        extracted from an archive — install's copy step would only duplicate a large tree, and
+        its overlap guard forbids source==dest anyway. Reads the dir's ``pack.toml`` for
+        identity; ``enable``/``trust`` stay separate, as with :meth:`install`.
+        """
+        source = self.pack_dir(pack_id)
+        if not source.is_dir():
+            raise PackError(f"no pack directory to register: {source}")
+        manifest = load_manifest(source)
+        if manifest.id != pack_id:  # the on-disk dir name is authoritative for the key
+            manifest = dataclass_replace(manifest, id=pack_id)
+        if origin:
+            manifest = dataclass_replace(manifest, origin=origin)
+        index = self._load_index()
+        index[manifest.id] = manifest.to_dict()
+        self._save_index(index)
+        return manifest
+
     def uninstall(self, pack_id: str) -> None:
         index = self._load_index()
         if pack_id not in index:
