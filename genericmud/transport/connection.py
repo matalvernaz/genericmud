@@ -86,6 +86,7 @@ class MudConnection:
         self.quit_commands = set(DEFAULT_QUIT_COMMANDS)
         self._quit_sent_at: float | None = None  # monotonic time of the last quit command
         self._target: tuple[str, int, bool, ssl.SSLContext | None] | None = None
+        self._dispatch_fault_seen = False  # speak the first consumer fault, then stay quiet
 
     @property
     def parser(self) -> TelnetParser:
@@ -114,18 +115,36 @@ class MudConnection:
 
     async def _read_loop(self) -> None:
         assert self._reader is not None
+        protocol_error: str | None = None
         try:
             while True:
                 raw = await self._reader.read(_READ_CHUNK)
                 if not raw:
                     break
-                for event in self._parser.receive(raw):
-                    self._dispatch(event)
-        except (asyncio.IncompleteReadError, ConnectionResetError):
-            pass
+                try:
+                    events = self._parser.receive(raw)
+                except Exception as exc:  # noqa: BLE001 - hostile/malformed stream (bomb, no-SE flood)
+                    # A parse failure means the parser state is now unreliable AND reconnecting
+                    # would hit the same bytes, so stop and DON'T auto-reconnect. Tell the user --
+                    # for a blind user, silence here is worse than the disconnect itself.
+                    protocol_error = f"{type(exc).__name__}: {exc}"
+                    break
+                for event in events:
+                    try:
+                        self._dispatch(event)
+                    except Exception as exc:  # noqa: BLE001 - one bad event mustn't drop the session
+                        # Consumer/parser-of-payload fault (e.g. a malformed OOB payload). Keep the
+                        # connection up and surface it once, rather than dying or spamming.
+                        if not self._dispatch_fault_seen:
+                            self._dispatch_fault_seen = True
+                            self._status(f"error handling server data: {type(exc).__name__}")
+        except (OSError, asyncio.IncompleteReadError):
+            pass  # a network drop (TimeoutError/ConnectionReset are OSErrors): reconnect below
         finally:
             self._teardown()
-            if self._should_reconnect():
+            if protocol_error is not None:
+                self._status(f"protocol error, disconnected: {protocol_error}")
+            elif self._should_reconnect():
                 asyncio.create_task(self._reconnect_loop())  # noqa: RUF006 - fire-and-forget
             elif not self._closing:
                 # A drop we won't reconnect (quit/auto_reconnect off); confirm it to the user.
