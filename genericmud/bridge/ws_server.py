@@ -34,11 +34,11 @@ class WsBridge:
         return self._server.sockets[0].getsockname()[1]
 
     async def _handle(self, ws: Any, *_: Any) -> None:
-        # A per-run token defeats cross-site WebSocket hijacking: the bridge binds localhost, so any
-        # web page the user visits can open ws://127.0.0.1:<port>, but only OUR page (served with the
-        # token in its URL) knows the secret. A connection that doesn't first send a matching
-        # {type:hello, token} is closed and never becomes the renderer (so it can't send input or
-        # receive MUD output). An empty token means unauthenticated (tests/legacy), as before.
+        # A per-run token defeats cross-site WebSocket hijacking: the bridge binds localhost, so
+        # any web page the user visits can open ws://127.0.0.1:<port>, but only OUR page (served
+        # with the token in its URL) knows the secret. A connection that doesn't first send a
+        # matching {type:hello, token} is closed and never becomes the renderer (so it can't send
+        # input or receive MUD output). An empty token means unauthenticated (tests/legacy).
         authed = self._token == ""
         if authed:
             self._ws = ws  # no token configured: last renderer wins, as before
