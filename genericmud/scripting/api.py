@@ -17,6 +17,12 @@ from genericmud.automation.channels import ChannelPolicy
 from genericmud.automation.engine import AutomationEngine, Callback
 from genericmud.safepath import is_absolute, is_traversal, is_unc, within
 
+# Channels that carry the primary spoken output + app alerts. A pack must not be able to set
+# speak=False on these and silence the client -- for a blind user, total muting is catastrophic
+# and imperceptible. Packs route their own spam to their own channels instead. (These names are
+# the ones EngineApp wires policies for: main output, system alerts, tells, and the review pane.)
+_RESERVED_CHANNELS = frozenset({"main", "system", "tell", "review"})
+
 
 class ScriptApi:
     def __init__(
@@ -97,6 +103,8 @@ class ScriptApi:
         interrupt: bool = False,
         voice: str | None = None,
     ) -> None:
+        if name in _RESERVED_CHANNELS:
+            return  # a pack can't mute/redirect the accessibility-critical channels
         self._engine.channels.set_policy(
             name, ChannelPolicy(speak=speak, display=display, interrupt=interrupt, voice=voice)
         )

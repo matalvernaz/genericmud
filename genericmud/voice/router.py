@@ -42,16 +42,29 @@ class VoiceRouter:
                 self._suppressed += 1
                 return
             if self._suppressed:
-                self._backend.speak(f"{self._suppressed} more lines")
+                self._safe(self._backend.speak, f"{self._suppressed} more lines")
                 self._suppressed = 0
         if interrupt:
-            self._backend.stop()
-        self._backend.speak(text)
+            self._safe(self._backend.stop)
+        self._safe(self._backend.speak, text)
 
     def flush(self) -> None:
         """Stop current speech and drop the suppressed-line backlog (F11)."""
-        self._backend.stop()
+        self._safe(self._backend.stop)
         self._suppressed = 0
+
+    def _safe(self, action: Callable[..., None], *args: str) -> None:
+        """Call a backend method, swallowing any fault.
+
+        A SAPI COM hiccup or a vanished NVDA controller raising out of ``speak``/``stop`` would
+        otherwise propagate into the engine's read loop -- dropping the connection AND silencing
+        every later line. For a self-voicing app whose users are blind, that cascade is the worst
+        outcome, so a speech fault drops just this utterance; the next call tries again.
+        """
+        try:
+            action(*args)
+        except Exception:  # noqa: BLE001 - a speech-backend fault must never crash or mute the app
+            return
 
     def set_muted(self, muted: bool) -> None:
         """Mute self-voice (passthrough mode lets the screen reader read instead)."""
