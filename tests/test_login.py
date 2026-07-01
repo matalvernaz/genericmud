@@ -41,6 +41,38 @@ def test_autologin_sends_each_prompt_once():
     assert sent == ["hero"]
 
 
+def test_autologin_ignores_password_word_in_a_sentence():
+    sent: list[str] = []
+    login = AutoLogin("hero", "secret", sent.append)
+    login.feed("What is your name?")
+    assert sent == ["hero"]
+    login.feed("Never share your password with anyone.")  # a banner, not a prompt
+    login.feed("Welcome, hero!")
+    assert sent == ["hero"]  # the password was NOT leaked as a command
+    assert not login.done
+
+
+def test_autologin_window_expires_after_name():
+    sent: list[str] = []
+    login = AutoLogin("hero", "secret", sent.append, max_lines=3)
+    login.feed("Enter your name:")
+    assert sent == ["hero"]
+    for _ in range(3):
+        login.feed("just some game output")
+    assert login.done  # stopped watching
+    login.feed("Password:")  # arrives too late to matter
+    assert sent == ["hero"]
+
+
+def test_autologin_recognizes_real_password_prompt_variants():
+    for prompt in ("Password:", "password >", "Your passphrase?", "PASSWORD"):
+        sent: list[str] = []
+        login = AutoLogin("hero", "secret", sent.append)
+        login.feed("what is your name")
+        login.feed(prompt)
+        assert sent == ["hero", "secret"], prompt
+
+
 def _app(store):
     backend = RecordingBackend()
     voice = VoiceRouter(backend, clock=lambda: 0.0)
