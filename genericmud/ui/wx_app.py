@@ -422,6 +422,7 @@ class PackManagerDialog(wx.Dialog):
         self._store = store
         self._diag = diag  # durable install trace (DiagnosticLog or None)
         self._ids: list[str] = []  # pack ids, parallel to the list box rows
+        self._alive = True  # a late _run_async callback must not touch a destroyed dialog
 
         names = [w.name for w in worlds]
         if active and active not in names:
@@ -464,8 +465,8 @@ class PackManagerDialog(wx.Dialog):
 
         close = self.FindWindowById(wx.ID_CLOSE)
         if close is not None:
-            close.Bind(wx.EVT_BUTTON, lambda _e: self.EndModal(wx.ID_CLOSE))
-        self.Bind(wx.EVT_CLOSE, lambda _e: self.EndModal(wx.ID_CLOSE))
+            close.Bind(wx.EVT_BUTTON, self._on_close)
+        self.Bind(wx.EVT_CLOSE, self._on_close)
 
         self._refresh_packs()
         if self._ids:
@@ -599,7 +600,13 @@ class PackManagerDialog(wx.Dialog):
 
         _run_async(work, lambda outcome: self._on_updated(pack_id, outcome))
 
+    def _on_close(self, _event: wx.CommandEvent) -> None:
+        self._alive = False  # a still-running "update from source" callback must not touch us
+        self.EndModal(wx.ID_CLOSE)
+
     def _on_updated(self, pack_id: str, outcome) -> None:
+        if not self._alive:
+            return  # the dialog was closed before the background update finished
         if isinstance(outcome, Exception):
             wx.MessageBox(f"Update failed: {outcome}", "Update", wx.OK | wx.ICON_ERROR)
         else:
@@ -643,6 +650,7 @@ class VaultBrowserDialog(wx.Dialog):
         self._last_milestone = 0  # throttle spoken download progress to 25% steps
         self._packs: list = []  # VaultPack list, parallel to the list box
         self.result = None  # SetupResult once a pack is downloaded + set up
+        self._alive = True  # a late download/setup callback must not touch a destroyed dialog
 
         sizer = wx.BoxSizer(wx.VERTICAL)
         # A read-only, focusable status LOG (not a StaticText): NVDA can Tab to it and
@@ -674,11 +682,15 @@ class VaultBrowserDialog(wx.Dialog):
 
         close = self.FindWindowById(wx.ID_CLOSE)
         if close is not None:
-            close.Bind(wx.EVT_BUTTON, lambda _e: self.EndModal(wx.ID_CLOSE))
-        self.Bind(wx.EVT_CLOSE, lambda _e: self.EndModal(wx.ID_CLOSE))
+            close.Bind(wx.EVT_BUTTON, self._on_close)
+        self.Bind(wx.EVT_CLOSE, self._on_close)
 
         self._status("Loading the catalogue from mudsoundpack.com.")
         _run_async(vault.list_packs, self._on_listed)
+
+    def _on_close(self, _event: wx.CommandEvent) -> None:
+        self._alive = False  # a still-running catalogue/download thread must not touch us
+        self.EndModal(wx.ID_CLOSE)
 
     def _status(self, message: str) -> None:
         """Append a step to the readable status log and speak it; safe from any thread."""
@@ -687,10 +699,14 @@ class VaultBrowserDialog(wx.Dialog):
         wx.CallAfter(self._append_status, message)
 
     def _append_status(self, message: str) -> None:  # main thread
+        if not self._alive:
+            return
         self._status_log.AppendText(message + "\n")
         self._announce(message)
 
     def _on_listed(self, outcome) -> None:
+        if not self._alive:
+            return
         if isinstance(outcome, Exception):
             self._status(f"Couldn't load the catalogue: {outcome}")
             return
@@ -810,10 +826,14 @@ class VaultBrowserDialog(wx.Dialog):
                 return src_dir, entry, archive_url
         return src_dir, None, None  # the pack is copied into the store
 
+    def _set_gauge(self, pct: int) -> None:  # main thread
+        if self._alive:
+            self._gauge.SetValue(pct)
+
     def _progress(self, done: int, total: int) -> None:  # background thread
         if total:
             pct = min(int(done * 100 / total), 100)
-            wx.CallAfter(self._gauge.SetValue, pct)
+            wx.CallAfter(self._set_gauge, pct)
             milestone, label = pct - pct % 25, f"{pct - pct % 25} percent"  # 25/50/75/100
         else:  # no Content-Length (GitLab archives) -> report MB, every 50 MB
             milestone, label = done // 50_000_000, f"{done // 1_000_000} MB"
@@ -822,6 +842,8 @@ class VaultBrowserDialog(wx.Dialog):
             self._status(f"Downloaded {label}.")
 
     def _on_setup_done(self, outcome) -> None:
+        if not self._alive:
+            return
         if isinstance(outcome, Exception):
             if self._diag is not None:
                 self._diag.event("vault.failed", error=repr(outcome),
@@ -944,6 +966,7 @@ class GenericMudFrame(wx.Frame):
 
         self._update_progress_dialog: wx.ProgressDialog | None = None
         self._update_cancelled = threading.Event()
+        self._alive = True  # an in-flight update callback must not touch the frame after close
 
     def _on_char_hook(self, event: wx.KeyEvent) -> None:
         # Grab Ctrl+Tab before the focused control sees it; let everything else
@@ -1019,6 +1042,7 @@ class GenericMudFrame(wx.Frame):
                 return
         for i in range(self.book.GetPageCount()):
             self.book.GetPage(i).close()  # graceful teardown: leave hub, stop log, close socket
+        self._alive = False  # a background update callback must not touch the destroyed frame
         self.Destroy()
 
     def _on_manage_packs(self, _event: wx.CommandEvent) -> None:
@@ -1115,6 +1139,8 @@ class GenericMudFrame(wx.Frame):
         wx.CallAfter(self._pump_update_progress, pct)
 
     def _pump_update_progress(self, pct: int) -> None:  # main thread
+        if not self._alive:
+            return
         dialog = self._update_progress_dialog
         if dialog is None:
             return
@@ -1123,6 +1149,8 @@ class GenericMudFrame(wx.Frame):
             self._update_cancelled.set()
 
     def _on_update_finished(self, outcome) -> None:
+        if not self._alive:
+            return  # the frame was closed while the update was downloading
         if self._update_progress_dialog is not None:
             self._update_progress_dialog.Destroy()
             self._update_progress_dialog = None
