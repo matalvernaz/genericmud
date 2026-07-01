@@ -6,6 +6,7 @@ Kept as the future Mac/Linux path now that native wx is the default on Windows.
 from __future__ import annotations
 
 import asyncio
+import secrets
 import sys
 import threading
 
@@ -28,11 +29,14 @@ def run(args) -> None:
     loop = asyncio.new_event_loop()
     install_loop_exception_handler(loop)  # capture engine-thread coroutine crashes
     ready = threading.Event()
+    # A per-run secret the page must echo back before the WS bridge accepts it, so a random web
+    # page the user visits can't hijack the localhost bridge and drive the MUD (CSWSH).
+    token = secrets.token_urlsafe(32)
 
     async def boot() -> None:
         voice = VoiceRouter(make_voice_backend())
         holder: dict[str, EngineApp] = {}
-        bridge = WsBridge(lambda message: holder["app"].on_ws_message(message))
+        bridge = WsBridge(lambda message: holder["app"].on_ws_message(message), token=token)
         connection = MudConnection()
         app = EngineApp(
             voice,
@@ -65,5 +69,6 @@ def run(args) -> None:
     if not (frontend_dir / "index.html").is_file():
         print(f"frontend not found at {frontend_dir}", file=sys.stderr)
     serve_static(str(frontend_dir), sound_root=args.sounds)
-    webview.create_window("genericMud", url=f"http://{STATIC_HOST}:{STATIC_PORT}/index.html")
+    url = f"http://{STATIC_HOST}:{STATIC_PORT}/index.html?token={token}"
+    webview.create_window("genericMud", url=url)
     webview.start()

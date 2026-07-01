@@ -23,6 +23,14 @@ from genericmud.safepath import is_absolute, is_traversal, is_unc, within
 # the ones EngineApp wires policies for: main output, system alerts, tells, and the review pane.)
 _RESERVED_CHANNELS = frozenset({"main", "system", "tell", "review"})
 
+# Bounds so a hostile/broken pack can't DoS the client through the legitimate API. The script
+# guard already caps any single callback at ~1s, but nothing bounded how many timers a pack could
+# leave pending (starving the event loop, which freezes the UI = silence for a blind user) or how
+# large a variable it could stash.
+_MAX_ACTIVE_TIMERS = 1000  # outstanding pack timers; further add_timer calls are refused
+_MIN_TIMER_DELAY = 0.01  # clamp near-zero delays so a self-rearming timer can't busy-spin the loop
+_MAX_VAR_VALUE_LEN = 1_000_000  # 1 MB; a longer var/shared value is refused
+
 
 class ScriptApi:
     def __init__(
@@ -33,6 +41,7 @@ class ScriptApi:
         self._base_dir = base_dir
         self._sounds_index: dict[str, str] = {}  # basename(lower) -> full path under @sppath
         self._sounds_index_key: str | None = None  # the @sppath the index was built for
+        self._active_timers = 0  # pending pack timers, bounded by _MAX_ACTIVE_TIMERS
 
     # --- output ---
 
@@ -76,6 +85,8 @@ class ScriptApi:
         return self._engine.get_var(name)
 
     def set_var(self, name: str, value: object) -> None:
+        if len(str(value)) > _MAX_VAR_VALUE_LEN:
+            return  # refuse an oversized value (memory-exhaustion guard)
         self._engine.set_var(name, value)
 
     # --- registration ---
@@ -92,7 +103,15 @@ class ScriptApi:
         self._engine.add_key(key, callback, source=self._source)
 
     def add_timer(self, delay: float, callback: Callable[[], None]) -> None:
-        self._engine.sink.schedule(delay, callback)
+        if self._active_timers >= _MAX_ACTIVE_TIMERS:
+            return  # refuse: too many pending timers would starve the event loop (UI freeze)
+        self._active_timers += 1
+
+        def wrapped() -> None:
+            self._active_timers -= 1
+            callback()
+
+        self._engine.sink.schedule(max(delay, _MIN_TIMER_DELAY), wrapped)
 
     def set_channel(
         self,
@@ -141,7 +160,7 @@ class ScriptApi:
         return self._engine.hub.shared_get(key) if self._engine.hub is not None else ""
 
     def shared_set(self, key: str, value: object) -> None:
-        if self._engine.hub is not None:
+        if self._engine.hub is not None and len(str(value)) <= _MAX_VAR_VALUE_LEN:
             self._engine.hub.shared_set(key, value)
 
     @property
