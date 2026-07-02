@@ -130,9 +130,9 @@ def write_banner(diag: DiagnosticLog) -> None:
 
 def _app_version() -> str:
     try:
-        from importlib.metadata import version
+        from genericmud import __version__
 
-        return version("genericmud")
+        return __version__  # single source of truth, always present (even run from source)
     except Exception:  # noqa: BLE001 - version lookup is best-effort diagnostics
         return "unknown"
 

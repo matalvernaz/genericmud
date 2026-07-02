@@ -111,3 +111,23 @@ def test_safe_extract_rejects_traversal(tmp_path, member):
         archive.writestr(member, b"pwned")
     with pytest.raises(RuntimeError):
         self_update._safe_extract(src, tmp_path / "out")
+
+
+def test_current_version_reads_source_version():
+    """current_version() returns genericmud.__version__ -- baked into every frozen build,
+    unlike importlib.metadata, which needs --copy-metadata and silently returns nothing."""
+    import genericmud
+
+    assert self_update.current_version() == genericmud.__version__
+
+
+def test_current_version_survives_missing_dist_metadata(monkeypatch):
+    """The dead-updater mode: importlib.metadata can't resolve the dist. With __version__ in
+    source, current_version must still answer (not None), so check_for_update keeps working."""
+    import genericmud
+
+    def _raise(_name):
+        raise self_update.PackageNotFoundError("genericmud")
+
+    monkeypatch.setattr(self_update, "_pkg_version", _raise)
+    assert self_update.current_version() == genericmud.__version__  # source wins, metadata unused

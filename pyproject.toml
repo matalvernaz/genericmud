@@ -2,9 +2,12 @@
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.version]
+path = "genericmud/__init__.py"
+
 [project]
 name = "genericmud"
-version = "0.6.2"
+dynamic = ["version"]
 description = "Accessible, cross-platform, self-voicing MUD client"
 readme = "README.md"
 requires-python = ">=3.12"

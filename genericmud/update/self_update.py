@@ -82,12 +82,21 @@ def _parse_version(tag: str) -> tuple[int, int, int] | None:
 
 
 def current_version() -> str | None:
-    """Installed version from package metadata, or ``None`` if it can't be determined.
+    """Installed version, preferring the source ``__version__`` over dist metadata.
 
-    The frozen build must be packaged with ``--copy-metadata genericmud`` for this to
-    resolve; if it isn't, we return ``None`` and :func:`check_for_update` reports no update
-    rather than guessing (better a missed prompt than a bogus one).
+    ``genericmud.__version__`` is baked into the frozen build unconditionally, so reading it
+    can't silently fail. ``importlib.metadata`` is only the fallback: it needs the dist-info
+    bundled (``--copy-metadata genericmud``) and returns nothing otherwise, which used to make
+    :func:`check_for_update` skip every check and report no update -- a silent dead updater.
+    (ficary's updater reads ``__version__`` for exactly this reason.) ``None`` only if both fail.
     """
+    try:
+        from genericmud import __version__
+
+        if __version__:
+            return __version__
+    except Exception:  # noqa: BLE001 - a broken import must fall through, never crash the check
+        pass
     try:
         return _pkg_version("genericmud")
     except PackageNotFoundError:
