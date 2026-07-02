@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from dataclasses import replace as dataclass_replace  # 'replace' the kwarg shadows it here
 from pathlib import Path
 
-from genericmud.packs.manifest import CODE_EXEC_DIALECTS, PackManifest, load_manifest
+from genericmud.packs.manifest import CODE_EXEC_DIALECTS, PackManifest, load_manifest, slugify
 
 
 class PackError(RuntimeError):
@@ -56,6 +56,7 @@ class PackStore:
         trust: bool = False,
         entry: str | None = None,
         origin: str | None = None,
+        pack_id: str | None = None,
     ) -> PackManifest:
         """Install a pack: a dir with ``pack.toml``, a bare script, or a ``.zip``.
 
@@ -64,13 +65,16 @@ class PackStore:
         back from auto-load on connect); pass ``trust=True`` to vouch for it now.
         ``entry`` picks the load script of a multi-file pack (relative to its root).
         ``origin`` records where the content came from (a URL) so the pack can be
-        re-fetched/updated later.
+        re-fetched/updated later. ``pack_id`` overrides the inferred id (slugified),
+        so a caller that knows the pack's real identity (a curated source) isn't stuck
+        with a temp-dir name like ``source``.
         """
         source = Path(source)
         if not source.exists():
             raise PackError(f"no such pack source: {source}")
         opts = {
-            "world": world, "replace": replace, "trust": trust, "entry": entry, "origin": origin,
+            "world": world, "replace": replace, "trust": trust, "entry": entry,
+            "origin": origin, "pack_id": pack_id,
         }
         if source.is_file() and source.suffix.lower() == ".zip":
             with tempfile.TemporaryDirectory() as tmp:
@@ -90,8 +94,11 @@ class PackStore:
         trust: bool,
         entry: str | None,
         origin: str | None,
+        pack_id: str | None = None,
     ) -> PackManifest:
         manifest = load_manifest(source, entry=entry)
+        if pack_id:  # a curated source knows the real id; don't inherit a temp-dir name
+            manifest = dataclass_replace(manifest, id=slugify(pack_id))
         if origin:
             manifest = dataclass_replace(manifest, origin=origin)
         index = self._load_index()

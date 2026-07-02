@@ -42,9 +42,11 @@ from genericmud.packs import (
     activate_world,
     detect_entry,
     entry_problem,
+    git_sources,
     known_muds,
     manifest_sources,
     setup_pack,
+    setup_pack_from_git,
     setup_pack_from_manifest,
     slugify,
     update_pack,
@@ -798,6 +800,20 @@ class VaultBrowserDialog(wx.Dialog):
         source = manifest_sources.for_labels(pack.mud, pack.name)
         if source is not None:  # served as an HTTP file tree (Mush-Z): sync it, don't fetch a zip
             return self._setup_from_manifest(source, pack)
+        git_source = git_sources.for_labels(pack.mud, pack.name)
+        if git_source is not None:  # installer wrapping a git repo (Erion): fetch the repo directly
+            self._status(f"Fetching {git_source.name} straight from its repository, no installer.")
+
+            def fetch(url, dest, **kwargs):
+                return vault.download(url, dest, progress=self._progress, **kwargs)
+
+            result = setup_pack_from_git(self._store, git_source, download=fetch, diag=self._diag)
+            if not self._store.is_trusted(result.manifest.id):
+                self._status(
+                    f"{git_source.name} is installed. Trust it in the Connect dialog so its "
+                    "sounds load when you connect."
+                )
+            return self._fill_world(result, pack.mud)
         pack_id = slugify(pack.name)
         if pack_id in {manifest.id for manifest in self._store.installed()}:
             self._status(f"{pack.name} is already installed; using the cached copy.")

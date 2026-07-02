@@ -16,11 +16,14 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from genericmud.config.worlds import World
-from genericmud.packs import manifest_sync
+from genericmud.packs import manifest_sync, vault
+from genericmud.packs.git_sources import GitSource
 from genericmud.packs.manifest import CODE_EXEC_DIALECTS, DIALECT_BY_SUFFIX, PackManifest
 from genericmud.packs.manifest_sources import ManifestSource
 from genericmud.packs.store import PackError, PackStore
 from genericmud.packs.world_import import world_from_pack
+
+_GIT_ARCHIVE_MAX_BYTES = 3 * 1000 * 1000 * 1000  # a full pack repo (Erion ~1 GB); generous cap
 
 # Conventional load-script filenames, best-first.
 _ENTRY_PREFERENCE = ("main.set", "main.lua", "main.xml", "start.set", "startup.set", "load.set")
@@ -209,6 +212,46 @@ def setup_pack_from_manifest(
     manifest = store.register(source.id, origin=source.manifest_url)
     world = replace(source.world)  # a copy; the caller persists/edits it, don't mutate the registry
     store.enable(manifest.id, world.name)
+    return SetupResult(manifest=manifest, world=world, enabled_for=world.name)
+
+
+def setup_pack_from_git(
+    store: PackStore, source: GitSource, *, download=None, diag=None
+) -> SetupResult:
+    """Install/update a pack straight from its own git repo, skipping the installer.
+
+    Downloads the repo archive (trying ``master`` then ``main``) and hands the ``.zip`` to
+    :meth:`PackStore.install`, which extracts it through the guarded extractor, strips the
+    ``<repo>-<branch>`` wrapper dir, and installs it under the source's curated ``id`` -- so no
+    installer ``.exe`` is fetched and the pack gets a real id/world/origin instead of the temp-dir
+    ``source``. Like any MUSHclient pack it is NOT auto-trusted; the caller trusts it (the Connect
+    dialog checkbox) before it auto-loads. ``download`` is injectable for tests; it must match
+    :func:`vault.download`'s ``(url, dest, *, max_bytes=...)`` shape. Re-running is the update path.
+    """
+    fetch = download or vault.download
+    urls = vault.git_archive_urls(source.repo_url)
+    if not urls:
+        raise PackError(f"{source.name}: can't derive an archive URL from {source.repo_url!r}")
+    with tempfile.TemporaryDirectory() as tmp:
+        archive = Path(tmp) / "repo.zip"
+        errors: list[str] = []
+        for url in urls:  # master, then main
+            try:
+                fetch(url, archive, max_bytes=_GIT_ARCHIVE_MAX_BYTES)
+                break
+            except Exception as exc:  # noqa: BLE001 - wrong branch / not found -> try the next url
+                errors.append(f"{url}: {type(exc).__name__}: {exc}")
+        else:
+            raise PackError(
+                f"couldn't fetch {source.name} from {source.repo_url} ({'; '.join(errors)})"
+            )
+        manifest = store.install(
+            archive, replace=True, entry=source.entry, origin=source.repo_url, pack_id=source.id
+        )
+    world = replace(source.world)  # a copy; the caller persists/edits it, don't mutate the registry
+    store.enable(manifest.id, world.name)
+    if diag is not None:
+        diag.event("pack.git", id=source.id, repo=source.repo_url, entry=source.entry)
     return SetupResult(manifest=manifest, world=world, enabled_for=world.name)
 
 
