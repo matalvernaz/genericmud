@@ -51,6 +51,7 @@ from genericmud.packs import (
     vault,
     world_from_pack,
 )
+from genericmud.packs.manifest import CODE_EXEC_DIALECTS
 from genericmud.packs.store import extract_pack
 from genericmud.session.crashlog import install_loop_exception_handler
 from genericmud.session.credentials import PlaintextCredentialStore
@@ -324,7 +325,15 @@ class SessionPanel(wx.Panel):
 
 
 class ConnectDialog(wx.Dialog):
-    def __init__(self, parent: wx.Window, saved: list[World], initial: World | None = None):
+    def __init__(
+        self,
+        parent: wx.Window,
+        saved: list[World],
+        initial: World | None = None,
+        *,
+        offer_trust: bool = False,
+        save_default: bool = False,
+    ):
         super().__init__(parent, title="Connect to a MUD")
         self._saved = saved
         grid = wx.FlexGridSizer(0, 2, 6, 6)
@@ -353,7 +362,21 @@ class ConnectDialog(wx.Dialog):
         grid.Add((0, 0))
         self._save = wx.CheckBox(self, label="Sa&ve this world")
         self._save.SetName("Save this world")
+        self._save.SetValue(save_default)
         grid.Add(self._save, 1, wx.EXPAND)
+
+        # Offered only for a freshly-installed code-executing pack (MUSHclient): it stays silent
+        # until trusted, so this is where the user consents to run it. Checked by default -- they
+        # chose to install it -- but visible and clearable, unlike a silent auto-trust.
+        self._trust: wx.CheckBox | None = None
+        if offer_trust:
+            grid.Add((0, 0))
+            self._trust = wx.CheckBox(
+                self, label="&Trust this soundpack's scripts so its sounds play"
+            )
+            self._trust.SetName("Trust this soundpack's scripts so its sounds play")
+            self._trust.SetValue(True)
+            grid.Add(self._trust, 1, wx.EXPAND)
 
         sizer = wx.BoxSizer(wx.VERTICAL)
         sizer.Add(grid, 1, wx.EXPAND | wx.ALL, 8)
@@ -402,6 +425,10 @@ class ConnectDialog(wx.Dialog):
 
     def should_save(self) -> bool:
         return self._save.GetValue()
+
+    def should_trust(self) -> bool:
+        """True if the trust checkbox was offered and left checked (else False)."""
+        return self._trust is not None and self._trust.GetValue()
 
 
 class PackManagerDialog(wx.Dialog):
@@ -1255,24 +1282,47 @@ class GenericMudFrame(wx.Frame):
             wx.CallAfter(self._finish_setup, result)
 
     def _finish_setup(self, result) -> None:
-        """Create the pack's world and offer to connect; only open the form if details are
-        missing. A complete world (from the pack or the known-MUD table) is saved and bound,
-        then a Yes/No prompt connects -- no form to fill for the common case."""
+        """Create the pack's world and confirm the connection; only open the full form if
+        details are missing. A complete world (from the pack or the known-MUD table) is saved
+        and bound, then the Connect dialog confirms before connecting -- prefilled, so the common
+        case is a single Enter, but the user is still asked rather than dropped into a session."""
         world = result.world
         if world is not None and world.host and world.port and self._pack_bundles_sounds(result):
-            worlds = [w for w in load_worlds() if w.name != world.name] + [world]
-            save_worlds(worlds)
             self._packs.enable(result.manifest.id, world.name)
-            # Connect straight away with a spoken confirmation, not a modal Yes/No: a MessageBox
-            # here COM-crashed against the screen reader (an input-synchronous callout). The world
-            # is saved, so anyone who didn't want to connect can just close the tab (Ctrl+W).
-            self.announce(f"Installed the {world.name} soundpack. Connecting to {world.name}.")
-            self.open_session(world)
+            self._confirm_and_connect(world, result.manifest)
             return
         # No bundled audio (e.g. Cosmic Rage streams its cues and ships sounds as a separate
         # download), or no connection details: open the dialog so the Sounds folder / host can
         # be set before connecting -- otherwise it would connect silent.
         self._finish_setup_via_dialog(result)
+
+    def _confirm_and_connect(self, world: World, manifest) -> None:
+        """Save the pack's world, then confirm the connection in the Connect dialog instead of
+        connecting unprompted. A code-executing pack (MUSHclient, e.g. Erion) is offered trust in
+        the same dialog: it stays silent until trusted, so without this it installs and connects
+        but plays nothing. The world is persisted first, so cancelling still leaves it ready under
+        the Connect menu."""
+        needs_trust = (
+            manifest.dialect in CODE_EXEC_DIALECTS and not self._packs.is_trusted(manifest.id)
+        )
+        save_worlds([w for w in load_worlds() if w.name != world.name] + [world])
+        dialog = ConnectDialog(
+            self, load_worlds(), initial=world, offer_trust=needs_trust, save_default=True
+        )
+        try:
+            if dialog.ShowModal() != wx.ID_OK:
+                self.announce(
+                    f"{world.name} is set up. Connect to it any time from the Connect menu."
+                )
+                return
+            if dialog.should_trust():
+                self._packs.trust(manifest.id)  # consent to run its scripts, so its sounds load
+            chosen = dialog.get_world()
+            if dialog.should_save():
+                save_worlds([w for w in load_worlds() if w.name != chosen.name] + [chosen])
+            self.open_session(chosen)
+        finally:
+            dialog.Destroy()
 
     def _pack_bundles_sounds(self, result) -> bool:
         """True if the installed pack carries its own audio. A pack with none (Cosmic Rage
@@ -1297,13 +1347,19 @@ class GenericMudFrame(wx.Frame):
                 f"The {result.world.name} soundpack installed. It ships no sounds of its own — "
                 "set the Sounds folder to your local sound files, then connect."
             )
-        connect = ConnectDialog(self, load_worlds(), initial=result.world)
+        needs_trust = (
+            result.manifest.dialect in CODE_EXEC_DIALECTS
+            and not self._packs.is_trusted(result.manifest.id)
+        )
+        connect = ConnectDialog(self, load_worlds(), initial=result.world, offer_trust=needs_trust)
         if connect.ShowModal() == wx.ID_OK:
             world = connect.get_world()
             if world.host:
                 worlds = [w for w in load_worlds() if w.name != world.name] + [world]
                 save_worlds(worlds)
                 self._packs.enable(result.manifest.id, world.name)  # (re)bind to final name
+                if connect.should_trust():
+                    self._packs.trust(result.manifest.id)
                 self.announce(f"Connecting to {world.name}.")
                 self.open_session(world)
         connect.Destroy()

@@ -373,3 +373,31 @@ def test_regex_attr_and_native_require_do_not_kill_the_plugin(tmp_path):
     pack.load_source(world)  # must not raise (ParseError) or abort on the requires
     engine.process_line(Line("Goblin bonks you"))
     assert sink.sent == ["ouch"]  # the named-group trigger registered and fired
+
+
+def test_trusted_pack_resolves_and_plays_a_getinfo_anchored_sound(tmp_path):
+    """The Erion 'no sound' case: once trusted and loaded, a Sound(GetInfo(67).."sounds/x") cue
+    must resolve to the bundled file and play. @sppath defaults to the pack dir, so resolution
+    works even though the pack hardcodes a world-relative path. (In 0.6.1 the pack never got this
+    far -- it was skipped as untrusted; the fix is to let the user trust it at setup.)"""
+    (tmp_path / "sounds").mkdir()
+    (tmp_path / "sounds" / "hit.wav").write_bytes(b"RIFFfake")
+    world_file = tmp_path / "erion.mcl"
+    world_file.write_text(
+        '<?xml version="1.0"?>\n'
+        '<muclient><world site="erionmud.com" port="1234" name="Erion"/>\n'
+        '<triggers><trigger enabled="y" match="You are hit" send_to="12" sequence="100">\n'
+        '<send>Sound(GetInfo(67) .. "sounds/hit.wav")</send>\n'
+        "</trigger></triggers></muclient>\n",
+        encoding="latin-1",
+    )
+    sink = RecordingSink()
+    engine = AutomationEngine(sink)
+    MushclientPack(
+        ScriptApi(engine, source="erion", base_dir=str(tmp_path)), full_stdlib=True
+    ).load_file(str(world_file))
+    assert engine.get_var("sppath") == str(tmp_path)  # sppath defaulted to the pack dir
+    engine.process_line(Line("You are hit hard!"))
+    assert len(sink.played) == 1
+    assert sink.played[0]["file"] == os.path.join(str(tmp_path), "sounds", "hit.wav")
+    assert os.path.exists(sink.played[0]["file"])
