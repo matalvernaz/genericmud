@@ -47,3 +47,14 @@ def test_is_snoozed():
 def test_snooze_timestamp():
     now = datetime(2026, 1, 1, tzinfo=UTC)
     assert datetime.fromisoformat(snooze_timestamp(now)) == now + SNOOZE_DURATION
+
+
+def test_snoozed_version_roundtrips(tmp_path):
+    """The tag a snooze was set on persists, so the suppression can be scoped to that version
+    (a newer release must still prompt even while an older one is snoozed)."""
+    path = tmp_path / "update-prefs.toml"
+    prefs = UpdatePrefs(snoozed_until="2030-01-01T00:00:00+00:00", snoozed_version="v0.6.2")
+    save_prefs(prefs, path)
+    loaded = load_prefs(path)
+    assert loaded.snoozed_version == "v0.6.2"
+    assert loaded.snoozed_until == "2030-01-01T00:00:00+00:00"

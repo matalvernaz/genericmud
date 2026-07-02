@@ -1145,6 +1145,11 @@ class GenericMudFrame(wx.Frame):
         """
         if manual:
             self.announce("Checking for updates.")
+        if self._diag is not None:
+            # Trace what the build thinks it is + that the check ran, so "the updater can't
+            # detect the new version" is answerable from the log instead of by inference.
+            self._diag.event("update.check", phase="start", manual=manual,
+                             current=self_update.current_version() or "")
         _run_async(
             self_update.check_for_update,
             lambda outcome: self._on_update_checked(outcome, manual=manual),
@@ -1152,6 +1157,7 @@ class GenericMudFrame(wx.Frame):
 
     def _on_update_checked(self, outcome, *, manual: bool) -> None:
         if isinstance(outcome, Exception):
+            self._log_update_check("error", error=repr(outcome))
             if manual:
                 wx.MessageBox(
                     f"Couldn't check for updates: {outcome}", "Check for Updates",
@@ -1159,6 +1165,7 @@ class GenericMudFrame(wx.Frame):
                 )
             return
         if outcome is None:
+            self._log_update_check("up_to_date")
             if manual:
                 self.announce("genericMud is up to date.")
                 wx.MessageBox(
@@ -1166,9 +1173,22 @@ class GenericMudFrame(wx.Frame):
                 )
             return
         prefs = load_prefs()
-        if not manual and (outcome["tag"] == prefs.skipped_version or is_snoozed(prefs)):
-            return  # user asked not to be reminded about this release yet
+        # A snooze suppresses only the version it was set on (scoped): a newer release than the
+        # one you clicked "Remind me later" on must still prompt. Skip is likewise per-version.
+        # A manual check ignores both -- asking explicitly overrides any earlier deferral.
+        snoozed_this = is_snoozed(prefs) and outcome["tag"] == prefs.snoozed_version
+        if not manual and (outcome["tag"] == prefs.skipped_version or snoozed_this):
+            self._log_update_check(
+                "suppressed", tag=outcome["tag"],
+                reason="skipped" if outcome["tag"] == prefs.skipped_version else "snoozed",
+            )
+            return
+        self._log_update_check("offer", tag=outcome["tag"])
         self._offer_update(outcome)
+
+    def _log_update_check(self, decision: str, **fields: object) -> None:
+        if self._diag is not None:
+            self._diag.event("update.check", phase="result", decision=decision, **fields)
 
     def _offer_update(self, info: dict) -> None:
         current = self_update.current_version() or "an earlier version"
@@ -1183,6 +1203,7 @@ class GenericMudFrame(wx.Frame):
         elif action == _ID_SNOOZE:
             prefs = load_prefs()
             prefs.snoozed_until = snooze_timestamp()
+            prefs.snoozed_version = info["tag"]  # scope the snooze; a newer release still prompts
             save_prefs(prefs)
         elif action == _ID_SKIP:
             prefs = load_prefs()
@@ -1389,7 +1410,9 @@ def run(args, recovery=None) -> None:
     if recovery is not None:  # a prior in-app update was rolled back at startup; tell the user
         wx.CallAfter(frame.show_recovery, recovery)
     prefs = load_prefs()
-    if self_update.is_frozen() and prefs.check_enabled and not is_snoozed(prefs):
+    # Always run the check when enabled; a snooze no longer blocks it (it would hide a newer
+    # release too). Suppression is applied per-version at the offer stage in _on_update_checked.
+    if self_update.is_frozen() and prefs.check_enabled:
         frame.check_for_updates(manual=False)
     wx_app.MainLoop()
     loop.call_soon_threadsafe(loop.stop)

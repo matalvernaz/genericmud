@@ -25,6 +25,7 @@ SNOOZE_DURATION = timedelta(days=3)  # how long "Remind me later" defers the nex
 class UpdatePrefs:
     check_enabled: bool = True
     snoozed_until: str | None = None  # ISO 8601 UTC timestamp
+    snoozed_version: str | None = None  # tag the snooze was set on; scopes it to that release
     skipped_version: str | None = None  # a release tag, e.g. "v0.6.0"
     last_check: str | None = None  # ISO 8601 UTC timestamp, for diagnostics
 
@@ -41,6 +42,7 @@ def load_prefs(path: Path | None = None) -> UpdatePrefs:
     return UpdatePrefs(
         check_enabled=bool(data.get("check_enabled", True)),
         snoozed_until=data.get("snoozed_until"),
+        snoozed_version=data.get("snoozed_version"),
         skipped_version=data.get("skipped_version"),
         last_check=data.get("last_check"),
     )
@@ -50,7 +52,7 @@ def save_prefs(prefs: UpdatePrefs, path: Path | None = None) -> None:
     target = path or prefs_path()
     target.parent.mkdir(parents=True, exist_ok=True)
     lines = ["[update]", f"check_enabled = {'true' if prefs.check_enabled else 'false'}"]
-    for key in ("snoozed_until", "skipped_version", "last_check"):
+    for key in ("snoozed_until", "snoozed_version", "skipped_version", "last_check"):
         value = getattr(prefs, key)
         if value:
             lines.append(f"{key} = {_quote(str(value))}")
