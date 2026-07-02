@@ -1008,6 +1008,77 @@ class UpdateNotificationDialog(wx.Dialog):
         return button
 
 
+class UpdateProgressDialog(wx.Dialog):
+    """Self-update progress: a status log, a gauge, spoken 25% milestones, and Cancel.
+
+    Deliberately a plain owned dialog, NOT wx.ProgressDialog: on MSW that runs a native
+    task dialog on its own thread and PD_AUTO_HIDE dismisses it the instant Update()
+    reaches the maximum. Tearing that window down while the screen reader still has COM
+    calls in flight against it faulted the whole process (RPC_E_SERVER_DIED_DNE /
+    RPC_E_DISCONNECTED, then an access violation) right as extraction began. Keeping the
+    dialog on the main thread and destroying it only from _on_update_finished removes the
+    race entirely; VaultBrowserDialog survives far larger downloads with this same shape.
+
+    Cancel sets the shared event; the download worker notices at its next progress
+    callback. After the last callback (download done, extraction running) cancellation no
+    longer takes effect -- the old dialog had the same window, now stated instead of implied.
+    """
+
+    def __init__(self, parent: wx.Window, tag: str, announce, cancelled: threading.Event) -> None:
+        super().__init__(parent, title="Updating genericMud")
+        self._announce = announce
+        self._cancelled = cancelled
+        self._last_milestone = 0  # throttle spoken download progress to 25% steps
+        self._setup_announced = False  # one-time "setting up" line after the last callback
+
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        sizer.Add(wx.StaticText(self, label="S&tatus:"), 0, wx.LEFT | wx.TOP, 8)
+        self._status_log = wx.TextCtrl(
+            self, style=wx.TE_MULTILINE | wx.TE_READONLY, size=(460, 90)
+        )
+        self._status_log.SetName("Status")
+        sizer.Add(self._status_log, 1, wx.EXPAND | wx.ALL, 8)
+
+        self._gauge = wx.Gauge(self, range=100)
+        sizer.Add(self._gauge, 0, wx.EXPAND | wx.ALL, 8)
+
+        self._cancel_btn = wx.Button(self, wx.ID_CANCEL, "&Cancel")
+        self._cancel_btn.Bind(wx.EVT_BUTTON, self._on_cancel)
+        sizer.Add(self._cancel_btn, 0, wx.ALL, 8)
+        self.Bind(wx.EVT_CLOSE, self._on_cancel)
+        self.SetSizerAndFit(sizer)
+
+        self._status(f"Downloading genericMud {tag}.")
+
+    def _status(self, message: str) -> None:  # main thread only
+        self._status_log.AppendText(message + "\n")
+        self._announce(message)
+
+    def pump(self, done: int, total: int) -> None:  # main thread, via wx.CallAfter
+        """Reflect download progress; total may be 0 when no size was advertised."""
+        if total <= 0:
+            self._gauge.Pulse()
+            return
+        pct = min(done * 100 // total, 100)
+        self._gauge.SetValue(pct)
+        milestone = pct // 25 * 25
+        if pct < 100 and milestone > self._last_milestone:
+            self._last_milestone = milestone
+            self._status(f"Downloaded {milestone} percent.")
+        elif pct >= 100 and not self._setup_announced:
+            self._setup_announced = True
+            self._status("Download finished. Setting up the update.")
+
+    def _on_cancel(self, event) -> None:
+        if isinstance(event, wx.CloseEvent) and event.CanVeto():
+            event.Veto()  # the frame destroys us once the worker unwinds; don't die early
+        if self._cancelled.is_set():
+            return
+        self._cancelled.set()
+        self._cancel_btn.Disable()
+        self._status("Cancelling. This takes effect at the next download step.")
+
+
 class GenericMudFrame(wx.Frame):
     def __init__(self, loop: asyncio.AbstractEventLoop, keymap: dict):
         super().__init__(None, title="genericMud", size=(900, 600))
@@ -1228,11 +1299,13 @@ class GenericMudFrame(wx.Frame):
 
     def _perform_update(self, info: dict) -> None:
         self._update_cancelled = threading.Event()
-        self._update_progress_dialog = wx.ProgressDialog(
-            "Updating genericMud", "Downloading the update…", maximum=100, parent=self,
-            style=wx.PD_APP_MODAL | wx.PD_AUTO_HIDE | wx.PD_CAN_ABORT,
+        self._update_progress_dialog = UpdateProgressDialog(
+            self, info["tag"], self.announce, self._update_cancelled
         )
-        self.announce(f"Downloading genericMud {info['tag']}.")
+        # Owner-disabled instead of PD_APP_MODAL: the frame takes no input while the
+        # dialog is up, without wx.ProgressDialog's separate-thread native machinery.
+        self.Disable()
+        self._update_progress_dialog.Show()
 
         def work():
             return self_update.download_and_replace(info, progress_cb=self._on_update_progress)
@@ -1241,26 +1314,23 @@ class GenericMudFrame(wx.Frame):
 
     def _on_update_progress(self, done: int, total: int) -> None:  # background thread
         # Raising here aborts the download; download_and_replace cleans up and re-raises, so
-        # _on_update_finished sees the cancellation. The Cancel button is read on the main
-        # thread in _pump_update_progress, which sets the flag this checks.
+        # _on_update_finished sees the cancellation. The Cancel button sets the flag this
+        # checks, on the main thread, in UpdateProgressDialog._on_cancel.
         if self._update_cancelled.is_set():
             raise RuntimeError("Update cancelled by user.")
-        pct = min(int(done * 100 / total), 100) if total else 0
-        wx.CallAfter(self._pump_update_progress, pct)
+        wx.CallAfter(self._pump_update_progress, done, total)
 
-    def _pump_update_progress(self, pct: int) -> None:  # main thread
-        if not self._alive:
+    def _pump_update_progress(self, done: int, total: int) -> None:  # main thread
+        if not self._alive or self._update_progress_dialog is None:
             return
-        dialog = self._update_progress_dialog
-        if dialog is None:
-            return
-        kept, _ = dialog.Update(pct)
-        if not kept:  # user pressed Cancel
-            self._update_cancelled.set()
+        self._update_progress_dialog.pump(done, total)
 
     def _on_update_finished(self, outcome) -> None:
         if not self._alive:
             return  # the frame was closed while the update was downloading
+        # Re-enable before destroying the owned dialog: destroying the focused window while
+        # its owner is still disabled makes Windows throw focus to another application.
+        self.Enable()
         if self._update_progress_dialog is not None:
             self._update_progress_dialog.Destroy()
             self._update_progress_dialog = None
@@ -1268,7 +1338,12 @@ class GenericMudFrame(wx.Frame):
             if self._update_cancelled.is_set():
                 self.announce("Update cancelled.")
             else:
-                wx.MessageBox(f"Update failed: {outcome}", "Update", wx.OK | wx.ICON_ERROR)
+                # Defer off the dialog-teardown stack: opening a window while the screen
+                # reader still has input-synchronous queries against the closing dialog is
+                # the 0x8001010d trap (see _on_browse_online).
+                wx.CallAfter(
+                    wx.MessageBox, f"Update failed: {outcome}", "Update", wx.OK | wx.ICON_ERROR
+                )
             return
         # Success: the helper is blocked on our PID; it overlays the files and relaunches us
         # once we exit.
