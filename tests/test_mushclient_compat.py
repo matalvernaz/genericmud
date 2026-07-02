@@ -404,3 +404,72 @@ def test_trusted_pack_resolves_and_plays_a_getinfo_anchored_sound(tmp_path):
     # (it deliberately avoids os.path.normpath), so an os.path.join here would mismatch on Windows.
     assert Path(sink.played[0]["file"]) == tmp_path / "sounds" / "hit.wav"
     assert os.path.exists(sink.played[0]["file"])
+
+
+def _erion_like_pack(root):
+    """A minimal Erion-shaped pack: an audio-engine plugin exposing play() -> audio.play(),
+    and a dispatcher that reaches it via ppi (MSDP -> ppi.Load -> LuaAudio -> audio.play)."""
+    (root / "sounds").mkdir()
+    (root / "sounds" / "hit.ogg").write_bytes(b"OggS-fake")
+    (root / "engine.xml").write_text(
+        '<muclient><plugin id="aud123"/><script><![CDATA[\n'
+        'local ppi = require "ppi"\n'
+        'ppi.Expose("play", function(f, loop, pan, vol) return audio.play(f, loop, pan, vol) end)\n'
+        "]]></script></muclient>",
+        encoding="latin-1",
+    )
+    (root / "dispatch.xml").write_text(
+        '<muclient><plugin id="disp"/><script><![CDATA[\n'
+        'local PPI = require "ppi"\n'
+        'local snd = PPI.Load("aud123")\n'
+        'function boom() snd.play(GetInfo(67) .. "sounds/hit.ogg", 0, 0, 80) end\n'
+        "]]></script>"
+        '<triggers><trigger enabled="y" match="You are hit" send_to="12" script="boom"'
+        ' sequence="50"/></triggers></muclient>',
+        encoding="latin-1",
+    )
+    world = root / "w.mcl"
+    world.write_text(
+        '<?xml version="1.0"?><muclient>'
+        '<world site="erionmud.com" port="1234" name="Erion"/>'
+        '<include name="engine.xml"/><include name="dispatch.xml"/></muclient>',
+        encoding="latin-1",
+    )
+    return world
+
+
+def test_audio_play_via_ppi_chain_reaches_the_sink(tmp_path):
+    """The Erion 'triggers fire but nothing plays' bug: game cues route through audio.play()
+    (bass), not Sound(), and reach it via ppi. gm must shim audio.play onto the ScriptApi or the
+    cue is swallowed by the black-hole even though the pack loads (MSDP -> ppi -> LuaAudio)."""
+    world = _erion_like_pack(tmp_path)
+    sink = RecordingSink()
+    engine = AutomationEngine(sink)
+    MushclientPack(
+        ScriptApi(engine, source="erion", base_dir=str(tmp_path)), full_stdlib=True
+    ).load_file(str(world))
+    engine.process_line(Line("You are hit for 10 damage"))
+    assert len(sink.played) == 1
+    assert Path(sink.played[0]["file"]) == tmp_path / "sounds" / "hit.ogg"
+    assert sink.played[0]["gain"] == 0.8  # vol 80 -> gain 0.8
+    assert sink.played[0]["loop"] is False
+
+
+def test_audio_shim_loop_and_stop(tmp_path):
+    """audio.play(file, 1) loops (music); audio.stop(id) stops that cue's channel."""
+    (tmp_path / "m.ogg").write_bytes(b"OggS")
+    sink = RecordingSink()
+    engine = AutomationEngine(sink)
+    pack = MushclientPack(
+        ScriptApi(engine, source="erion", base_dir=str(tmp_path)), full_stdlib=True
+    )
+    pack.load_source(
+        '<muclient><plugin id="p"/><script><![CDATA[\n'
+        'audio.play(GetInfo(67) .. "m.ogg", 1)\n'  # explicit 1 -> looped
+        'local id = audio.play(GetInfo(67) .. "m.ogg", 0)\n'  # one-shot, capture its id
+        "audio.stop(id)\n"  # stop that specific cue -> api.stop(channel)
+        "]]></script></muclient>"
+    )
+    assert sink.played[0]["loop"] is True
+    assert sink.played[1]["loop"] is False
+    assert sink.stopped == ["erion-audio-2"]  # the second cue's channel, stopped by id

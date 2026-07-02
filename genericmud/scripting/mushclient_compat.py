@@ -36,6 +36,15 @@ _DEFAULT_TRIGGER_SEQUENCE = "100"
 
 _SOUND_CHANNEL = "sound"  # MUSHclient Sound() is a single-voice channel
 _VOLUME_MAX = 100.0  # MUSHclient volume is 0..100
+_PAN_MAX = 100.0  # bass/MUSHclient pan is -100..100; the SoundBus wants -1..1
+_AUDIO_CHANNEL_PREFIX = "erion-audio-"  # one bus channel per cue, so stop(id) can target it
+
+
+def _to_float(value: object) -> float | None:
+    try:
+        return float(value)  # lupa hands Lua numbers over as int/float; nil arrives as None
+    except (TypeError, ValueError):
+        return None
 # GetInfo() directory codes (app/config/world/plugin dirs). Real packs build sound paths
 # relative to the WORLD file's directory, so every dir code resolves to it (see _get_info).
 _DIR_INFO_CODES = frozenset({56, 60, 64, 66, 67})
@@ -63,6 +72,7 @@ class MushclientPack:
         # pack is user-vouched arbitrary code, so a missing hook is acceptable there.
         self._guard = ScriptGuard(install_hook, require_hook=not full_stdlib)
         self._install_api()
+        self._install_audio()
         # Hand each plugin our own ppi (its bundled ppi.lua needs package.seeall, which the
         # sandbox strips). Then make any still-unimplemented host name a "black hole" that is
         # callable AND indexable (returns itself) -- so Window/InfoBox/etc. we don't implement
@@ -131,6 +141,84 @@ class MushclientPack:
             world[name] = fn
             world[name.lower()] = fn
         g.world = world
+
+    def _install_audio(self) -> None:
+        """Provide the ``audio`` global that bass.dll-backed packs (Erion) play every cue through.
+
+        Erion's sound engine (LuaAudio.xml) routes all game audio through ``audio.play`` /
+        ``audio.playDelay`` -- and MSDP dispatch reaches it via ppi -- NOT through ``Sound()``.
+        Without ``audio`` those calls hit the compat black-hole and no cue is ever heard, even
+        though the pack loads its triggers. Map the sound-producing methods onto the ScriptApi
+        (one bus channel per cue id, so ``stop(id)`` works); the DSP-only rest (pan/pitch/fades)
+        no-op via the table's ``__index``. ``play``'s loop flag is honoured only for an explicit
+        ``1`` (LuaAudio's music case) -- a stuck looping combat cue is worse than one that doesn't.
+        """
+        api = self._api
+        channels: dict[int, str] = {}
+        next_id = [1]
+
+        def _alloc() -> tuple[int, str]:
+            cue_id = next_id[0]
+            next_id[0] += 1
+            channel = f"{_AUDIO_CHANNEL_PREFIX}{cue_id}"
+            channels[cue_id] = channel
+            return cue_id, channel
+
+        def _gain(vol: object) -> float:
+            value = _to_float(vol)
+            return value / _VOLUME_MAX if value is not None else 1.0
+
+        def _pan(pan: object) -> float:
+            value = _to_float(pan)
+            return max(-1.0, min(1.0, value / _PAN_MAX)) if value is not None else 0.0
+
+        def _start(file: object, loop: object, pan: object, vol: object, delay: float) -> int:
+            if not str(file or ""):
+                return 0
+            cue_id, channel = _alloc()
+            gain, pan_value, looped = _gain(vol), _pan(pan), _to_float(loop) == 1
+
+            def fire() -> None:
+                api.play(str(file), channel=channel, gain=gain, pan=pan_value, loop=looped)
+
+            if delay > 0:
+                api.add_timer(delay, fire)
+            else:
+                fire()
+            return cue_id
+
+        def play(file: object = "", loop: object = 0, pan: object = None, vol: object = None,
+                 *_rest: object) -> int:
+            return _start(file, loop, pan, vol, 0.0)
+
+        def play_delay(file: object = "", delay: object = 0, pan: object = None, vol: object = None,
+                       *_rest: object) -> int:
+            return _start(file, 0, pan, vol, max(_to_float(delay) or 0.0, 0.0))
+
+        def play_delay_looped(file: object = "", delay: object = 0, pan: object = None,
+                              vol: object = None, *_rest: object) -> int:
+            return _start(file, 1, pan, vol, max(_to_float(delay) or 0.0, 0.0))
+
+        def stop(cue_id: object = 0, *_rest: object) -> None:
+            if _to_float(cue_id) == 0:  # bass convention: id 0 stops every cue
+                api.flush()
+                return
+            channel = channels.get(int(_to_float(cue_id) or 0))
+            if channel is not None:
+                api.stop(channel)
+
+        # A table backed by a no-op __index, so any bass method we don't implement
+        # (pan/freq/pitch/fadeout/slide*/dll) is safely callable and just does nothing.
+        audio = self._lua.eval("setmetatable({}, {__index = function() return function() end end})")
+        audio.play = play
+        audio.playLooped = lambda file="", *_a: _start(file, 1, None, None, 0.0)
+        audio.playDelay = play_delay
+        audio.playDelayLooped = play_delay_looped
+        audio.stop = stop
+        audio.free = lambda *_a: api.flush()
+        audio.getVolume = lambda *_a: _VOLUME_MAX
+        audio.isPlaying = lambda *_a: 0
+        self._lua.globals().audio = audio
 
     def _colour_note(self, *args: object) -> None:
         # ColourNote(fg, bg, text [, fg, bg, text]...) — concatenate the text parts.
