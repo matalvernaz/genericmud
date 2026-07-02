@@ -21,6 +21,12 @@ MANIFEST_NAME = "pack.toml"
 DIALECT_BY_SUFFIX = {".lua": "lua", ".set": "vipmud", ".xml": "mushclient", ".mcl": "mushclient"}
 KNOWN_DIALECTS = frozenset(DIALECT_BY_SUFFIX.values())
 
+# Dialects where "trusted" grants full-stdlib code execution (os/io) when a pack auto-loads on
+# connect. Native Lua and VIPMud .set stay sandboxed even when trusted (I/O is confined), so only
+# MUSHclient carries this weight. Setup declines to auto-trust these; the store re-arms the vouch
+# when remote content is replaced under one (see PackStore.install).
+CODE_EXEC_DIALECTS = frozenset({"mushclient"})
+
 
 class UnknownDialect(ValueError):
     """A pack declares (or a bare file implies) a dialect we can't load."""

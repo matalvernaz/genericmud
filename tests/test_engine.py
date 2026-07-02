@@ -91,3 +91,44 @@ def test_var_and_gvar_fallback():
     assert engine.get_var("hp") == "42"
     engine.set_gvar("realm", "Erion")
     assert engine.get_var("realm") == "Erion"
+
+
+class _RaisingPattern:
+    """Stands in for a compiled pattern that blows the per-match timeout budget."""
+
+    pattern = "catastrophic"
+
+    def search(self, text, **kwargs):
+        raise TimeoutError("match budget exceeded")
+
+    def match(self, text, **kwargs):
+        raise TimeoutError("match budget exceeded")
+
+
+class _FakeDiag:
+    def __init__(self):
+        self.events = []
+
+    def event(self, stage, **fields):
+        self.events.append((stage, fields))
+
+
+def test_trigger_match_timeout_disables_and_traces():
+    engine = AutomationEngine(RecordingSink())
+    engine.diag = _FakeDiag()
+    engine.add_trigger("catastrophic", lambda ctx: None, source="evilpack")
+    engine._triggers[0].pattern = _RaisingPattern()
+    engine.process_line(Line("a line that makes it backtrack"))
+    assert engine._triggers[0].enabled is False  # disabled so it can't hang every future line
+    stages = [s for s, _ in engine.diag.events]
+    assert "trigger.timeout_disabled" in stages  # and the silence left a durable trace
+
+
+def test_alias_match_timeout_disables_and_traces():
+    engine = AutomationEngine(RecordingSink())
+    engine.diag = _FakeDiag()
+    engine.add_alias("catastrophic", lambda ctx: None, source="evilpack")
+    engine._aliases[0].pattern = _RaisingPattern()
+    engine.process_input("some input")
+    assert engine._aliases[0].enabled is False
+    assert "alias.timeout_disabled" in [s for s, _ in engine.diag.events]

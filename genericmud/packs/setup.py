@@ -17,7 +17,7 @@ from pathlib import Path
 
 from genericmud.config.worlds import World
 from genericmud.packs import manifest_sync
-from genericmud.packs.manifest import DIALECT_BY_SUFFIX, PackManifest
+from genericmud.packs.manifest import CODE_EXEC_DIALECTS, DIALECT_BY_SUFFIX, PackManifest
 from genericmud.packs.manifest_sources import ManifestSource
 from genericmud.packs.store import PackError, PackStore
 from genericmud.packs.world_import import world_from_pack
@@ -25,12 +25,6 @@ from genericmud.packs.world_import import world_from_pack
 # Conventional load-script filenames, best-first.
 _ENTRY_PREFERENCE = ("main.set", "main.lua", "main.xml", "start.set", "startup.set", "load.set")
 _MIN_NAMED_STEM = 4  # only match a script "named after the pack" if the stem is this long
-
-# Dialects where "trusted" grants full-stdlib code execution (os/io) on connect. Setting a pack
-# up -- especially a one-click vault download -- is a weak vouch, so these are NOT auto-trusted:
-# the user must consciously enable them in the Pack Manager. Sandboxed dialects (native Lua,
-# VIPMud .set) are safe to auto-trust; there "trusted" only means auto-run, I/O stays confined.
-_CODE_EXEC_DIALECTS = frozenset({"mushclient"})
 
 
 def _normalize_name(text: str) -> str:
@@ -156,7 +150,7 @@ def setup_pack(
     # Auto-trust the vouch -- but never a code-executing dialect (MUSHclient runs the full Lua
     # stdlib when trusted). A one-click vault download is too weak a vouch to grant os/io on
     # connect, so such packs install enabled-but-untrusted; the user trusts them deliberately.
-    if trust and manifest.dialect not in _CODE_EXEC_DIALECTS:
+    if trust and manifest.dialect not in CODE_EXEC_DIALECTS:
         store.trust(manifest.id)
     return SetupResult(manifest=manifest, world=world, enabled_for=enabled_for)
 
@@ -187,7 +181,7 @@ def update_pack(
 
 
 def setup_pack_from_manifest(
-    store: PackStore, source: ManifestSource, *, progress=None, download=None
+    store: PackStore, source: ManifestSource, *, progress=None, download=None, diag=None
 ) -> SetupResult:
     """Install or update a manifest-style pack (e.g. Mush-Z) by syncing its files in place.
 
@@ -196,12 +190,21 @@ def setup_pack_from_manifest(
     enables it for its curated world. Deliberately NOT auto-trusted: like any MUSHclient pack
     it runs its own Lua, so the caller must ``store.trust(id)`` before it auto-loads on connect.
     ``progress(done, total, relpath)`` reports per file; ``download`` is injectable for tests.
-    Re-running is the update path (same call, only changed files move).
+    ``diag`` (a DiagnosticLog or None) records the sync outcome so a partial install — files the
+    manifest listed that were rejected or failed to fetch — leaves a durable trace instead of a
+    silently sound-short pack. Re-running is the update path (same call, only changed files move).
     """
     kwargs = {"progress": progress}
     if download is not None:
         kwargs["download"] = download
-    manifest_sync.sync(source, store.pack_dir(source.id), **kwargs)
+    result = manifest_sync.sync(source, store.pack_dir(source.id), **kwargs)
+    if diag is not None:
+        diag.event(
+            "pack.sync", id=source.id, downloaded=result.downloaded,
+            skipped=result.skipped_unchanged, deleted=result.deleted,
+            rejected=len(result.rejected), failed=len(result.failed),
+            ok=result.ok, first_failed=(result.failed[0] if result.failed else ""),
+        )
     _write_pack_toml(store.pack_dir(source.id), source)
     manifest = store.register(source.id, origin=source.manifest_url)
     world = replace(source.world)  # a copy; the caller persists/edits it, don't mutate the registry

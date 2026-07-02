@@ -246,3 +246,10 @@ def test_file_write_close_persists_settings(tmp_path):
     pack = VipMudPack(ScriptApi(engine, source="vip", base_dir=str(tmp_path)))
     pack.load_source("#file 6 {Settings.set}\n#Write 6 99 1\n#Write 6 1 2\n#Close 6")
     assert _parse_vip_settings(settings.read_bytes()) == ["99", "1"]  # flushed back in format
+
+
+def test_gvar_sets_global_namespace_not_local():
+    sink, engine = _load("#GVAR realm {aetherius}")
+    assert engine.get_gvar("realm") == "aetherius"  # landed in the global map
+    assert "realm" not in engine._vars  # not the local map (#GVAR is not #VAR)
+    assert engine.get_var("realm") == "aetherius"  # @-reads still resolve it via fallback

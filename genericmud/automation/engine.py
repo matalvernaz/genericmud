@@ -230,6 +230,10 @@ class AutomationEngine:
                 match = rule.pattern.search(line.plain_text, **_MATCH_KWARGS)
             except _MatchTimeout:
                 rule.enabled = False  # a pattern that backtracks past the budget is disabled
+                if self.diag is not None:
+                    # A trigger silently disabling itself is a soundpack going quiet -- trace it.
+                    self.diag.event("trigger.timeout_disabled", source=rule.source or "?",
+                                    pattern=rule.pattern.pattern, line=line.plain_text)
                 continue
             if match is None:
                 continue
@@ -262,6 +266,9 @@ class AutomationEngine:
                 match = rule.pattern.match(text, **_MATCH_KWARGS)
             except _MatchTimeout:
                 rule.enabled = False  # a pattern that backtracks past the budget is disabled
+                if self.diag is not None:
+                    self.diag.event("alias.timeout_disabled", source=rule.source or "?",
+                                    pattern=rule.pattern.pattern, line=text)
                 continue
             if match is None:
                 continue

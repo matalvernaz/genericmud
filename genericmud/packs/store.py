@@ -18,10 +18,11 @@ import os
 import shutil
 import tempfile
 import zipfile
+from dataclasses import dataclass
 from dataclasses import replace as dataclass_replace  # 'replace' the kwarg shadows it here
 from pathlib import Path
 
-from genericmud.packs.manifest import PackManifest, load_manifest
+from genericmud.packs.manifest import CODE_EXEC_DIALECTS, PackManifest, load_manifest
 
 
 class PackError(RuntimeError):
@@ -96,6 +97,10 @@ class PackStore:
         index = self._load_index()
         if manifest.id in index and not replace:
             raise PackExists(f"pack {manifest.id!r} already installed; pass replace=True to update")
+        # Replacing a trusted code-executor's content over cleartext http invalidates the vouch:
+        # the user trusted the bytes they saw, not whatever an on-path attacker now serves. Drop
+        # trust so it must be re-granted before the new code auto-runs (see _revoke_stale_trust).
+        revoke_trust = self._replace_invalidates_trust(manifest, replace=replace)
 
         dest = self.packs_dir / manifest.id
         src, dst = source.resolve(), dest.resolve()
@@ -112,11 +117,27 @@ class PackStore:
 
         index[manifest.id] = manifest.to_dict()
         self._save_index(index)
+        if revoke_trust:
+            self.untrust(manifest.id)
         if world:
             self.enable(manifest.id, world)
-        if trust:
+        if trust:  # an explicit re-vouch (e.g. CLI --trust) still wins over the revoke above
             self.trust(manifest.id)
         return manifest
+
+    def _replace_invalidates_trust(self, manifest: PackManifest, *, replace: bool) -> bool:
+        """True if writing ``manifest``'s content now voids an existing trust grant.
+
+        Only when we are replacing an already-installed, currently-trusted, code-executing pack
+        whose content is being pulled from a cleartext-http origin -- the case where an on-path
+        attacker could swap the auto-running code out from under a stale vouch.
+        """
+        return (
+            replace
+            and manifest.dialect in CODE_EXEC_DIALECTS
+            and _is_cleartext_origin(manifest.origin)
+            and self.is_trusted(manifest.id)
+        )
 
     def register(self, pack_id: str, *, origin: str | None = None) -> PackManifest:
         """Record an already-populated ``packs_dir/<id>`` in the index without copying.
@@ -134,9 +155,14 @@ class PackStore:
             manifest = dataclass_replace(manifest, id=pack_id)
         if origin:
             manifest = dataclass_replace(manifest, origin=origin)
+        # Re-registering synced content is a replace; drop a now-stale trust the same way install
+        # does (a no-op on first register / an https origin, so routine updates keep working).
+        revoke_trust = self._replace_invalidates_trust(manifest, replace=True)
         index = self._load_index()
         index[manifest.id] = manifest.to_dict()
         self._save_index(index)
+        if revoke_trust:
+            self.untrust(manifest.id)
         return manifest
 
     def uninstall(self, pack_id: str) -> None:
@@ -243,7 +269,9 @@ _MAX_NEST_DEPTH = 2  # a pack nests at most one level: sounds.zip + scripts.zip 
 
 # Quotas so a malicious/broken pack zip can't fill the disk or OOM during install (this host
 # hard-reboots on OOM). Soundpacks can be large (Miriani bundles ~870 MB of audio), so the caps
-# are generous; a zip bomb blows past them by orders of magnitude.
+# are generous; a zip bomb blows past them by orders of magnitude. The total and member caps are
+# enforced across the WHOLE nested tree, not per archive -- a wrapper of N inner zips, each just
+# under a per-archive cap, must not sum to N times the limit on disk.
 _MAX_PACK_MEMBERS = 50_000
 _MAX_PACK_TOTAL_BYTES = 2 * 1024 * 1024 * 1024  # 2 GiB uncompressed, across the whole (nested) tree
 _MAX_PACK_FILE_BYTES = 1024 * 1024 * 1024  # 1 GiB per member
@@ -251,12 +279,25 @@ _MAX_COMPRESSION_RATIO = 200  # refuse a member that inflates >200x (audio never
 _RATIO_MIN_SIZE = 1_000_000  # only ratio-check members big enough to matter
 
 
-def _check_zip_quota(archive: zipfile.ZipFile) -> None:
-    """Reject an archive that would exhaust disk/memory before we extract anything."""
+@dataclass
+class _ExtractBudget:
+    """Remaining disk/inode headroom, drawn down across every archive in a nested tree.
+
+    A single ``_ExtractBudget`` threads through :func:`extract_pack`'s recursion, so the byte
+    and member caps bound the whole expanded tree rather than resetting per archive (the gap a
+    wrapper-of-zip-bombs would otherwise walk through).
+    """
+
+    bytes_left: int = _MAX_PACK_TOTAL_BYTES
+    members_left: int = _MAX_PACK_MEMBERS
+
+
+def _check_zip_quota(archive: zipfile.ZipFile, budget: _ExtractBudget) -> None:
+    """Draw one archive's members against ``budget``; raise before extracting if it overruns."""
     members = archive.infolist()
-    if len(members) > _MAX_PACK_MEMBERS:
-        raise PackError(f"pack has too many files ({len(members)} > {_MAX_PACK_MEMBERS})")
-    total = 0
+    budget.members_left -= len(members)
+    if budget.members_left < 0:
+        raise PackError(f"pack has too many files (over {_MAX_PACK_MEMBERS} across the tree)")
     for info in members:
         if info.file_size > _MAX_PACK_FILE_BYTES:
             raise PackError(f"pack member too large: {info.filename} ({info.file_size} bytes)")
@@ -266,29 +307,42 @@ def _check_zip_quota(archive: zipfile.ZipFile) -> None:
             and info.file_size / info.compress_size > _MAX_COMPRESSION_RATIO
         ):
             raise PackError(f"pack member has a bomb-like compression ratio: {info.filename}")
-        total += info.file_size
-        if total > _MAX_PACK_TOTAL_BYTES:
-            raise PackError("pack uncompressed size exceeds the limit")
+        budget.bytes_left -= info.file_size
+        if budget.bytes_left < 0:
+            raise PackError("pack uncompressed size exceeds the limit (across the nested tree)")
 
 
-def extract_pack(zip_path: str | Path, dest: str | Path, *, _depth: int = 0) -> None:
+def extract_pack(
+    zip_path: str | Path,
+    dest: str | Path,
+    *,
+    _depth: int = 0,
+    _budget: _ExtractBudget | None = None,
+) -> None:
     """Extract a pack zip into ``dest``, descending into any nested zips.
 
     Some packs (e.g. Miriani) ship a wrapper zip holding a separate sounds zip and scripts
     zip rather than the files directly; without descending, no script is found. Each nested
     zip is expanded into a sibling folder named after it and then removed, so the tree holds
     files, not archives. CPython sanitises member paths on extract (no zip-slip); a quota check
-    (:func:`_check_zip_quota`) refuses a decompression bomb before any bytes are written.
+    (:func:`_check_zip_quota`) refuses a decompression bomb before any bytes are written, and a
+    single :class:`_ExtractBudget` is carried through the recursion so the caps bound the whole
+    tree -- not each archive independently.
     """
     dest = Path(dest)
+    # Read the caps at call time (not the dataclass field defaults, frozen at class creation) so
+    # they stay tunable/monkeypatchable; the same budget object then threads through the recursion.
+    budget = _budget or _ExtractBudget(
+        bytes_left=_MAX_PACK_TOTAL_BYTES, members_left=_MAX_PACK_MEMBERS
+    )
     with zipfile.ZipFile(zip_path) as archive:
-        _check_zip_quota(archive)
+        _check_zip_quota(archive, budget)
         archive.extractall(dest)
     if _depth >= _MAX_NEST_DEPTH:
         return
     for nested in sorted(dest.rglob("*.zip")):
         try:
-            extract_pack(nested, nested.with_suffix(""), _depth=_depth + 1)
+            extract_pack(nested, nested.with_suffix(""), _depth=_depth + 1, _budget=budget)
         except zipfile.BadZipFile:
             continue  # a stray non-zip named .zip: leave it, it just won't be a pack source
         nested.unlink(missing_ok=True)
@@ -308,6 +362,11 @@ def _pack_root(extracted: Path) -> Path:
         else:
             break
     return current
+
+
+def _is_cleartext_origin(origin: str | None) -> bool:
+    """True for an ``http://`` origin URL -- content pulled over an unauthenticated channel."""
+    return bool(origin) and origin.lower().startswith("http://")
 
 
 def _load_json(path: Path) -> dict:

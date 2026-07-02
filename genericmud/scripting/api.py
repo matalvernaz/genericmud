@@ -89,6 +89,19 @@ class ScriptApi:
             return  # refuse an oversized value (memory-exhaustion guard)
         self._engine.set_var(name, value)
 
+    def get_gvar(self, name: str) -> str:
+        return self._engine.get_gvar(name)
+
+    def set_gvar(self, name: str, value: object) -> None:
+        """Set a global (cross-session-persistent-namespace) variable; VIPMud ``#GVAR``.
+
+        Distinct from :meth:`set_var`: globals live in the engine's ``_gvars`` map, which
+        ``get_var`` falls back to, so an ``@name`` read still finds a gvar. Same size guard.
+        """
+        if len(str(value)) > _MAX_VAR_VALUE_LEN:
+            return
+        self._engine.set_gvar(name, value)
+
     # --- registration ---
 
     def add_trigger(self, pattern: str, callback: Callback, **opts: object) -> None:

@@ -298,9 +298,12 @@ class VipMudPack:
             self._api.speak(self._subst(args[0].text, wildcards))
         elif command in ("PLAY", "PLAYLOOP") and args:
             self._play(args, wildcards, loop=command == "PLAYLOOP")
-        elif command in ("VAR", "GVAR") and len(args) > 1:
+        elif command == "VAR" and len(args) > 1:
             name = self._subst(args[0].text, wildcards)  # @-indirect target supported
             self._api.set_var(name, self._subst(args[1].text, wildcards))
+        elif command == "GVAR" and len(args) > 1:  # global namespace; @-reads still resolve it
+            name = self._subst(args[0].text, wildcards)
+            self._api.set_gvar(name, self._subst(args[1].text, wildcards))
         elif command == "STOP":
             self._api.stop()
         elif command == "IF" and args:

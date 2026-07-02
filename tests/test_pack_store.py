@@ -217,3 +217,42 @@ def test_uninstall_clears_trust(tmp_path):
     store.uninstall("hunting")
     store.install(_bare_pack(tmp_path, "hunting.lua"))  # reinstall
     assert not store.is_trusted("hunting")  # trust didn't linger after uninstall
+
+
+# --- #4: trust does not survive a remote content replacement over cleartext http ---
+
+
+def _mush(tmp_path):
+    pack = tmp_path / "mush"
+    pack.mkdir()
+    (pack / "main.xml").write_text("<muclient></muclient>", encoding="utf-8")
+    return pack
+
+
+def test_replacing_trusted_mushclient_over_http_drops_trust(tmp_path):
+    store = PackStore(tmp_path / "store")
+    pack = _mush(tmp_path)
+    m = store.install(pack, entry="main.xml", origin="http://packs.example/x.zip")
+    store.trust(m.id)
+    store.install(pack, entry="main.xml", replace=True, origin="http://packs.example/x.zip")
+    assert not store.is_trusted(m.id)  # cleartext replace of code-exec content -> must re-vouch
+
+
+def test_replacing_trusted_mushclient_over_https_keeps_trust(tmp_path):
+    store = PackStore(tmp_path / "store")
+    pack = _mush(tmp_path)
+    m = store.install(pack, entry="main.xml", origin="https://packs.example/x.zip")
+    store.trust(m.id)
+    store.install(pack, entry="main.xml", replace=True, origin="https://packs.example/x.zip")
+    assert store.is_trusted(m.id)  # authenticated channel: routine updates keep trust
+
+
+def test_replacing_trusted_vipmud_over_http_keeps_trust(tmp_path):
+    store = PackStore(tmp_path / "store")
+    pack = tmp_path / "vip"
+    pack.mkdir()
+    (pack / "main.set").write_text("#TRIGGER hi {#say hi}", encoding="utf-8")
+    m = store.install(pack, entry="main.set", origin="http://packs.example/x.zip")
+    store.trust(m.id)
+    store.install(pack, entry="main.set", replace=True, origin="http://packs.example/x.zip")
+    assert store.is_trusted(m.id)  # sandboxed dialect: replacement can't grant new capability

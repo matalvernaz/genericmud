@@ -17,7 +17,7 @@ import socket
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 BASE_URL = "https://mudsoundpack.com"
 _USER_AGENT = "genericMud-soundpack-browser"
@@ -56,6 +56,28 @@ def _validate_url(url: str) -> None:
         ip = ipaddress.ip_address(info[4][0])
         if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
             raise BlockedUrl(f"refusing to fetch from a non-public address ({ip})")
+
+
+class _ValidatingRedirectHandler(HTTPRedirectHandler):
+    """Re-run the SSRF check on every redirect target, not just the entry URL.
+
+    urllib follows 3xx transparently, so a public URL that 302-redirects to ``file://``, a
+    private/loopback host, or the cloud metadata address would otherwise sail past the
+    entry-point :func:`_validate_url`. Validating each hop closes that bypass; a blocked
+    target raises :class:`BlockedUrl` out of the open call rather than being followed.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D102 - see class
+        _validate_url(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+_OPENER = build_opener(_ValidatingRedirectHandler)
+
+
+def _secure_urlopen(request, *args, **kwargs):
+    """``urlopen`` that re-validates every redirect hop (the default opener for real fetches)."""
+    return _OPENER.open(request, *args, **kwargs)
 
 # Clients genericMud can actually load (one of the three script dialects); others
 # (Mudlet, TinTin++, MonkeyTerm) are listed but flagged as unsupported.
@@ -104,8 +126,8 @@ def _text(fragment: str) -> str:
     return html.unescape(_TAG_RE.sub("", fragment)).strip()
 
 
-def _fetch(url: str, opener) -> str:
-    with opener(Request(url, headers={"User-Agent": _USER_AGENT})) as response:
+def _fetch(url: str, opener=None) -> str:
+    with (opener or _secure_urlopen)(Request(url, headers={"User-Agent": _USER_AGENT})) as response:
         return response.read().decode("utf-8", "replace")
 
 
@@ -118,7 +140,7 @@ def _kind(url: str) -> str:
     return "other"
 
 
-def list_packs(opener=urlopen) -> list[VaultPack]:
+def list_packs(opener=_secure_urlopen) -> list[VaultPack]:
     """Every pack in the vault catalogue (a `/packs.php` table row each)."""
     page = _fetch(f"{BASE_URL}/packs.php", opener)
     packs: list[VaultPack] = []
@@ -141,7 +163,7 @@ def list_packs(opener=urlopen) -> list[VaultPack]:
     return packs
 
 
-def pack_downloads(pack_id: int, opener=urlopen) -> list[VaultDownload]:
+def pack_downloads(pack_id: int, opener=_secure_urlopen) -> list[VaultDownload]:
     """Download links for a pack, best-first (vault mirror, then official, source)."""
     page = _fetch(f"{BASE_URL}/pack.php?id={pack_id}", opener)
     downloads: list[VaultDownload] = []
@@ -210,16 +232,18 @@ def git_archive_urls(clone_url: str) -> list[str]:
 
 
 def download(
-    url: str, dest_path: str | Path, opener=urlopen, progress=None, max_bytes=_MAX_DOWNLOAD_BYTES
+    url: str, dest_path: str | Path, opener=_secure_urlopen, progress=None,
+    max_bytes=_MAX_DOWNLOAD_BYTES,
 ) -> Path:
     """Stream ``url`` to ``dest_path`` in chunks; call ``progress(done, total)`` as it goes.
 
     ``max_bytes`` aborts with :class:`DownloadTooLarge` once exceeded — defaults to a 2 GiB cap
     (lowered when following an installer's source repo, e.g. Erion's ~1 GB). Real network fetches
-    are SSRF-checked by :func:`_validate_url`; an injected ``opener`` (a test double) skips that.
+    are SSRF-checked by :func:`_validate_url` on the entry URL and on every redirect hop (the
+    default :func:`_secure_urlopen`); an injected ``opener`` (a test double) skips both.
     """
     dest_path = Path(dest_path)
-    if opener is urlopen:
+    if opener is _secure_urlopen:
         _validate_url(url)
     request = Request(url, headers={"User-Agent": _USER_AGENT})
     with opener(request) as response:

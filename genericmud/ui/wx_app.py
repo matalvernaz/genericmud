@@ -51,6 +51,7 @@ from genericmud.packs import (
     vault,
     world_from_pack,
 )
+from genericmud.packs.store import extract_pack
 from genericmud.session.crashlog import install_loop_exception_handler
 from genericmud.session.credentials import PlaintextCredentialStore
 from genericmud.session.diaglog import DiagnosticLog, make_diagnostic_log
@@ -594,6 +595,11 @@ class PackManagerDialog(wx.Dialog):
             )
             return
 
+        if self._diag is not None:
+            self._diag.event(
+                "update.start", id=pack_id, origin=self._store.manifest(pack_id).origin
+            )
+
         def work():
             return update_pack(
                 self._store, pack_id,
@@ -610,8 +616,13 @@ class PackManagerDialog(wx.Dialog):
         if not self._alive:
             return  # the dialog was closed before the background update finished
         if isinstance(outcome, Exception):
+            if self._diag is not None:
+                self._diag.event("update.failed", id=pack_id, error=repr(outcome),
+                                 trace="".join(traceback.format_exception(outcome)))
             wx.MessageBox(f"Update failed: {outcome}", "Update", wx.OK | wx.ICON_ERROR)
         else:
+            if self._diag is not None:
+                self._diag.event("update.done", id=pack_id, dialect=outcome.manifest.dialect)
             wx.MessageBox(
                 f"Updated {pack_id}. Reconnect to apply.", "Update", wx.OK | wx.ICON_INFORMATION,
             )
@@ -781,8 +792,9 @@ class VaultBrowserDialog(wx.Dialog):
             extracted = tmp / slugify(pack.name)  # pack-named dir -> a stable, unique pack id
             self._status(f"Extracting {pack.name}.")
             try:
-                with zipfile.ZipFile(archive) as bundle:
-                    bundle.extractall(extracted)  # CPython sanitises member paths (no zip-slip)
+                # Route through the guarded extractor (zip-bomb quota + nested-zip descent), not a
+                # bare extractall -- this is the primary download path and must not bypass the cap.
+                extract_pack(archive, extracted)
             except zipfile.BadZipFile as exc:
                 raise PackError(
                     "the download wasn't a ZIP (the site may have served a web page)"
@@ -811,7 +823,9 @@ class VaultBrowserDialog(wx.Dialog):
         installed = source.id in {manifest.id for manifest in self._store.installed()}
         verb = "Updating" if installed else "Downloading"
         self._status(f"{verb} {source.name}. The first install fetches the whole pack.")
-        result = setup_pack_from_manifest(self._store, source, progress=self._sync_progress)
+        result = setup_pack_from_manifest(
+            self._store, source, progress=self._sync_progress, diag=self._diag
+        )
         if not self._store.is_trusted(result.manifest.id):
             self._status(
                 f"{source.name} is installed. Open Manage Soundpacks and trust it so its "
@@ -850,10 +864,9 @@ class VaultBrowserDialog(wx.Dialog):
             except Exception:  # noqa: BLE001 - wrong branch / not found -> try the next URL
                 continue
             try:
-                with zipfile.ZipFile(src_zip) as bundle:
-                    bundle.extractall(src_dir)
-            except zipfile.BadZipFile:
-                continue
+                extract_pack(src_zip, src_dir)  # guarded: quota + nested-zip descent
+            except (zipfile.BadZipFile, PackError):
+                continue  # wrong branch / not a zip / over quota -> try the next candidate URL
             entry = detect_entry(src_dir)
             if entry:
                 return src_dir, entry, archive_url

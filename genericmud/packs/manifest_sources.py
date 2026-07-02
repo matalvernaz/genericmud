@@ -3,7 +3,7 @@
 Some soundpacks ship only a Windows installer (no vault ``.zip`` mirror) yet expose
 their whole content as individual files under one base URL, described by a manifest
 their own updater fetches. Mush-Z (the Alter Aeon MUSHclient soundpack) is the first:
-``http://www.mush-z.com/mush/`` serves every file, and ``update_everything.lst.gz``
+``https://www.mush-z.com/mush/`` serves every file, and ``update_everything.lst.gz``
 lists them as ``<hash> <size> <relative/path>``. Pointing genericMud at that lets one
 routine (:mod:`genericmud.packs.manifest_sync`) both install the pack (sync from empty)
 and update it (fetch only what changed) — no installer, no ``innoextract``.
@@ -49,7 +49,7 @@ _SOURCES: dict[str, ManifestSource] = {
         name="Mush-Z (Alter Aeon)",
         mud="Alter Aeon",
         dialect="mushclient",
-        base_url="http://www.mush-z.com/mush/",
+        base_url="https://www.mush-z.com/mush/",
         manifest_name="update_everything.lst.gz",
         entry="worlds/alteraeon/alter_aeon.mcl",
         world=World(name="Alter Aeon", host="alteraeon.com", port=3010),

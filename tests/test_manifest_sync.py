@@ -139,3 +139,13 @@ def test_setup_pack_from_manifest_registers_enabled_but_untrusted(tmp_path):
     # MUSHclient runs its own Lua -> installs enabled-but-untrusted; the user trusts deliberately.
     assert not store.is_trusted("testpack")
     assert (store.pack_dir("testpack") / "sounds/hit.ogg").read_bytes() == b"snd"
+
+
+def test_mush_z_source_uses_https():
+    """The bundled Mush-Z source must fetch over TLS (size-only integrity needs a safe channel)."""
+    from genericmud.packs import manifest_sources
+
+    src = manifest_sources.by_id("mush-z")
+    assert src is not None
+    assert src.base_url.startswith("https://")
+    assert src.manifest_url.startswith("https://")
