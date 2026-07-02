@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pytest
 
@@ -399,5 +400,7 @@ def test_trusted_pack_resolves_and_plays_a_getinfo_anchored_sound(tmp_path):
     assert engine.get_var("sppath") == str(tmp_path)  # sppath defaulted to the pack dir
     engine.process_line(Line("You are hit hard!"))
     assert len(sink.played) == 1
-    assert sink.played[0]["file"] == os.path.join(str(tmp_path), "sounds", "hit.wav")
+    # Compare as Path, not string: the engine builds sound paths with forward slashes on every OS
+    # (it deliberately avoids os.path.normpath), so an os.path.join here would mismatch on Windows.
+    assert Path(sink.played[0]["file"]) == tmp_path / "sounds" / "hit.wav"
     assert os.path.exists(sink.played[0]["file"])
