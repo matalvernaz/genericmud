@@ -28,6 +28,7 @@ from genericmud.protocol.oob import OobMessage, ServerStatus, from_subnegotiatio
 from genericmud.render.ansi import parse_ansi
 from genericmud.review.cursor import ReviewCursor
 from genericmud.safepath import is_unsafe, sanitize_component
+from genericmud.scripting.mushclient_compat import MushclientPack
 from genericmud.session.credentials import CredentialStore
 from genericmud.session.hub import SessionHub
 from genericmud.session.log import SessionLogger
@@ -77,9 +78,10 @@ class AppSink(EngineSink):
 
     def __init__(
         self, *, send, post, schedule, voice: VoiceRouter, buffer: Buffer, sound: SoundBus,
-        diag: DiagnosticLog | None = None,
+        diag: DiagnosticLog | None = None, send_raw=None,
     ) -> None:
         self._send = send
+        self._send_raw = send_raw
         self._post = post
         self._schedule = schedule
         self._voice = voice
@@ -90,6 +92,15 @@ class AppSink(EngineSink):
 
     def send(self, text: str) -> None:
         self._send(text)
+
+    def send_packet(self, data: bytes) -> None:
+        if self._send_raw is None:
+            # No raw transport wired (headless/tests): trace it so a pack whose MSDP
+            # REPORT went nowhere is diagnosable, then drop the packet.
+            if self._diag is not None:
+                self._diag.event("sendpkt.dropped", size=len(data))
+            return
+        self._send_raw(data)
 
     def echo(self, text: str, channel: str = "main") -> None:
         self._buffer.append(Line(text, channel=channel))
@@ -140,6 +151,7 @@ class EngineApp:
         voice: VoiceRouter,
         *,
         send: Callable[[str], None] | None = None,
+        send_raw: Callable[[bytes], None] | None = None,
         post: Callable[[dict], None] | None = None,
         schedule: Callable[[float, Callable[[], None]], None] | None = None,
         keymap: dict[str, str] | None = None,
@@ -164,6 +176,7 @@ class EngineApp:
         self.sound = SoundBus(sound_backend or _PostSoundBackend(self._post))
         self.sink = AppSink(
             send=self._send,
+            send_raw=send_raw,
             post=self._post,
             schedule=self._schedule,
             voice=voice,
@@ -199,6 +212,9 @@ class EngineApp:
         self._gauges: dict[str, object] = {}
         self._last_activation: ActivationResult | None = None  # for the diag:where summary
         self._client_error_spoken = False  # speak the first renderer error, echo the rest
+        self._mush_packs: list[MushclientPack] = []  # loaded MUSHclient packs (hook dispatch)
+        self._msdp_offered = False  # server sent WILL MSDP (replayed to late-loading packs)
+        self._msdp_routed = 0  # subnegotiation count, for throttling the diag trace
 
     # --- soundpacks ---
 
@@ -212,6 +228,9 @@ class EngineApp:
             return None
         result = activate_world(self.packs, world, self.engine)
         self._last_activation = result
+        self._mush_packs = [
+            pack for pack in result.packs.values() if isinstance(pack, MushclientPack)
+        ]
         self._announce_activation(result)
         return result
 
@@ -220,8 +239,36 @@ class EngineApp:
         if self.hub is not None and self.name:
             self.hub.register(self.name, self._dispatch_remote)
         result = self.activate_packs(world)
+        self._dispatch_plugin_lifecycle()
         self.begin_login(world)
         return result
+
+    def _dispatch_plugin_lifecycle(self) -> None:
+        """Run each MUSHclient pack's install/connect hooks (MUSHclient calls these
+        itself; packs set their variable defaults in OnPluginInstall -- Erion turns
+        every sound toggle on there, so skipping it leaves the pack gated silent)."""
+        if not self._mush_packs:
+            return
+        if self._diag is not None:
+            self._diag.event("plugin.lifecycle", stage="install+connect",
+                             packs=len(self._mush_packs))
+        for pack in self._mush_packs:
+            pack.dispatch_install()
+            pack.dispatch_connect()
+        if self._msdp_offered:  # negotiation happened before packs were ready: replay it
+            self._dispatch_msdp_start()
+
+    def _dispatch_msdp_start(self) -> None:
+        """Tell packs MSDP is on (the transport already answered DO). The SENT_DO round
+        is where an MSDP soundpack sends its REPORT list; Erion's server streams
+        nothing (so no combat/ambience cues exist) until those REPORTs arrive."""
+        if not self._mush_packs:
+            return
+        if self._diag is not None:
+            self._diag.event("msdp.start", packs=len(self._mush_packs))
+        for pack in self._mush_packs:
+            pack.dispatch_telnet_request(T.OPT_MSDP, "WILL")
+            pack.dispatch_telnet_request(T.OPT_MSDP, "SENT_DO")
 
     def shutdown(self) -> None:
         """Release session resources on close: leave the hub and stop logging."""
@@ -285,6 +332,14 @@ class EngineApp:
             self._handle_subnegotiation(event)
         elif isinstance(event, T.Command) and event.command in (T.GA, T.EOR):
             self._flush_prompt()  # prompt arrived without a trailing newline
+        elif (
+            isinstance(event, T.Negotiation)
+            and event.command == T.WILL
+            and event.option == T.OPT_MSDP
+        ):
+            # Server offers MSDP (once per connection, so a reconnect re-arms too).
+            self._msdp_offered = True
+            self._dispatch_msdp_start()
 
     def _feed_text(self, text: str) -> None:
         self._pending += text
@@ -355,6 +410,22 @@ class EngineApp:
         elif isinstance(result, ServerStatus):
             self._gauges.update(result.data)
             self._post(protocol.status(self._gauges))
+        if sub.option == T.OPT_MSDP and self._mush_packs:
+            self._route_msdp(sub.payload)
+
+    def _route_msdp(self, payload: bytes) -> None:
+        """Hand a raw MSDP payload to each MUSHclient pack's telnet-subnegotiation
+        hook (Erion's MSDP_handler parses it and plays the matching cue)."""
+        self._msdp_routed += 1
+        if self._diag is not None and (self._msdp_routed <= 50 or self._msdp_routed % 200 == 0):
+            # Full trace for the first packets (the diagnostic window), then sampled --
+            # MSDP streams continuously and would otherwise fill the log's byte cap.
+            self._diag.event(
+                "msdp.route", n=self._msdp_routed, size=len(payload),
+                preview=repr(payload[:40]), packs=len(self._mush_packs),
+            )
+        for pack in self._mush_packs:
+            pack.dispatch_telnet_subnegotiation(T.OPT_MSDP, payload)
 
     @staticmethod
     def _is_room_info(message: OobMessage) -> bool:

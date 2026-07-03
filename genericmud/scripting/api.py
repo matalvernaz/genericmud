@@ -43,10 +43,23 @@ class ScriptApi:
         self._sounds_index_key: str | None = None  # the @sppath the index was built for
         self._active_timers = 0  # pending pack timers, bounded by _MAX_ACTIVE_TIMERS
 
+    @property
+    def diag(self):
+        """The engine's diagnostic log (None when tracing is off)."""
+        return self._engine.diag
+
     # --- output ---
 
     def send(self, text: str) -> None:
         self._engine.sink.send(str(text))
+
+    def send_packet(self, data: bytes) -> None:
+        """Send a pre-framed telnet packet verbatim (MUSHclient ``SendPkt``).
+
+        The pack builds the full ``IAC SB ... IAC SE`` framing itself (that is
+        SendPkt's contract), so no wrapping or escaping happens here.
+        """
+        self._engine.sink.send_packet(data)
 
     def echo(self, text: str, channel: str = "main") -> None:
         self._engine.sink.echo(str(text), channel)
@@ -81,8 +94,8 @@ class ScriptApi:
 
     # --- variables ---
 
-    def get_var(self, name: str) -> str:
-        return self._engine.get_var(name)
+    def get_var(self, name: str, default: str | None = "") -> str | None:
+        return self._engine.get_var(name, default)
 
     def set_var(self, name: str, value: object) -> None:
         if len(str(value)) > _MAX_VAR_VALUE_LEN:

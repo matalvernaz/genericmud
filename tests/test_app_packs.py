@@ -5,7 +5,7 @@ from __future__ import annotations
 from genericmud.app import EngineApp
 from genericmud.packs import PackStore
 from genericmud.packs.__main__ import main as packs_main
-from genericmud.protocol.telnet import DataReceived
+from genericmud.protocol.telnet import OPT_MSDP, WILL, DataReceived, Negotiation, Subnegotiation
 from genericmud.voice.router import VoiceRouter
 from tests.helpers import RecordingBackend
 
@@ -103,3 +103,40 @@ def test_cli_trust_promotes_a_pack_to_loading(tmp_path, capsys):
     capsys.readouterr()
     packs_main(["--root", root, "conflicts", "mud"])
     assert "1 loaded clean" in capsys.readouterr().out
+
+def test_msdp_negotiation_flows_to_mushclient_pack(tmp_path):
+    """End-to-end MSDP plumbing: on_connect dispatches OnPluginInstall, the server's
+    WILL MSDP triggers the SENT_DO round (REPORT list -> send_raw verbatim), and each
+    MSDP subnegotiation payload reaches OnPluginTelnetSubnegotiation byte-exact."""
+    store = PackStore(tmp_path / "store")
+    src = tmp_path / "pack.xml"
+    src.write_text(
+        '<muclient><plugin id="msdp"/><script><![CDATA[\n'
+        'function OnPluginInstall() SetVariable("installed", 1) end\n'
+        "function OnPluginTelnetRequest(t, data)\n"
+        '  if t == 69 and data == "SENT_DO" then\n'
+        '    SendPkt(string.char(255, 250, 69, 1) .. "REPORT" .. string.char(255, 240))\n'
+        "  end\n"
+        "  return t == 69\n"
+        "end\n"
+        "function OnPluginTelnetSubnegotiation(t, data)\n"
+        '  if t == 69 then SetVariable("last_msdp", data) end\n'
+        "end\n"
+        "]]></script></muclient>",
+        encoding="latin-1",
+    )
+    store.install(src, world="erion", trust=True)
+    backend = RecordingBackend()
+    voice = VoiceRouter(backend, clock=lambda: 0.0)
+    raw: list[bytes] = []
+    app = EngineApp(voice, post=lambda _m: None, packs=store, send_raw=raw.append)
+
+    app.on_connect("erion")
+    assert app.engine.get_var("installed") == "1"  # OnPluginInstall dispatched
+
+    app.on_telnet_event(Negotiation(WILL, OPT_MSDP))
+    assert raw == [bytes([255, 250, 69, 1]) + b"REPORT" + bytes([255, 240])]
+
+    payload = bytes([1]) + b"SOUND" + bytes([2]) + b"hit"
+    app.on_telnet_event(Subnegotiation(OPT_MSDP, payload))
+    assert app.engine.get_var("last_msdp") == payload.decode("latin-1")

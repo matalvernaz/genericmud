@@ -41,6 +41,7 @@ def run(args) -> None:
         app = EngineApp(
             voice,
             send=connection.send_line,
+            send_raw=connection.send_packet,
             post=bridge.post,
             schedule=loop.call_later,
             keymap=load_keymap("vipmud"),

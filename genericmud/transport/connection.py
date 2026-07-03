@@ -202,6 +202,11 @@ class MudConnection:
         escaped = payload.replace(bytes([T.IAC]), bytes([T.IAC, T.IAC]))
         self._raw_write(bytes([T.IAC, T.SB, option]) + escaped + bytes([T.IAC, T.SE]))
 
+    def send_packet(self, data: bytes) -> None:
+        """Send a pre-framed telnet packet verbatim (MUSHclient ``SendPkt`` semantics:
+        the caller built the full IAC framing itself, e.g. an MSDP REPORT)."""
+        self._raw_write(data)
+
     def _send_gmcp_hello(self) -> None:
         self.send_subnegotiation(
             T.OPT_GMCP, b'Core.Hello {"client":"genericMud","version":"0.1"}'

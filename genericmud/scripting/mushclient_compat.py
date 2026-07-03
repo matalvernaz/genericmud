@@ -39,6 +39,26 @@ _VOLUME_MAX = 100.0  # MUSHclient volume is 0..100
 _PAN_MAX = 100.0  # bass/MUSHclient pan is -100..100; the SoundBus wants -1..1
 _AUDIO_CHANNEL_PREFIX = "erion-audio-"  # one bus channel per cue, so stop(id) can target it
 
+# Lifecycle entry points MUSHclient calls on each plugin. All plugins share one _G here,
+# so each plugin's hooks are captured (and the globals cleared) right after its script
+# runs -- otherwise a later plugin would inherit or silently overwrite an earlier one's.
+# Every known name is captured for isolation; dispatch() is only wired up for the
+# sound-critical ones today (install/connect + the telnet pair that carries MSDP).
+_LIFECYCLE_HOOKS = (
+    "OnPluginInstall",
+    "OnPluginConnect",
+    "OnPluginDisconnect",
+    "OnPluginClose",
+    "OnPluginEnable",
+    "OnPluginDisable",
+    "OnPluginSaveState",
+    "OnPluginTick",
+    "OnPluginLineReceived",
+    "OnPluginBroadcast",
+    "OnPluginTelnetRequest",
+    "OnPluginTelnetSubnegotiation",
+)
+
 
 def _to_float(value: object) -> float | None:
     try:
@@ -65,6 +85,8 @@ class MushclientPack:
         self._current_plugin = "world"  # whose script is loading now (for ppi.Expose)
         self._loaded_includes: set[Path] = set()  # resolved paths, so each file loads once
         self._include_errors: list[tuple[str, str]] = []  # plugins that failed to load (name, why)
+        self._hooks: dict[str, dict[str, object]] = {}  # plugin id -> {hook name -> Lua fn}
+        self._arrays: dict[str, dict[str, str]] = {}  # MUSHclient Array* API backing store
         # MUSHclient targets Lua 5.1; trusted packs keep the full stdlib their
         # libraries assume (os/io/loadstring + the module(..., package.seeall) idiom).
         self._lua, install_hook = make_sandboxed_runtime(lua51=True, full_stdlib=full_stdlib)
@@ -72,7 +94,18 @@ class MushclientPack:
         # pack is user-vouched arbitrary code, so a missing hook is acceptable there.
         self._guard = ScriptGuard(install_hook, require_hook=not full_stdlib)
         self._install_api()
+        self._install_sendpkt()
         self._install_audio()
+        # Calls fn(option, <lua byte-string>) entirely on the Lua side: an MSDP payload
+        # is rarely valid UTF-8, so it crosses the lupa boundary as a table of byte
+        # values, never as a string (lupa's string conversion would raise or mangle it).
+        self._payload_caller = self._lua.eval(
+            "function(fn, option, t)\n"
+            "  local parts = {}\n"
+            "  for i = 1, #t do parts[i] = string.char(t[i]) end\n"
+            "  return fn(option, table.concat(parts))\n"
+            "end"
+        )
         # Hand each plugin our own ppi (its bundled ppi.lua needs package.seeall, which the
         # sandbox strips). Then make any still-unimplemented host name a "black hole" that is
         # callable AND indexable (returns itself) -- so Window/InfoBox/etc. we don't implement
@@ -87,9 +120,23 @@ class MushclientPack:
         install_pack_require(
             self._lua, self._base_dir, builtins={"ppi": self._make_ppi()}, fallback=black_hole
         )
-        self._lua.eval("function(bh) setmetatable(_G, {__index = function() return bh end}) end")(
-            black_hole
-        )
+        # Only API-shaped names fall into the black hole: MUSHclient functions are CapWords
+        # (Sound, WindowCreate, BroadcastPlugin...) plus a few lowercase host libraries
+        # (utils/bit/rex/serialize). A plain script variable (var, dir, roomName) must read
+        # back as nil -- assigning nil to a global DELETES it, so an unconditional fallback
+        # made `if var ~= nil` true right after `var = nil` and Erion's OnPluginInstall
+        # stored the black hole into every sound toggle instead of defaulting them to 1.
+        self._lua.eval(
+            "function(bh)\n"
+            "  local hosted = {utils=true, bit=true, rex=true, serialize=true}\n"
+            "  setmetatable(_G, {__index = function(_, key)\n"
+            "    if type(key) == 'string' and (string.match(key, '^%u') or hosted[key]) then\n"
+            "      return bh\n"
+            "    end\n"
+            "    return nil\n"
+            "  end})\n"
+            "end"
+        )(black_hole)
 
     def _make_ppi(self):
         """A minimal in-process ppi (plugin-to-plugin interface): Expose registers a
@@ -117,8 +164,18 @@ class MushclientPack:
             "Execute": api.send,
             "Note": api.echo,
             "ColourNote": self._colour_note,
-            "GetVariable": api.get_var,
+            # nil (not "") for an unset variable -- MUSHclient semantics. Erion's
+            # OnPluginInstall does `if GetVariable(...) ~= nil` to keep saved toggle
+            # settings; an ""-for-unset answer makes it adopt "" and every toggle-gated
+            # sound stays off.
+            "GetVariable": lambda name="": api.get_var(str(name), None),
             "SetVariable": api.set_var,
+            # The Array* trio MSDP packs use for state (room name etc.). Real bindings,
+            # not black-holed: a black-holed ArrayGet returns a table, and concatenating
+            # that raises inside the plugin's subnegotiation handler.
+            "ArrayCreate": self._array_create,
+            "ArraySet": self._array_set,
+            "ArrayGet": self._array_get,
             "DeleteVariable": lambda name: api.set_var(name, ""),
             "EnableTrigger": lambda *_a: None,
             "EnableAlias": lambda *_a: None,
@@ -225,6 +282,43 @@ class MushclientPack:
         texts = [str(args[i]) for i in range(2, len(args), 3)]
         self._api.echo("".join(texts))
 
+    def _array_create(self, name: object = "") -> None:
+        self._arrays.setdefault(str(name), {})
+
+    def _array_set(self, name: object = "", key: object = "", value: object = "") -> None:
+        self._arrays.setdefault(str(name), {})[str(key)] = str(value)
+
+    def _array_get(self, name: object = "", key: object = "") -> str | None:
+        return self._arrays.get(str(name), {}).get(str(key))  # nil when absent (MUSHclient)
+
+    def _install_sendpkt(self) -> None:
+        """Bind ``SendPkt`` via a Lua-side byte-table trampoline.
+
+        The packet is a pre-framed telnet sequence (IAC SB ... IAC SE) full of bytes
+        that are invalid UTF-8, so the Lua string must never cross the lupa boundary
+        directly -- the runtime's string conversion would raise. The trampoline
+        explodes it into a table of byte values; Python reassembles and sends verbatim
+        (no re-framing: SendPkt's contract is that the caller built the framing).
+        """
+        make_sendpkt = self._lua.eval(
+            "function(deliver)\n"
+            "  return function(data)\n"
+            "    data = tostring(data or '')\n"
+            "    local bytes = {}\n"
+            "    for i = 1, #data do bytes[i] = string.byte(data, i) end\n"
+            "    deliver(bytes)\n"
+            "  end\n"
+            "end"
+        )
+        sendpkt = make_sendpkt(self._deliver_packet)
+        globals_ = self._lua.globals()
+        globals_["SendPkt"] = sendpkt
+        globals_.world["SendPkt"] = sendpkt  # packs also call through the world object
+
+    def _deliver_packet(self, table: object) -> None:
+        data = bytes(bytearray(table[i] for i in range(1, len(table) + 1)))
+        self._api.send_packet(data)
+
     def _play_sound(
         self,
         buffer: object = 0,
@@ -317,6 +411,7 @@ class MushclientPack:
             self._register(element, is_alias=False)
         for element in root.iter("alias"):
             self._register(element, is_alias=True)
+        self._capture_hooks()
         self._current_plugin = previous
         for include in root.iter("include"):
             name = include.get("name")
@@ -347,6 +442,75 @@ class MushclientPack:
             return
         self._loaded_includes.add(target)
         self.load_source(target.read_text(encoding="latin-1", errors="ignore"))
+
+    # --- plugin lifecycle ---
+
+    def _capture_hooks(self) -> None:
+        """Claim the ``OnPlugin*`` functions the current plugin's script defined.
+
+        Must use ``rawget``: the black-hole ``_G`` metatable reports every name as
+        defined. Captured globals are cleared so the next plugin in the shared
+        runtime neither inherits nor overwrites them (MUSHclient gives each plugin
+        its own script space; this is the shared-``_G`` equivalent).
+        """
+        rawget = self._lua.eval("rawget")
+        globals_ = self._lua.globals()
+        captured = self._hooks.setdefault(self._current_plugin, {})
+        for name in _LIFECYCLE_HOOKS:
+            fn = rawget(globals_, name)
+            if fn is not None:
+                captured[name] = fn
+                globals_[name] = None
+
+    def dispatch(self, name: str, *args: object, caller: object | None = None) -> None:
+        """Call one lifecycle hook on every plugin that defines it, in load order.
+
+        Each call is time-budgeted and isolated: one plugin's failing hook is
+        traced to the diagnostic log and the rest still run, mirroring MUSHclient
+        where one erroring plugin doesn't halt the others. ``caller`` interposes a
+        Lua-side adapter (``caller(fn, *args)``) for arguments that can't cross the
+        lupa boundary as-is (byte payloads).
+        """
+        for plugin_id, hooks in self._hooks.items():
+            fn = hooks.get(name)
+            if fn is None:
+                continue
+            previous = self._current_plugin
+            self._current_plugin = plugin_id
+            try:
+                if caller is not None:
+                    self._guard.run_strict(caller, fn, *args)
+                else:
+                    self._guard.run_strict(fn, *args)
+            except Exception as exc:  # noqa: BLE001 - one plugin's hook must not stop the rest
+                diag = self._api.diag
+                if diag is not None:
+                    diag.event("plugin.dispatch", hook=name, plugin=plugin_id,
+                               error=f"{type(exc).__name__}: {exc}")
+            finally:
+                self._current_plugin = previous
+
+    def dispatch_install(self) -> None:
+        """MUSHclient calls each plugin's ``OnPluginInstall`` at load; packs set their
+        variable defaults there (Erion turns every sound toggle on), so skipping it
+        leaves the pack loaded but gated silent."""
+        self.dispatch("OnPluginInstall")
+
+    def dispatch_connect(self) -> None:
+        self.dispatch("OnPluginConnect")
+
+    def dispatch_telnet_request(self, option: int, message: str) -> None:
+        """``OnPluginTelnetRequest(option, "WILL"/"SENT_DO")`` -- the SENT_DO round is
+        where MSDP packs send their REPORT list; without it the server streams nothing."""
+        self.dispatch("OnPluginTelnetRequest", option, message)
+
+    def dispatch_telnet_subnegotiation(self, option: int, payload: bytes) -> None:
+        # MUSHclient hands plugins the raw payload as a Lua byte-string. It crosses
+        # into Lua as a byte table and is reassembled there (_payload_caller).
+        table = self._lua.table_from(list(payload))
+        self.dispatch(
+            "OnPluginTelnetSubnegotiation", option, table, caller=self._payload_caller
+        )
 
     def _register(self, element: ET.Element, *, is_alias: bool) -> None:
         attrs = element.attrib

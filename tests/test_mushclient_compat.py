@@ -473,3 +473,156 @@ def test_audio_shim_loop_and_stop(tmp_path):
     assert sink.played[0]["loop"] is True
     assert sink.played[1]["loop"] is False
     assert sink.stopped == ["erion-audio-2"]  # the second cue's channel, stopped by id
+
+
+# --- plugin lifecycle dispatch (the v0.6.5 Erion silence: loaded, fired, gated off) ---
+
+
+def _make_pack(tmp_path, world_xml: str) -> tuple[RecordingSink, AutomationEngine, MushclientPack]:
+    world = tmp_path / "World.mcl"
+    world.write_text(world_xml, encoding="latin-1")
+    sink = RecordingSink()
+    engine = AutomationEngine(sink)
+    pack = MushclientPack(
+        ScriptApi(engine, source="erion", base_dir=str(tmp_path)), full_stdlib=True
+    )
+    pack.load_file(str(world))
+    return sink, engine, pack
+
+
+def test_install_dispatch_opens_erion_style_toggle_gates(tmp_path):
+    """Erion's MSDP_handler defaults every sound toggle to 1 inside OnPluginInstall
+    (nil-checked). Without install dispatch AND nil-for-unset GetVariable, the 'Alas'
+    trigger fires but its gated body exits silently -- the exact v0.6.5 log shape."""
+    (tmp_path / "alas.ogg").write_bytes(b"OggS")
+    sink, engine, pack = _make_pack(
+        tmp_path,
+        '<muclient><plugin id="handler"/>\n'
+        '<triggers><trigger match="^Alas, you cannot go.*\\.$" enabled="y" regexp="y"'
+        ' send_to="12" sequence="100"><send>\n'
+        'if tonumber(GetVariable("toggleAlas")) == 1 then\n'
+        '  Sound(GetInfo(67) .. "alas.ogg")\n'
+        "end\n"
+        "</send></trigger></triggers>\n"
+        "<script><![CDATA[\n"
+        "function OnPluginInstall()\n"
+        '  local var = GetVariable("worldtoggleAlas")\n'
+        '  if var ~= nil then SetVariable("toggleAlas", var)\n'
+        '  else SetVariable("toggleAlas", 1) end\n'
+        "end\n"
+        "]]></script></muclient>",
+    )
+    engine.process_line(Line("Alas, you cannot go east."))
+    assert sink.played == []  # gate closed pre-install: trigger fires, body skips
+    pack.dispatch_install()
+    engine.process_line(Line("Alas, you cannot go east."))
+    assert len(sink.played) == 1  # toggle defaulted on; the cue reaches the sink
+
+
+def test_getvariable_unset_is_nil_but_empty_is_set():
+    """MUSHclient GetVariable semantics: unset -> nil (Erion's install loop nil-checks
+    saved settings), but an explicitly-empty variable is still set."""
+    sink, engine = _load(
+        "<muclient><script><![CDATA[\n"
+        'assert(GetVariable("never_set") == nil, "unset must be nil")\n'
+        'SetVariable("empty", "")\n'
+        'assert(GetVariable("empty") ~= nil, "empty-but-set must not be nil")\n'
+        'Send("ok")\n'
+        "]]></script></muclient>"
+    )
+    assert sink.sent == ["ok"]  # both asserts held
+
+
+def test_hooks_are_captured_per_plugin_and_do_not_leak(tmp_path):
+    """Plugins share one _G, so each plugin's OnPlugin* must be claimed after its
+    script runs: the next plugin must neither inherit nor overwrite them."""
+    (tmp_path / "alpha.xml").write_text(
+        '<muclient><plugin id="alpha"/><script><![CDATA[\n'
+        'function OnPluginInstall() Send("alpha") end\n'
+        "]]></script></muclient>",
+        encoding="latin-1",
+    )
+    (tmp_path / "beta.xml").write_text(
+        '<muclient><plugin id="beta"/><script><![CDATA[\n'
+        'assert(rawget(_G, "OnPluginInstall") == nil, "inherited alpha hook")\n'
+        'function OnPluginInstall() Send("beta") end\n'
+        "]]></script></muclient>",
+        encoding="latin-1",
+    )
+    sink, engine, pack = _make_pack(
+        tmp_path,
+        '<muclient><include name="alpha.xml" plugin="y"/>'
+        '<include name="beta.xml" plugin="y"/></muclient>',
+    )
+    assert pack._include_errors == []  # beta's rawget assert held: no hook leaked
+    pack.dispatch_install()
+    assert sink.sent == ["alpha", "beta"]  # both ran, in load order
+
+
+def test_failing_hook_is_isolated(tmp_path):
+    """One plugin's erroring hook must not stop the others (MUSHclient isolation)."""
+    (tmp_path / "bad.xml").write_text(
+        '<muclient><plugin id="bad"/><script><![CDATA[\n'
+        'function OnPluginInstall() error("boom") end\n'
+        "]]></script></muclient>",
+        encoding="latin-1",
+    )
+    (tmp_path / "good.xml").write_text(
+        '<muclient><plugin id="good"/><script><![CDATA[\n'
+        'function OnPluginInstall() Send("good") end\n'
+        "]]></script></muclient>",
+        encoding="latin-1",
+    )
+    sink, engine, pack = _make_pack(
+        tmp_path,
+        '<muclient><include name="bad.xml" plugin="y"/>'
+        '<include name="good.xml" plugin="y"/></muclient>',
+    )
+    pack.dispatch_install()
+    assert sink.sent == ["good"]
+
+
+def test_sent_do_round_sends_report_packet_verbatim(tmp_path):
+    """MSDP packs send their REPORT list on the SENT_DO round via SendPkt. The packet
+    carries IAC (255) framing -- invalid UTF-8 -- and must reach the wire byte-exact."""
+    sink, engine, pack = _make_pack(
+        tmp_path,
+        '<muclient><plugin id="msdp"/><script><![CDATA[\n'
+        "function OnPluginTelnetRequest(t, data)\n"
+        '  if t == 69 and data == "WILL" then return true end\n'
+        '  if t == 69 and data == "SENT_DO" then\n'
+        "    SendPkt(string.char(255, 250, 69)"
+        ' .. string.char(1) .. "REPORT" .. string.char(2) .. "ROOM_NAME"'
+        " .. string.char(255, 240))\n"
+        "  end\n"
+        "  return false\n"
+        "end\n"
+        "]]></script></muclient>",
+    )
+    pack.dispatch_telnet_request(69, "WILL")
+    assert sink.packets == []  # the WILL round only answers; SENT_DO carries the REPORTs
+    pack.dispatch_telnet_request(69, "SENT_DO")
+    expected = bytes([255, 250, 69, 1]) + b"REPORT" + bytes([2]) + b"ROOM_NAME" + bytes([255, 240])
+    assert sink.packets == [expected]
+
+
+def test_subnegotiation_payload_reaches_plugin_byte_exact(tmp_path):
+    """An MSDP payload (VAR/VAL control bytes + possible high bytes) must arrive in the
+    plugin's OnPluginTelnetSubnegotiation as the same byte string MUSHclient would pass."""
+    (tmp_path / "hit.ogg").write_bytes(b"OggS")
+    sink, engine, pack = _make_pack(
+        tmp_path,
+        '<muclient><plugin id="msdp"/><script><![CDATA[\n'
+        "function OnPluginTelnetSubnegotiation(t, data)\n"
+        "  if t ~= 69 then return end\n"
+        "  local expected = string.char(1) .. \"SOUND\" .. string.char(2) .. \"hit\""
+        " .. string.char(233)\n"
+        "  if data == expected then\n"
+        '    Sound(GetInfo(67) .. "hit.ogg")\n'
+        "  end\n"
+        "end\n"
+        "]]></script></muclient>",
+    )
+    payload = bytes([1]) + b"SOUND" + bytes([2]) + b"hit" + bytes([233])
+    pack.dispatch_telnet_subnegotiation(69, payload)
+    assert len(sink.played) == 1  # byte-exact round trip; the gated cue fired

@@ -14,6 +14,7 @@ class RecordingSink(EngineSink):
     """Captures every engine side effect for assertions, with a manual scheduler."""
 
     sent: list[str] = field(default_factory=list)
+    packets: list[bytes] = field(default_factory=list)
     echoed: list[tuple[str, str]] = field(default_factory=list)
     spoken: list[tuple[str, str, bool]] = field(default_factory=list)
     played: list[dict[str, Any]] = field(default_factory=list)
@@ -23,6 +24,9 @@ class RecordingSink(EngineSink):
 
     def send(self, text: str) -> None:
         self.sent.append(text)
+
+    def send_packet(self, data: bytes) -> None:
+        self.packets.append(data)
 
     def echo(self, text: str, channel: str = "main") -> None:
         self.echoed.append((text, channel))

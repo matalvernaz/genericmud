@@ -21,21 +21,27 @@ from genericmud.scripting.mushclient_compat import MushclientPack
 from genericmud.scripting.vipmud_dialect import VipMudPack
 
 
-def _load_lua(api: ScriptApi, entry: str, trusted: bool) -> None:
-    LuaPackRuntime(api).run_file(entry)
+def _load_lua(api: ScriptApi, entry: str, trusted: bool) -> LuaPackRuntime:
+    runtime = LuaPackRuntime(api)
+    runtime.run_file(entry)
+    return runtime
 
 
-def _load_vipmud(api: ScriptApi, entry: str, trusted: bool) -> None:
+def _load_vipmud(api: ScriptApi, entry: str, trusted: bool) -> VipMudPack:
     # latin-1 like the rest of the VIPMud path (#LOAD, world import): .set packs are
     # iso-8859-1, and utf-8 would crash the entry load on any high byte.
     with open(entry, encoding="latin-1") as handle:
-        VipMudPack(api).load_source(handle.read())
+        pack = VipMudPack(api)
+        pack.load_source(handle.read())
+    return pack
 
 
-def _load_mushclient(api: ScriptApi, entry: str, trusted: bool) -> None:
+def _load_mushclient(api: ScriptApi, entry: str, trusted: bool) -> MushclientPack:
     # Trusted packs run with the full Lua stdlib their libraries assume; untrusted
     # ones (a dry-run with require_trust=False) stay sandboxed.
-    MushclientPack(api, full_stdlib=trusted).load_file(entry)
+    pack = MushclientPack(api, full_stdlib=trusted)
+    pack.load_file(entry)
+    return pack
 
 
 DIALECT_LOADERS = {"lua": _load_lua, "vipmud": _load_vipmud, "mushclient": _load_mushclient}
@@ -54,13 +60,21 @@ class ActivationResult:
     failed: dict[str, str] = field(default_factory=dict)  # pack id -> error message
     conflicts: list[Conflict] = field(default_factory=list)
     skipped_untrusted: list[str] = field(default_factory=list)  # enabled but not trusted
+    # Live dialect front-ends for the loaded packs, in load order. The app needs the
+    # MUSHclient ones after activation to dispatch plugin lifecycle hooks
+    # (OnPluginInstall/Connect and the telnet pair that carries MSDP).
+    packs: dict[str, object] = field(default_factory=dict)
 
 
 def activate_pack(
     manifest: PackManifest, api: ScriptApi, entry: str, *, trusted: bool = False
-) -> None:
-    """Run one pack's entry through its dialect front-end (raises on a bad pack)."""
-    DIALECT_LOADERS[manifest.dialect](api, entry, trusted)
+) -> object:
+    """Run one pack's entry through its dialect front-end (raises on a bad pack).
+
+    Returns the live front-end instance so callers can keep driving it (lifecycle
+    hooks) after the initial load.
+    """
+    return DIALECT_LOADERS[manifest.dialect](api, entry, trusted)
 
 
 def activate_world(
@@ -83,7 +97,10 @@ def activate_world(
             continue
         api = ScriptApi(engine, source=manifest.id, base_dir=str(store.pack_dir(manifest.id)))
         try:
-            activate_pack(manifest, api, str(store.entry_path(manifest.id)), trusted=trusted)
+            pack = activate_pack(
+                manifest, api, str(store.entry_path(manifest.id)), trusted=trusted
+            )
+            result.packs[manifest.id] = pack
             result.loaded.append(manifest.id)
             if diag is not None:
                 diag.event("pack.load", id=manifest.id, dialect=manifest.dialect, status="loaded")

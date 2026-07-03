@@ -46,6 +46,7 @@ class EngineSink:
     """Side-effect surface the engine drives. Real wiring overrides these."""
 
     def send(self, text: str) -> None: ...
+    def send_packet(self, data: bytes) -> None: ...
     def echo(self, text: str, channel: str = "main") -> None: ...
     def speak(self, text: str, channel: str = "main", interrupt: bool = False) -> None: ...
     def play(
@@ -207,8 +208,8 @@ class AutomationEngine:
 
     # --- variables ---
 
-    def get_var(self, name: str) -> str:
-        return self._vars.get(name, self._gvars.get(name, ""))
+    def get_var(self, name: str, default: str | None = "") -> str | None:
+        return self._vars.get(name, self._gvars.get(name, default))
 
     def set_var(self, name: str, value: object) -> None:
         self._vars[name] = str(value)

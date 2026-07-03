@@ -173,6 +173,7 @@ class SessionPanel(wx.Panel):
         self.app = EngineApp(
             self._voice,
             send=self._send,
+            send_raw=self._send_raw,
             post=self._post,
             schedule=self._loop.call_later,
             keymap=self._keymap,
@@ -199,6 +200,13 @@ class SessionPanel(wx.Panel):
         try:
             if self._connection is not None:
                 self._connection.send_line(text)
+        except ConnectionError:
+            pass
+
+    def _send_raw(self, data: bytes) -> None:
+        try:
+            if self._connection is not None:
+                self._connection.send_packet(data)
         except ConnectionError:
             pass
 
