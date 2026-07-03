@@ -6,6 +6,7 @@ from genericmud.app import EngineApp
 from genericmud.packs import PackStore
 from genericmud.packs.__main__ import main as packs_main
 from genericmud.protocol.telnet import OPT_MSDP, WILL, DataReceived, Negotiation, Subnegotiation
+from genericmud.session.diaglog import DiagnosticLog
 from genericmud.voice.router import VoiceRouter
 from tests.helpers import RecordingBackend
 
@@ -107,7 +108,10 @@ def test_cli_trust_promotes_a_pack_to_loading(tmp_path, capsys):
 def test_msdp_negotiation_flows_to_mushclient_pack(tmp_path):
     """End-to-end MSDP plumbing: on_connect dispatches OnPluginInstall, the server's
     WILL MSDP triggers the SENT_DO round (REPORT list -> send_raw verbatim), and each
-    MSDP subnegotiation payload reaches OnPluginTelnetSubnegotiation byte-exact."""
+    MSDP subnegotiation payload reaches OnPluginTelnetSubnegotiation byte-exact.
+
+    Runs with a LIVE DiagnosticLog: the 0.6.6 silent-session bug was a TypeError
+    inside a diag.event() call on this exact path, invisible with diag=None."""
     store = PackStore(tmp_path / "store")
     src = tmp_path / "pack.xml"
     src.write_text(
@@ -129,7 +133,11 @@ def test_msdp_negotiation_flows_to_mushclient_pack(tmp_path):
     backend = RecordingBackend()
     voice = VoiceRouter(backend, clock=lambda: 0.0)
     raw: list[bytes] = []
-    app = EngineApp(voice, post=lambda _m: None, packs=store, send_raw=raw.append)
+    diag = DiagnosticLog(tmp_path / "diag.log")
+    diag.start()
+    app = EngineApp(
+        voice, post=lambda _m: None, packs=store, send_raw=raw.append, diag=diag
+    )
 
     app.on_connect("erion")
     assert app.engine.get_var("installed") == "1"  # OnPluginInstall dispatched
@@ -140,3 +148,11 @@ def test_msdp_negotiation_flows_to_mushclient_pack(tmp_path):
     payload = bytes([1]) + b"SOUND" + bytes([2]) + b"hit"
     app.on_telnet_event(Subnegotiation(OPT_MSDP, payload))
     assert app.engine.get_var("last_msdp") == payload.decode("latin-1")
+
+    diag.stop()
+    trace = (tmp_path / "diag.log").read_text()
+    # The install/connect hooks must have run to completion, not died inside a
+    # diag call: lifecycle.done is the end-of-dispatch marker.
+    assert "plugin.lifecycle.done" in trace
+    assert "plugin.lifecycle.error" not in trace
+    assert "msdp.start" in trace

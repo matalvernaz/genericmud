@@ -168,6 +168,29 @@ class SessionPanel(wx.Panel):
     # --- engine lifecycle (loop thread) ---
 
     async def _start(self) -> None:
+        # run_coroutine_threadsafe's future is discarded, so an exception below would
+        # otherwise vanish entirely: the loop exception handler never fires (the future
+        # counts as having retrieved it), the crash log stays banner-only, and the tab
+        # just sits dead -- the one failure shape a blind user can't detect. Trace it
+        # and say it aloud instead.
+        try:
+            await self._start_inner()
+        except Exception as error:  # noqa: BLE001 - surface session-setup death, never swallow
+            if self._diag is not None:
+                self._diag.event(
+                    "session.start_failed",
+                    error=f"{type(error).__name__}: {error}",
+                    traceback=traceback.format_exc(),
+                )
+            self._post(protocol.echo(f"* Session failed to start: {error}"))
+            if self._voice is not None:
+                self._voice.speak(
+                    f"Session failed to start: {type(error).__name__}",
+                    channel="system",
+                    interrupt=True,
+                )
+
+    async def _start_inner(self) -> None:
         self._voice = VoiceRouter(make_voice_backend())
         self._connection = MudConnection()
         self.app = EngineApp(
@@ -190,10 +213,16 @@ class SessionPanel(wx.Panel):
         if self.world.sounds:  # point @sppath at the world's sound folder before packs load
             self.app.engine.set_var("sppath", self.world.sounds)
         self.app.on_connect(self.world.name)  # activate packs + arm auto-login before data
+        if self._diag is not None:
+            self._diag.event("connect.begin", host=self.world.host, port=self.world.port)
         try:
             await self._connection.connect(self.world.host, self.world.port, tls=self.world.tls)
+            if self._diag is not None:
+                self._diag.event("connect.ok", host=self.world.host)
             self._post(protocol.echo(f"* Connected to {self.world.name}"))
         except OSError as error:
+            if self._diag is not None:
+                self._diag.event("connect.failed", error=str(error))
             self._post(protocol.echo(f"* Connect failed: {error}"))
 
     def _send(self, text: str) -> None:

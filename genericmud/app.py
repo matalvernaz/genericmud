@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import traceback
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -239,7 +240,27 @@ class EngineApp:
         if self.hub is not None and self.name:
             self.hub.register(self.name, self._dispatch_remote)
         result = self.activate_packs(world)
-        self._dispatch_plugin_lifecycle()
+        if self._diag is not None:
+            # Always emitted, even with zero packs: this is the marker that on_connect
+            # survived activation, and `mush=` is what lifecycle dispatch keys off.
+            self._diag.event(
+                "pack.activated",
+                total=len(result.packs) if result is not None else 0,
+                mush=len(self._mush_packs),
+            )
+        try:
+            self._dispatch_plugin_lifecycle()
+        except Exception as exc:  # noqa: BLE001 - sound hooks must not kill session setup
+            if self._diag is not None:
+                self._diag.event(
+                    "plugin.lifecycle.error",
+                    error=f"{type(exc).__name__}: {exc}",
+                    traceback=traceback.format_exc(),
+                )
+            self.voice.speak(
+                "Soundpack startup hooks failed; sounds may be off.",
+                channel="system", interrupt=False,
+            )
         self.begin_login(world)
         return result
 
@@ -250,13 +271,17 @@ class EngineApp:
         if not self._mush_packs:
             return
         if self._diag is not None:
-            self._diag.event("plugin.lifecycle", stage="install+connect",
+            # NB: event()'s first positional is named `stage` -- a stage= kwarg here
+            # collides and raises (the 0.6.6 silent-session bug).
+            self._diag.event("plugin.lifecycle", phase="install+connect",
                              packs=len(self._mush_packs))
         for pack in self._mush_packs:
             pack.dispatch_install()
             pack.dispatch_connect()
         if self._msdp_offered:  # negotiation happened before packs were ready: replay it
             self._dispatch_msdp_start()
+        if self._diag is not None:
+            self._diag.event("plugin.lifecycle.done")
 
     def _dispatch_msdp_start(self) -> None:
         """Tell packs MSDP is on (the transport already answered DO). The SENT_DO round
