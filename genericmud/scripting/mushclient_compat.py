@@ -122,13 +122,16 @@ class MushclientPack:
         )
         # Only API-shaped names fall into the black hole: MUSHclient functions are CapWords
         # (Sound, WindowCreate, BroadcastPlugin...) plus a few lowercase host libraries
-        # (utils/bit/rex/serialize). A plain script variable (var, dir, roomName) must read
+        # (utils/bit/rex/serialize) and native modules a plugin loads via loadlib (nvda --
+        # mushReader's speech object; genericMud self-voices every line already, so its
+        # say()/stop() no-op rather than double-speaking). A plain script variable (var,
+        # dir, roomName) must read
         # back as nil -- assigning nil to a global DELETES it, so an unconditional fallback
         # made `if var ~= nil` true right after `var = nil` and Erion's OnPluginInstall
         # stored the black hole into every sound toggle instead of defaulting them to 1.
         self._lua.eval(
             "function(bh)\n"
-            "  local hosted = {utils=true, bit=true, rex=true, serialize=true}\n"
+            "  local hosted = {utils=true, bit=true, rex=true, serialize=true, nvda=true}\n"
             "  setmetatable(_G, {__index = function(_, key)\n"
             "    if type(key) == 'string' and (string.match(key, '^%u') or hosted[key]) then\n"
             "      return bh\n"

@@ -101,10 +101,19 @@ def make_sandboxed_runtime(
     if full_stdlib:
         globals_["python"] = None  # the lupa<->host bridge; not part of any Lua stdlib
         # Close the in-process escape hatches a soundpack never uses but that exceed the
-        # FS/process surface trusted packs are granted: native-code loading, the lupa
-        # object registry, and our loop guard's own hook (already captured above).
+        # FS/process surface trusted packs are granted: the lupa object registry and our
+        # loop guard's own hook (already captured above).
+        #
+        # Native-code loading stays disabled too -- but as a truthy NO-OP, not a missing
+        # function. Real MUSHclient plugins bootstrap their native module with
+        # `assert(package.loadlib(dll, sym))()`; a nil loadlib makes that assert THROW and
+        # abort the entire OnPluginInstall (Erion's LuaAudio and mushReader both died here).
+        # genericMud already provides those modules' surface itself (the `audio` shim; `nvda`
+        # et al. via the compat black hole), so the DLL load is redundant -- returning a
+        # harmless no-op loader lets the assert pass and install continue, while still never
+        # loading a DLL.
         lua.execute(
-            "if package then package.loadlib = nil end\n"
+            "if package then package.loadlib = function() return function() end end end\n"
             "if debug then debug.getregistry = nil; debug.sethook = nil end"
         )
     else:

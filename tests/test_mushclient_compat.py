@@ -161,7 +161,10 @@ def test_require_of_a_nil_module_is_nil_not_the_black_hole(tmp_path):
 
 def test_full_stdlib_keeps_stdlib_but_closes_escape_hatches(tmp_path):
     # Trusted packs get the Lua stdlib (os/io/loadstring/debug.traceback) but not the
-    # escape hatches: package.loadlib, debug.getregistry, debug.sethook are gone.
+    # escape hatches: debug.getregistry and debug.sethook are gone. package.loadlib does
+    # NOT load native code either -- but it's a truthy no-op loader, not nil, so a plugin's
+    # `assert(package.loadlib(dll, sym))()` bootstrap runs to completion instead of throwing
+    # and aborting OnPluginInstall (the failure that killed Erion's LuaAudio/mushReader).
     sink = RecordingSink()
     engine = AutomationEngine(sink)
     MushclientPack(
@@ -169,12 +172,13 @@ def test_full_stdlib_keeps_stdlib_but_closes_escape_hatches(tmp_path):
     ).load_source(
         "<muclient><script><![CDATA[\n"
         'if os and io and loadstring and debug and debug.traceback then Send("stdlib") end\n'
-        'if package.loadlib == nil then Send("no-loadlib") end\n'
+        'assert(package.loadlib("audio.dll", "luaopen_audio"))()\n'
+        'Send("loadlib-noop-ran")\n'
         'if debug.getregistry == nil then Send("no-getregistry") end\n'
         'if debug.sethook == nil then Send("no-sethook") end\n'
         "]]></script></muclient>"
     )
-    assert {"stdlib", "no-loadlib", "no-getregistry", "no-sethook"} <= set(sink.sent)
+    assert {"stdlib", "loadlib-noop-ran", "no-getregistry", "no-sethook"} <= set(sink.sent)
 
 
 def test_send_to_script_substitutes_wildcards():
@@ -557,6 +561,44 @@ def test_hooks_are_captured_per_plugin_and_do_not_leak(tmp_path):
     assert pack._include_errors == []  # beta's rawget assert held: no hook leaked
     pack.dispatch_install()
     assert sink.sent == ["alpha", "beta"]  # both ran, in load order
+
+
+def test_loadlib_bootstrap_does_not_abort_install(tmp_path):
+    """Erion's LuaAudio and mushReader open OnPluginInstall with
+    `assert(package.loadlib(dll, sym))()`. When loadlib was nil that assert threw and
+    the rest of the hook (LuaAudio's volume defaults; mushReader's nvda.stop/say) never
+    ran -- the two `loadlib (a nil value)` errors in the crash-day diagnostic log. The
+    no-op loader + black-holed `nvda` must let both hooks run to completion silently."""
+    (tmp_path / "luaaudio.xml").write_text(
+        '<muclient><plugin id="luaaudio"/><script><![CDATA[\n'
+        "function OnPluginInstall()\n"
+        '  assert(package.loadlib("audio.dll", "luaopen_audio"))()\n'
+        '  SetVariable("vol", "100")\n'  # the line that used to be skipped
+        '  Send("luaaudio-installed")\n'
+        "end\n"
+        "]]></script></muclient>",
+        encoding="latin-1",
+    )
+    (tmp_path / "mushreader.xml").write_text(
+        '<muclient><plugin id="mushreader"/><script><![CDATA[\n'
+        "function OnPluginInstall()\n"
+        '  assert(package.loadlib("MushReader.dll", "luaopen_audio"))()\n'
+        "  nvda.stop()\n"  # black-holed: no-ops instead of indexing a nil `nvda`
+        '  nvda.say("mush reader initialized")\n'
+        '  Send("mushreader-installed")\n'
+        "end\n"
+        "]]></script></muclient>",
+        encoding="latin-1",
+    )
+    sink, engine, pack = _make_pack(
+        tmp_path,
+        '<muclient><include name="luaaudio.xml" plugin="y"/>'
+        '<include name="mushreader.xml" plugin="y"/></muclient>',
+    )
+    pack.dispatch_install()
+    # Both hooks reached their tail Send -> the loadlib assert passed and nvda.* no-op'd.
+    assert sink.sent == ["luaaudio-installed", "mushreader-installed"]
+    assert pack._api.get_var("vol") == "100"
 
 
 def test_failing_hook_is_isolated(tmp_path):

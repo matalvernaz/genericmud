@@ -1283,17 +1283,24 @@ class GenericMudFrame(wx.Frame):
         if isinstance(outcome, Exception):
             self._log_update_check("error", error=repr(outcome))
             if manual:
-                wx.MessageBox(
-                    f"Couldn't check for updates: {outcome}", "Check for Updates",
-                    wx.OK | wx.ICON_ERROR,
+                # Defer the modal to a fresh event-loop turn (as _on_update_finished already
+                # does for its own MessageBox). This callback runs as the _run_async completion
+                # *inside* wx's pending-event dispatch; showing a native modal there raises
+                # RPC_E_CANTCALLOUT_ININPUTSYNCCALL (0x8001010d) while a screen reader's
+                # input-synchronous COM call is in flight -- the faulthandler "Windows fatal
+                # exception" recorded in the crash log. CallAfter re-posts it to run cleanly.
+                wx.CallAfter(
+                    wx.MessageBox, f"Couldn't check for updates: {outcome}",
+                    "Check for Updates", wx.OK | wx.ICON_ERROR,
                 )
             return
         if outcome is None:
             self._log_update_check("up_to_date")
             if manual:
                 self.announce("genericMud is up to date.")
-                wx.MessageBox(
-                    "genericMud is up to date.", "Check for Updates", wx.OK | wx.ICON_INFORMATION
+                wx.CallAfter(
+                    wx.MessageBox, "genericMud is up to date.",
+                    "Check for Updates", wx.OK | wx.ICON_INFORMATION,
                 )
             return
         prefs = load_prefs()
