@@ -13,8 +13,8 @@ jobs:
   windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
       - name: Install
@@ -67,7 +67,7 @@ jobs:
       - name: Zip
         shell: pwsh
         run: Compress-Archive -Path dist/genericMud -DestinationPath dist/genericMud-windows.zip
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         continue-on-error: true  # a hit artifact-storage quota must not block the release publish
         with:
           name: genericMud-windows
