@@ -22,6 +22,7 @@ class _FakeChannel:
         self.played: list[tuple] = []
         self.volume: tuple | None = None
         self.stopped = 0
+        self.busy = True  # mirrors pygame.Channel.get_busy; tests flip it to simulate a finished cue
 
     def play(self, sound, loops):
         self.played.append((sound, loops))
@@ -31,6 +32,9 @@ class _FakeChannel:
 
     def stop(self):
         self.stopped += 1
+
+    def get_busy(self):
+        return self.busy
 
 
 class _FakeMusic:
@@ -94,6 +98,37 @@ def test_distinct_categories_get_distinct_channels():
     backend.play("a.wav", "sound", 1.0, 0.0, False)
     backend.play("b.wav", "ambient", 1.0, 0.0, False)
     assert backend._channels["sound"].index != backend._channels["ambient"].index
+
+
+def test_looping_cue_is_not_stolen_by_a_flood_of_one_shots():
+    # The MUSHclient audio shim mints a fresh category per cue; with only a few physical
+    # channels, a stream of one-shot footsteps must never land on (and cut) the looping music.
+    # The old monotonic `index % num_channels` allocator wrapped and replayed a footstep on the
+    # music's channel; here the music channel must receive exactly its one looping play, ever.
+    mixer = _FakeMixer(num=3)
+    backend = PygameSoundBackend(mixer)
+    backend.play("area25.ogg", "music-cue", 0.2, 0.0, loop=True)  # loops -> stays busy forever
+    music_channel = backend._channels["music-cue"]
+    for i in range(20):
+        cat = f"sfx-{i}"
+        backend.play(f"{i}.wav", cat, 1.0, 0.0, loop=False)
+        backend._channels[cat].busy = False  # that one-shot finished before the next fires
+    # The looping music was never displaced: its physical channel only ever got its own cue.
+    assert music_channel.played == [(("sound", "area25.ogg"), -1)]
+    assert music_channel.stopped == 0
+    # Finished one-shots were reclaimed, so the maps stayed bounded (not 21 stale entries).
+    assert len(backend._channels) <= mixer.get_num_channels()
+
+
+def test_same_category_reuses_its_channel_while_playing():
+    # A re-fire on the same logical channel replaces on the SAME physical channel (native packs
+    # rely on this: a new footstep on "steps" cuts the previous one).
+    backend = PygameSoundBackend(_FakeMixer())
+    backend.play("a.wav", "steps", 1.0, 0.0, False)
+    first = backend._channels["steps"]
+    backend.play("b.wav", "steps", 1.0, 0.0, False)  # still busy -> same channel object
+    assert backend._channels["steps"] is first
+    assert first.played == [(("sound", "a.wav"), 0), (("sound", "b.wav"), 0)]
 
 
 def test_decoded_sounds_are_cached():

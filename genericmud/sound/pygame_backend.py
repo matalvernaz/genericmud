@@ -28,17 +28,10 @@ _DEFAULT_CHANNELS = 32  # the mixer is process-global; give concurrent sessions 
 # filenames can't grow memory for the life of the session. LRU: least-recently-played is evicted.
 _MAX_CACHED_SOUNDS = 256
 
-# Process-wide cursor so a category in session A and one in session B don't land on
-# the same pygame channel (which would let B's sound cut A's). Distinctness is what
-# matters, not the absolute index.
+# Process-wide scan cursor so concurrent sessions spread their cues across the shared
+# mixer instead of all crowding channel 0. Allocation scans from here for a FREE channel
+# (see _alloc_index), so distinctness -- not the absolute index -- is what matters.
 _next_channel = 0
-
-
-def _allocate_channel_index(count: int) -> int:
-    global _next_channel
-    index = _next_channel % count
-    _next_channel += 1
-    return index
 
 
 def _clamp(value: float) -> float:
@@ -64,7 +57,9 @@ class PygameSoundBackend:
         self._on_error = on_error
         self._diag = diag  # separate from on_error: trace every attempt, not deduped
         self._sounds: OrderedDict[str, object] = OrderedDict()  # path -> Sound (bounded LRU cache)
-        self._channels: dict[str, object] = {}  # category -> Channel
+        self._channels: dict[str, object] = {}  # category -> Channel (only entries still live)
+        self._indices: dict[str, int] = {}  # category -> physical mixer channel index
+        self._loops: dict[str, bool] = {}  # category -> is it a looping cue (protected from eviction)
         self._warned: set[str] = set()  # paths already reported, so a missing cue warns once
 
     def play(self, file: str, channel: str, gain: float, pan: float, loop: bool) -> None:
@@ -73,7 +68,7 @@ class PygameSoundBackend:
             self._trace(file, "SKIP", gain=gain)
             return
         try:
-            mixer_channel = self._channel(channel)
+            mixer_channel = self._channel(channel, loop)
             mixer_channel.play(sound, loops=-1 if loop else 0)
             mixer_channel.set_volume(*stereo_volume(gain, pan))
         except Exception as exc:  # noqa: BLE001 - a mixer fault must not crash the line; record it
@@ -113,12 +108,78 @@ class PygameSoundBackend:
         if existing is not None:
             existing.stop()
 
-    def _channel(self, category: str):
-        channel = self._channels.get(category)
-        if channel is None:
-            channel = self._mixer.Channel(_allocate_channel_index(self._mixer.get_num_channels()))
-            self._channels[category] = channel
+    def _channel(self, category: str, loop: bool = False):
+        """The pygame channel for a category, allocating a free physical slot on first use.
+
+        Reusing the SAME category returns its channel (a new cue replaces the old one on it --
+        the intended per-logical-channel behaviour). A NEW category gets a channel that isn't
+        currently in use, so distinct cues never collide. This matters because the MUSHclient
+        ``audio`` shim mints a fresh category per cue (erion-audio-1, -2, ...): the old monotonic
+        ``index % num_channels`` allocator wrapped after num_channels cues and handed a new
+        footstep the same physical channel as the looping area music, cutting the music out.
+        """
+        existing = self._channels.get(category)
+        if existing is not None:
+            self._loops[category] = loop  # a re-fire on the same category may change loopiness
+            return existing
+        index = self._alloc_index()
+        channel = self._mixer.Channel(index)
+        self._channels[category] = channel
+        self._indices[category] = index
+        self._loops[category] = loop
         return channel
+
+    def _alloc_index(self) -> int:
+        """Pick a physical channel index not held by a still-playing cue.
+
+        Sweeps out finished one-shots first (freeing their slot and bounding the maps), then
+        scans from the process-wide cursor for a free index. Under full pressure it evicts a
+        one-shot before ever stealing a looping cue, so music/ambience survive a flood of SFX.
+        """
+        global _next_channel
+        count = self._mixer.get_num_channels()
+        used = self._reap()
+        for offset in range(count):
+            index = (_next_channel + offset) % count
+            if index not in used:
+                _next_channel = (index + 1) % count
+                return index
+        # Every channel is busy: evict the oldest non-looping cue rather than a looping one.
+        for cat in list(self._channels):
+            if not self._loops.get(cat):
+                index = self._indices[cat]
+                self._release(cat)
+                _next_channel = (index + 1) % count
+                return index
+        # Everything live is a loop -- an unavoidable steal; take the channel at the cursor.
+        index = _next_channel % count
+        _next_channel = (index + 1) % count
+        return index
+
+    def _reap(self) -> set[int]:
+        """Indices still held by playing cues; drop finished one-shots so their slot frees up."""
+        used: set[int] = set()
+        for category, channel in list(self._channels.items()):
+            if self._is_busy(channel):
+                used.add(self._indices[category])
+            else:
+                self._release(category)
+        return used
+
+    def _release(self, category: str) -> None:
+        self._channels.pop(category, None)
+        self._indices.pop(category, None)
+        self._loops.pop(category, None)
+
+    @staticmethod
+    def _is_busy(channel: object) -> bool:
+        getter = getattr(channel, "get_busy", None)
+        if getter is None:
+            return True  # can't tell (a stub without get_busy): assume live, so we never yank it
+        try:
+            return bool(getter())
+        except Exception:  # noqa: BLE001 - a mixer probe fault must not abort allocation
+            return True
 
     def _sound(self, file: str):
         cached = self._sounds.get(file)
