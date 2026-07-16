@@ -35,6 +35,11 @@ class SoundBackend:
     def music(self, file: str, channel: str, gain: float) -> None: ...
     def stop(self, channel: str) -> None: ...
 
+    def is_playing(self, channel: str) -> bool:
+        """Whether a cue is still audible on this channel; backends that can't know
+        (the renderer post path) answer False, matching the pre-query behaviour."""
+        return False
+
 
 class SoundBus:
     def __init__(self, backend: SoundBackend | None = None, *, master: float = 1.0) -> None:
@@ -94,6 +99,11 @@ class SoundBus:
     def stop(self, channel: str) -> None:
         self._playing.discard(channel)
         self._backend.stop(channel)
+
+    def is_playing(self, channel: str) -> bool:
+        # The backend is the truth (a one-shot ends on its own); `_playing` only
+        # records what was started, so it can't answer this.
+        return self._backend.is_playing(channel)
 
     def flush(self) -> None:
         """Stop every playing category (the sound panic key, e.g. Shift+F11)."""

@@ -714,6 +714,11 @@ class EngineApp:
 
     def on_connection_status(self, message: str) -> None:
         """Surface a transport status line (reconnecting, reconnected) to the user."""
+        if message.startswith(("disconnected", "protocol error")):
+            # A terminal drop (quit, network death we won't reconnect): silence the pack's
+            # looping music/ambience -- nothing will ever stop those cues otherwise. A
+            # "reconnecting" status keeps them; the session is expected to resume.
+            self.sound.flush()
         self._speak_system(message)
 
     def _log(self, text: str) -> None:

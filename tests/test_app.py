@@ -150,3 +150,29 @@ def test_blank_lines_skipped():
     lines = [m["text"] for m in posted if m["type"] == "line"]
     assert lines == ["hello", "world"]  # blank and whitespace-only lines dropped
     assert "" not in backend.spoken
+
+
+def test_terminal_disconnect_flushes_looping_sound():
+    # Quitting the MUD (or a drop we won't reconnect) must silence the pack's looping
+    # music/ambience: nothing else will ever stop those cues once the connection is gone.
+    # A transient "reconnecting" status keeps them -- the session is expected to resume.
+    class _Backend:
+        def __init__(self):
+            self.stopped: list[str] = []
+
+        def play(self, file, channel, gain, pan, loop):
+            pass
+
+        def stop(self, channel):
+            self.stopped.append(channel)
+
+    from genericmud.app import EngineApp as _EngineApp
+
+    backend = _Backend()
+    voice = VoiceRouter(RecordingBackend(), clock=lambda: 0.0)
+    app = _EngineApp(voice, keymap=load_keymap("vipmud"), sound_backend=backend)
+    app.sound.play("area25.ogg", "erion-audio-1", loop=True)
+    app.on_connection_status("reconnecting in 2s")
+    assert backend.stopped == []  # transient: the loop keeps playing across a reconnect
+    app.on_connection_status("disconnected")
+    assert backend.stopped == ["erion-audio-1"]

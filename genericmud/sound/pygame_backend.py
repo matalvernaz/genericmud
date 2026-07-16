@@ -108,6 +108,24 @@ class PygameSoundBackend:
         if existing is not None:
             existing.stop()
 
+    def is_playing(self, channel: str) -> bool:
+        """Whether a cue is still audibly playing on this logical channel.
+
+        Truthful per-cue status is what soundpack switching logic keys off: Erion's
+        ambience/music handlers ask ``isPlaying(old)`` to decide between "replace the
+        running cue" and "just start the new one" -- an always-false answer makes them
+        stack a new ambience on top of the old every room change.
+        """
+        if channel == MUSIC_CATEGORY:
+            try:
+                return bool(self._mixer.music.get_busy())
+            except Exception:  # noqa: BLE001 - a mixer probe fault reads as "not playing"
+                return False
+        existing = self._channels.get(channel)
+        if existing is None:
+            return False
+        return self._is_busy(existing)
+
     def _channel(self, category: str, loop: bool = False):
         """The pygame channel for a category, allocating a free physical slot on first use.
 

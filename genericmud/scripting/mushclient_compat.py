@@ -164,7 +164,10 @@ class MushclientPack:
         funcs = {
             "Send": api.send,
             "SendNoEcho": api.send,
-            "Execute": api.send,
+            # Execute = "as if typed": aliases match first (Erion's historyadd Executes
+            # history_add, which its own channel_history alias consumes); send-through only
+            # for what no alias claims.
+            "Execute": api.execute,
             "Note": api.echo,
             "ColourNote": self._colour_note,
             # nil (not "") for an unset variable -- MUSHclient semantics. Erion's
@@ -218,6 +221,12 @@ class MushclientPack:
         next_id = [1]
 
         def _alloc() -> tuple[int, str]:
+            if len(channels) > 512:
+                # Opportunistically forget finished cues so a marathon session doesn't grow
+                # the id map forever. Only finished ones: a live loop must stay stoppable by id.
+                for cid, ch in list(channels.items()):
+                    if not api.is_playing(ch):
+                        del channels[cid]
             cue_id = next_id[0]
             next_id[0] += 1
             channel = f"{_AUDIO_CHANNEL_PREFIX}{cue_id}"
@@ -263,21 +272,42 @@ class MushclientPack:
             if _to_float(cue_id) == 0:  # bass convention: id 0 stops every cue
                 api.flush()
                 return
-            channel = channels.get(int(_to_float(cue_id) or 0))
+            channel = channels.pop(int(_to_float(cue_id) or 0), None)
             if channel is not None:
                 api.stop(channel)
 
+        def is_playing(cue_id: object = 0, *_rest: object) -> int:
+            # Truthful per-cue status. Erion's ambience/music switching is gated on
+            # ppi.isPlaying(old): a hardcoded 0 told it the old cue was already done,
+            # so it started the new one WITHOUT stopping the old -- ambiences stacking
+            # on every room change, area music piling up copy on copy.
+            channel = channels.get(int(_to_float(cue_id) or 0))
+            return 1 if channel is not None and api.is_playing(channel) else 0
+
+        def fadeout(cue_id: object = 0, *_rest: object) -> None:
+            # No DSP fade in the bus; an immediate stop is the correct end state
+            # (this is how the pack retires the outgoing ambience/music).
+            stop(cue_id)
+
+        def slide_vol(cue_id: object = 0, vol: object = None, *_rest: object) -> None:
+            # bass slides the cue's volume over time; sliding to 0 is a fade-to-stop.
+            # A slide to a nonzero level stays a no-op (no per-cue live gain in the bus).
+            if _to_float(vol) == 0:
+                stop(cue_id)
+
         # A table backed by a no-op __index, so any bass method we don't implement
-        # (pan/freq/pitch/fadeout/slide*/dll) is safely callable and just does nothing.
+        # (pan/freq/pitch/slidePan/slidePitch/dll) is safely callable and just does nothing.
         audio = self._lua.eval("setmetatable({}, {__index = function() return function() end end})")
         audio.play = play
         audio.playLooped = lambda file="", *_a: _start(file, 1, None, None, 0.0)
         audio.playDelay = play_delay
         audio.playDelayLooped = play_delay_looped
         audio.stop = stop
+        audio.fadeout = fadeout
+        audio.slideVol = slide_vol
         audio.free = lambda *_a: api.flush()
         audio.getVolume = lambda *_a: _VOLUME_MAX
-        audio.isPlaying = lambda *_a: 0
+        audio.isPlaying = is_playing
         self._lua.globals().audio = audio
 
     def _colour_note(self, *args: object) -> None:

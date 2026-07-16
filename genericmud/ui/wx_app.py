@@ -345,6 +345,7 @@ class SessionPanel(wx.Panel):
     def _teardown(self) -> None:  # loop thread
         if self.app is not None:
             self.app.shutdown()  # leave the session hub, stop logging
+            self.app.sound.flush()  # a looping ambience/music cue outlives the tab otherwise
         if self._voice is not None:
             self._voice.flush()
         if self._connection is not None:
@@ -361,6 +362,10 @@ class SessionPanel(wx.Panel):
         if self._connection is not None:
             self._connection.auto_reconnect = False
             asyncio.create_task(self._connection.close())
+        if self.app is not None:
+            # A deliberate close is silent (no "disconnected" status fires), so the
+            # status-side flush never runs; cut the pack's looping cues here.
+            self.app.sound.flush()
 
 
 class ConnectDialog(wx.Dialog):

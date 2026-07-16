@@ -601,6 +601,68 @@ def test_loadlib_bootstrap_does_not_abort_install(tmp_path):
     assert pack._api.get_var("vol") == "100"
 
 
+def test_execute_runs_aliases_before_the_wire(tmp_path):
+    """MUSHclient Execute = "as if typed": aliases match first. Erion's historyadd()
+    Executes "history_add all=..." at MSDP-dispatch time expecting its channel_history
+    alias to consume it; the old Execute->send binding shipped it to the MUD, which
+    rejected it -- and the rejection was spoken -- on every captured line. Unmatched
+    text still goes out."""
+    sink, engine, pack = _make_pack(
+        tmp_path,
+        "<muclient>"
+        '<aliases><alias match="^history_add (\\w[\\w ]*)=(.*)$" enabled="y" regexp="y"'
+        ' script="history_add" sequence="100"/></aliases>'
+        "<script><![CDATA[\n"
+        'function history_add(name, line, wc) SetVariable("hist", wc[2]) end\n'
+        "]]></script></muclient>",
+    )
+    # Runtime, like Erion's MSDP handler (load is long done; the alias is registered):
+    pack._lua.execute('Execute("history_add all=goblin says hi")')
+    pack._lua.execute('Execute("look")')
+    assert pack._api.get_var("hist") == "goblin says hi"  # the alias consumed it
+    assert sink.sent == ["look"]  # only the unmatched command reached the wire
+
+
+def test_audio_isplaying_is_truthful_and_fadeout_stops(tmp_path):
+    """Erion's ambience/music switching is gated on ppi.isPlaying(old): the old
+    hardcoded 0 told it the outgoing cue was already done, so it started the new one
+    without stopping the old -- ambiences stacking on every room change. isPlaying
+    must reflect the backend, and fadeout must actually retire the cue."""
+
+    class _Backend:
+        def __init__(self):
+            self.busy: set[str] = set()
+
+        def is_playing(self, channel):
+            return channel in self.busy
+
+    from genericmud.sound.bus import SoundBus
+
+    backend = _Backend()
+    sink = RecordingSink()
+    engine = AutomationEngine(sink, sound=SoundBus(backend))
+    (tmp_path / "amb.ogg").write_bytes(b"OggS")
+    pack = MushclientPack(
+        ScriptApi(engine, source="erion", base_dir=str(tmp_path)), full_stdlib=True
+    )
+    pack.load_source(
+        '<muclient><script><![CDATA[ id1 = audio.play("amb.ogg", 1) ]]></script></muclient>'
+    )
+    assert pack._lua.globals().id1 == 1  # cue 1 -> bus channel "erion-audio-1"
+    # In production AppSink forwards plays into the bus; tests record them on the sink
+    # instead, so drive the backend's "still audible" truth directly.
+    backend.busy.add("erion-audio-1")
+    assert pack._lua.eval("audio.isPlaying(1)") == 1
+    backend.busy.discard("erion-audio-1")
+    assert pack._lua.eval("audio.isPlaying(1)") == 0  # finished cue reads as done
+    assert pack._lua.eval("audio.isPlaying(999)") == 0  # unknown id: never an error
+    # fadeout retires the cue: the channel is stopped and the id forgotten.
+    backend.busy.add("erion-audio-1")
+    pack._lua.execute("audio.fadeout(1, 5)")
+    assert sink.stopped == ["erion-audio-1"]
+    assert pack._lua.eval("audio.isPlaying(1)") == 0  # even though the backend still says busy
+
+
 def test_failing_hook_is_isolated(tmp_path):
     """One plugin's erroring hook must not stop the others (MUSHclient isolation)."""
     (tmp_path / "bad.xml").write_text(

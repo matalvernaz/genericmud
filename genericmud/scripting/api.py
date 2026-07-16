@@ -53,6 +53,17 @@ class ScriptApi:
     def send(self, text: str) -> None:
         self._engine.sink.send(str(text))
 
+    def execute(self, text: str) -> None:
+        """Process ``text`` as if the user typed it (MUSHclient ``Execute``).
+
+        Aliases run first; only what falls through goes to the MUD. Distinct from
+        :meth:`send`: Erion's history plugin does ``Execute("history_add all=...")``
+        expecting its own alias to consume it -- sending that straight to the server
+        gets a spoken "no such command" rejection on every captured line.
+        """
+        for out in self._engine.process_input(str(text)):
+            self._engine.sink.send(out)
+
     def send_packet(self, data: bytes) -> None:
         """Send a pre-framed telnet packet verbatim (MUSHclient ``SendPkt``).
 
@@ -84,6 +95,10 @@ class ScriptApi:
 
     def stop(self, channel: str = "sound") -> None:
         self._engine.sink.stop(channel)
+
+    def is_playing(self, channel: str = "sound") -> bool:
+        """Whether a cue is still audible on ``channel`` (backend truth, not history)."""
+        return self._engine.sound.is_playing(channel)
 
     def music(self, file: str, channel: str = "music") -> None:
         if self._engine.diag is not None:
