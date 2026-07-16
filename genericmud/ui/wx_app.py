@@ -73,6 +73,16 @@ _NAMED_KEYS = {
     wx.WXK_HOME: "home",
     wx.WXK_END: "end",
     wx.WXK_ESCAPE: "escape",
+    # Named so pack accelerators can bind them (Erion's history browser uses
+    # alt+pageup/pagedown, alt+space, alt+shift+delete, alt+enter...). Only modified
+    # combos reach the keymap -- plain enter/space/tab stay ordinary typing below.
+    wx.WXK_PAGEUP: "pageup",
+    wx.WXK_PAGEDOWN: "pagedown",
+    wx.WXK_DELETE: "delete",
+    wx.WXK_INSERT: "insert",
+    wx.WXK_RETURN: "enter",
+    wx.WXK_TAB: "tab",
+    wx.WXK_SPACE: "space",
 }
 
 
@@ -96,15 +106,30 @@ def _key_combo(event: wx.KeyEvent) -> str | None:
     else:
         return None
 
-    is_special = name.startswith("f") and name[1:].isdigit() or name == "escape"
+    is_fkey = name.startswith("f") and name[1:].isdigit()
+    is_special = is_fkey or name == "escape"
     if not mods and not is_special:
         return None  # ordinary typing
+    if mods == ["shift"] and not is_fkey:
+        # Shift+<key> is typing and editing, not a macro chord: capitals, punctuation,
+        # shift+arrow/home/end selection, shift+insert paste, shift+delete cut, shift+tab.
+        # Consuming these (as combos) made every shifted character vanish from the input
+        # box. Shift+F-keys stay combos -- packs bind them (Erion: shift+f1 -> full hp).
+        return None
     return "+".join(mods + [name])
 
 
 # Window/OS commands the input box must NOT swallow -- they have to reach the platform's
 # default handler (Alt+F4 -> WM_CLOSE -> our EVT_CLOSE), or the window can't be closed.
-_PASSTHROUGH_COMBOS = frozenset({"alt+f4"})
+# Combos the input box must keep for native editing/system behaviour rather than
+# treat as macros: window close, clipboard, undo/redo, select-all, and word-wise
+# caret movement/selection -- these matter doubly under a screen reader.
+_PASSTHROUGH_COMBOS = frozenset({
+    "alt+f4",
+    "ctrl+c", "ctrl+v", "ctrl+x", "ctrl+a", "ctrl+z", "ctrl+y",
+    "ctrl+left", "ctrl+right", "ctrl+home", "ctrl+end", "ctrl+delete",
+    "ctrl+shift+left", "ctrl+shift+right", "ctrl+shift+home", "ctrl+shift+end",
+})
 
 _OUTPUT_CAP_LINES = 5000  # keep the native control bounded so NVDA/UIA stays responsive
 _FLUSH_INTERVAL_MS = 50  # batch output appends during floods

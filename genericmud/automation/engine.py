@@ -214,6 +214,10 @@ class AutomationEngine:
     def set_var(self, name: str, value: object) -> None:
         self._vars[name] = str(value)
 
+    def all_vars(self) -> dict[str, str]:
+        """A snapshot of session variables (for pack-state persistence)."""
+        return dict(self._vars)
+
     def get_gvar(self, name: str) -> str:
         return self._gvars.get(name, "")
 

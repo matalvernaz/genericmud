@@ -69,6 +69,47 @@ def _to_float(value: object) -> float | None:
 # relative to the WORLD file's directory, so every dir code resolves to it (see _get_info).
 _DIR_INFO_CODES = frozenset({56, 60, 64, 66, 67})
 
+# MUSHclient's AddTrigger/AddTriggerEx flag bits (exposed to packs as `trigger_flag`).
+_TRIGGER_FLAGS = {
+    "Enabled": 1,
+    "OmitFromLog": 2,
+    "OmitFromOutput": 4,
+    "KeepEvaluating": 8,
+    "IgnoreCase": 16,
+    "RegularExpression": 32,
+    "ExpandVariables": 512,
+    "Replace": 1024,
+    "LowercaseWildcard": 2048,
+    "Temporary": 16384,
+    "OneShot": 32768,
+}
+_SCRIPT_ERROR_OK = 0  # MUSHclient eOK; nonzero = failure (packs rarely check)
+_MOD_ORDER = ("ctrl", "alt", "shift")  # canonical combo order, matching the UI's _key_combo
+
+
+def _reduce_ints(args: tuple, op) -> int:
+    values = [int(_to_float(a) or 0) for a in args]
+    result = values[0] if values else 0
+    for value in values[1:]:
+        result = op(result, value)
+    return result
+
+
+def _normalize_key_spec(spec: object) -> str:
+    """MUSHclient accelerator syntax -> a keymap combo, or "" when unusable.
+
+    Real packs are inconsistent: "shift+f1", "ctrl +0", "alt + pageup",
+    "shift+alt + left". Lowercase everything, strip spaces, and emit modifiers in
+    the ctrl/alt/shift order the UI's _key_combo builds, key last.
+    """
+    parts = [part.strip().lower() for part in str(spec or "").split("+")]
+    parts = [part for part in parts if part]
+    keys = [part for part in parts if part not in _MOD_ORDER]
+    if len(keys) != 1:
+        return ""  # no key, or something like "ctrl+alt" alone
+    mods = [mod for mod in _MOD_ORDER if mod in parts]
+    return "+".join([*mods, keys[0]])
+
 
 class MushclientPack:
     def __init__(self, api: ScriptApi, *, full_stdlib: bool = False) -> None:
@@ -87,6 +128,10 @@ class MushclientPack:
         self._include_errors: list[tuple[str, str]] = []  # plugins that failed to load (name, why)
         self._hooks: dict[str, dict[str, object]] = {}  # plugin id -> {hook name -> Lua fn}
         self._arrays: dict[str, dict[str, str]] = {}  # MUSHclient Array* API backing store
+        # AddTriggerEx-made rules, by name. One engine rule per name whose callback reads
+        # this state, so a Replace re-registration mutates state instead of stacking a new
+        # engine rule per keypress (Erion re-adds its announce triggers on every F-key).
+        self._dynamic_triggers: dict[str, dict] = {}
         # MUSHclient targets Lua 5.1; trusted packs keep the full stdlib their
         # libraries assume (os/io/loadstring + the module(..., package.seeall) idiom).
         self._lua, install_hook = make_sandboxed_runtime(lua51=True, full_stdlib=full_stdlib)
@@ -183,7 +228,11 @@ class MushclientPack:
             "ArraySet": self._array_set,
             "ArrayGet": self._array_get,
             "DeleteVariable": lambda name: api.set_var(name, ""),
-            "EnableTrigger": lambda *_a: None,
+            "Accelerator": self._accelerator,
+            "AddTriggerEx": self._add_trigger_ex,
+            "DeleteTrigger": self._delete_trigger,
+            "CallPlugin": self._call_plugin,
+            "EnableTrigger": self._enable_trigger,
             "EnableAlias": lambda *_a: None,
             "EnableTimer": lambda *_a: None,
             "Hyperlink": lambda *_a: None,
@@ -204,6 +253,27 @@ class MushclientPack:
             world[name] = fn
             world[name.lower()] = fn
         g.world = world
+        # Real `bit` ops and the AddTrigger flag/colour constants. These were black-holed,
+        # which broke every runtime registration: bit.bor returned a table and
+        # trigger_flag.Enabled was nil, so AddTriggerEx got garbage flags (Erion's F-key
+        # report triggers are all registered this way).
+        bit = self._lua.table()
+        bit.bor = lambda *a: _reduce_ints(a, lambda x, y: x | y)
+        bit.band = lambda *a: _reduce_ints(a, lambda x, y: x & y)
+        bit.bxor = lambda *a: _reduce_ints(a, lambda x, y: x ^ y)
+        bit.bnot = lambda x=0: ~(int(_to_float(x) or 0)) & 0xFFFFFFFF
+        bit.lshift = lambda x=0, n=0: (int(_to_float(x) or 0) << int(_to_float(n) or 0)) & 0xFFFFFFFF
+        bit.rshift = lambda x=0, n=0: (int(_to_float(x) or 0) & 0xFFFFFFFF) >> int(_to_float(n) or 0)
+        g.bit = bit
+        trigger_flag = self._lua.table()
+        for flag_name, value in _TRIGGER_FLAGS.items():
+            trigger_flag[flag_name] = value
+        g.trigger_flag = trigger_flag
+        custom_colour = self._lua.table()
+        custom_colour.NoChange = -1
+        for i in range(1, 17):
+            custom_colour[f"Custom{i}"] = i - 1
+        g.custom_colour = custom_colour
 
     def _install_audio(self) -> None:
         """Provide the ``audio`` global that bass.dll-backed packs (Erion) play every cue through.
@@ -402,6 +472,117 @@ class MushclientPack:
             return ""
         root = self._world_dir or self._base_dir or ""
         return f"{root.rstrip('/')}/" if root else ""
+
+    def _accelerator(self, key: object = "", send: object = "", *_rest: object) -> None:
+        """MUSHclient ``Accelerator(key, send)``: bind a hotkey that runs ``send`` as if
+        typed. This is how a pack ships its keyboard UI -- Erion binds 54 of these
+        (F1 hp report, F7 recall, the whole alt+arrows history browser) -- so a black
+        hole here meant a pack loaded with zero working hotkeys (``pack.counts keys=0``).
+        """
+        combo = _normalize_key_spec(key)
+        command = str(send or "")
+        if not combo or not command:
+            return
+        self._api.add_key(combo, lambda _ctx, cmd=command: self._api.execute(cmd))
+
+    def _add_trigger_ex(
+        self,
+        name: object = "",
+        match: object = "",
+        response: object = "",
+        flags: object = 0,
+        _colour: object = 0,
+        _wildcard: object = 0,
+        _sound_file: object = "",
+        script_name: object = "",
+        send_to: object = 0,
+        sequence: object = 100,
+        *_rest: object,
+    ) -> int:
+        """MUSHclient ``AddTriggerEx``: register a trigger at runtime.
+
+        Erion's F-key report chain hangs off this: the hotkey alias sends "score hp"
+        and AddTriggerEx's a OneShot+Replace trigger to speak the reply. One engine
+        rule per *name*: a Replace re-registration with the same pattern just rewires
+        the stored state (handler/flags), so hammering F1 doesn't stack a dead rule
+        per press. OneShot deactivates itself on first fire.
+        """
+        flag_bits = int(_to_float(flags) or 0)
+        trigger_name = str(name or "")
+        pattern = str(match or "")
+        if not pattern:
+            return 1  # nonzero = MUSHclient error; packs rarely check
+        regex = bool(flag_bits & _TRIGGER_FLAGS["RegularExpression"])
+        if flag_bits & _TRIGGER_FLAGS["IgnoreCase"] and regex:
+            pattern = "(?i)" + pattern
+        handler = self._lua.globals()[str(script_name)] if str(script_name or "") else None
+        state = {
+            "active": bool(flag_bits & _TRIGGER_FLAGS["Enabled"]),
+            "one_shot": bool(flag_bits & _TRIGGER_FLAGS["OneShot"]),
+            "handler": handler,
+            "body": str(response or ""),
+            "send_to": int(_to_float(send_to) or 0),
+            "pattern": pattern,
+            "regex": regex,
+            "name": trigger_name,
+        }
+        previous = self._dynamic_triggers.get(trigger_name) if trigger_name else None
+        if previous is not None and (previous["pattern"], previous["regex"]) == (pattern, regex):
+            previous.update(state)  # same rule shape: rewire in place, no new engine rule
+            return _SCRIPT_ERROR_OK
+        if previous is not None:
+            previous["active"] = False  # pattern changed: retire the old rule's callback
+        if trigger_name:
+            self._dynamic_triggers[trigger_name] = state
+
+        def fire(ctx: MatchContext) -> None:
+            live = self._dynamic_triggers.get(trigger_name, state) if trigger_name else state
+            if live is not state or not live["active"]:
+                return  # replaced by a different rule shape, deleted, or disabled
+            if live["one_shot"]:
+                live["active"] = False
+            if live["handler"] is not None:
+                wildcards = self._lua.table_from(ctx.wildcards[1:])
+                self._guard.run(live["handler"], live["name"], ctx.line.plain_text, wildcards)
+            body = live["body"]
+            if body:
+                text = _substitute(body, ctx.wildcards)
+                if live["send_to"] == int(_SEND_TO_SCRIPT):
+                    self._guard.run(lambda: self._compile(text)())
+                else:
+                    self._api.send(text)
+
+        self._api.add_trigger(
+            pattern, fire, regex=regex, priority=-int(_to_float(sequence) or 100)
+        )
+        return _SCRIPT_ERROR_OK
+
+    def _delete_trigger(self, name: object = "", *_rest: object) -> int:
+        state = self._dynamic_triggers.pop(str(name or ""), None)
+        if state is None:
+            return 1  # unknown (or XML-defined) trigger: MUSHclient errors, packs shrug
+        state["active"] = False
+        return _SCRIPT_ERROR_OK
+
+    def _enable_trigger(self, name: object = "", enabled: object = 1, *_rest: object) -> int:
+        state = self._dynamic_triggers.get(str(name or ""))
+        if state is None:
+            return 1  # XML-defined triggers stay un-toggleable (as before this existed)
+        state["active"] = bool(_to_float(enabled))
+        return _SCRIPT_ERROR_OK
+
+    def _call_plugin(self, plugin_id: object = "", func: object = "", *args: object) -> int:
+        """MUSHclient ``CallPlugin``: invoke another plugin's exposed function.
+
+        Resolved against the ppi Expose registry (the only cross-plugin surface we
+        keep). An unknown target no-ops with a nonzero code -- Erion only CallPlugins
+        its cosmetic messages-window plugin, which may not be loaded at all.
+        """
+        fn = self._exposed.get(str(plugin_id or ""), {}).get(str(func or ""))
+        if fn is None:
+            return 1
+        self._guard.run(fn, *args)
+        return _SCRIPT_ERROR_OK
 
     def _do_after_special(self, delay: float, code: str, sendto: object = _SEND_TO_SCRIPT) -> None:
         deferred = self._compile(str(code))

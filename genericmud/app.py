@@ -9,6 +9,7 @@ the whole glue layer is unit-testable without a socket, a webview, or NVDA.
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import traceback
 from collections.abc import Callable
@@ -239,6 +240,11 @@ class EngineApp:
         """The on-connect sequence: register with the hub, activate packs, arm login."""
         if self.hub is not None and self.name:
             self.hub.register(self.name, self._dispatch_remote)
+        # Seed saved pack variables BEFORE packs load: OnPluginInstall's `if
+        # GetVariable(x) ~= nil` checks are exactly how MUSHclient packs keep user
+        # settings (volumes, toggles) across sessions -- with nothing seeded, every
+        # launch silently reset them to defaults.
+        self._restore_pack_vars()
         result = self.activate_packs(world)
         if self._diag is not None:
             # Always emitted, even with zero packs: this is the marker that on_connect
@@ -297,11 +303,49 @@ class EngineApp:
 
     def shutdown(self) -> None:
         """Release session resources on close: leave the hub and stop logging."""
+        self._persist_pack_vars()
         if self.hub is not None and self.name:
             self.hub.unregister(self.name)
         if self.logger is not None:
             self.logger.stop()
             self.logger = None
+
+    # --- pack-variable persistence (MUSHclient SaveState equivalent) ---
+
+    def _pack_vars_path(self) -> Path | None:
+        if self.packs is None or not self.name:
+            return None  # headless/test sessions have nothing to persist against
+        root = getattr(self.packs, "root", None)
+        if root is None:
+            return None
+        return Path(root).parent / "state" / f"{sanitize_component(self.name)}-vars.json"
+
+    def _restore_pack_vars(self) -> None:
+        path = self._pack_vars_path()
+        if path is None:
+            return
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return  # no state yet, or an unreadable file: packs fall back to defaults
+        if not isinstance(data, dict):
+            return
+        for key, value in data.items():
+            if isinstance(key, str) and isinstance(value, str) and key != "sppath":
+                self.engine.set_var(key, value)
+
+    def _persist_pack_vars(self) -> None:
+        path = self._pack_vars_path()
+        if path is None:
+            return
+        # sppath is wiring (where THIS install keeps its sounds), not a user setting;
+        # persisting it would pin a moved/reinstalled pack to its old location.
+        data = {k: v for k, v in self.engine.all_vars().items() if k != "sppath"}
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+        except OSError:
+            pass  # a state write must never break session close
 
     def begin_login(self, world: str) -> None:
         """Arm auto-login for ``world`` if credentials are stored for it."""

@@ -663,6 +663,76 @@ def test_audio_isplaying_is_truthful_and_fadeout_stops(tmp_path):
     assert pack._lua.eval("audio.isPlaying(1)") == 0  # even though the backend still says busy
 
 
+def test_accelerator_binds_pack_hotkeys(tmp_path):
+    """Accelerator(key, send) is a pack's keyboard UI (Erion ships 54 of them); the key
+    spec is normalized (spacing, mod order) to the combo form the wx layer emits, and
+    the bound command runs "as if typed" -- aliases first, wire for the rest."""
+    sink, engine, pack = _make_pack(
+        tmp_path,
+        "<muclient>"
+        '<aliases><alias match="^hppercent$" enabled="y" regexp="y" sequence="100">'
+        "<send>score hp</send></alias></aliases>"
+        "<script><![CDATA[\n"
+        'Accelerator("shift+alt + f5", "hppercent")\n'  # messy spacing + mod order, like real packs
+        'Accelerator("f9", "look")\n'
+        "]]></script></muclient>",
+    )
+    assert engine.press_key("alt+shift+f5")  # canonical order: ctrl, alt, shift
+    assert sink.sent == ["score hp"]  # the alias consumed the command
+    assert engine.press_key("f9")
+    assert sink.sent == ["score hp", "look"]  # no alias: straight to the wire
+
+
+def test_addtriggerex_oneshot_and_replace(tmp_path):
+    """Erion's F-key reports: the hotkey alias AddTriggerEx's a OneShot+Replace trigger
+    (flags built with bit.bor over trigger_flag constants -- all previously black-holed)
+    to speak the MUD's reply. One fire per registration, and re-registering must not
+    stack a second live rule."""
+    register = (
+        'AddTriggerEx("AnnounceHPFull", "^(.*?) of (.*?) hp$", "",'
+        " bit.bor(trigger_flag.Enabled, trigger_flag.RegularExpression,"
+        " trigger_flag.Temporary, trigger_flag.Replace, trigger_flag.OneShot),"
+        ' custom_colour.NoChange, 0, "", "SpeakFullHp", 12, 100)'
+    )
+    sink, engine, pack = _make_pack(
+        tmp_path,
+        "<muclient><script><![CDATA[\n"
+        'function SpeakFullHp(name, line, wc) Send("hp " .. wc[1] .. "/" .. wc[2]) end\n'
+        "]]></script></muclient>",
+    )
+    pack._lua.execute(register)
+    engine.process_line(Line("324 of 400 hp"))
+    assert sink.sent == ["hp 324/400"]
+    engine.process_line(Line("324 of 400 hp"))
+    assert sink.sent == ["hp 324/400"]  # OneShot: spent after the first fire
+    pack._lua.execute(register)  # F-key pressed again: Replace re-arms, ONE rule fires
+    engine.process_line(Line("350 of 400 hp"))
+    assert sink.sent == ["hp 324/400", "hp 350/400"]
+    pack._lua.execute('DeleteTrigger("AnnounceHPFull")')
+    pack._lua.execute(register.replace("AnnounceHPFull", "Other"))
+    pack._lua.execute('EnableTrigger("Other", 0)')  # registered then disabled
+    engine.process_line(Line("1 of 2 hp"))
+    assert sink.sent == ["hp 324/400", "hp 350/400"]  # deleted + disabled: neither fired
+
+
+def test_callplugin_reaches_exposed_functions(tmp_path):
+    """CallPlugin routes through the ppi Expose registry; an unknown target no-ops."""
+    (tmp_path / "msgs.xml").write_text(
+        '<muclient><plugin id="msgsid"/><script><![CDATA[\n'
+        'local ppi = require "ppi"\n'
+        'function MsgNote(text) Send("note:" .. tostring(text)) end\n'
+        'ppi.Expose("MsgNote")\n'
+        "]]></script></muclient>",
+        encoding="latin-1",
+    )
+    sink, engine, pack = _make_pack(
+        tmp_path, '<muclient><include name="msgs.xml" plugin="y"/></muclient>'
+    )
+    pack._lua.execute('CallPlugin("msgsid", "MsgNote", "hi")')
+    pack._lua.execute('CallPlugin("nosuch", "MsgNote", "bye")')  # absent plugin: silent no-op
+    assert sink.sent == ["note:hi"]
+
+
 def test_failing_hook_is_isolated(tmp_path):
     """One plugin's erroring hook must not stop the others (MUSHclient isolation)."""
     (tmp_path / "bad.xml").write_text(

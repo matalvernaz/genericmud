@@ -176,3 +176,28 @@ def test_terminal_disconnect_flushes_looping_sound():
     assert backend.stopped == []  # transient: the loop keeps playing across a reconnect
     app.on_connection_status("disconnected")
     assert backend.stopped == ["erion-audio-1"]
+
+
+def test_pack_variables_persist_across_sessions(tmp_path):
+    # MUSHclient SaveState equivalent: user-adjusted pack settings (volumes, toggles)
+    # must survive a restart. Saved at shutdown, seeded before packs load on connect
+    # (OnPluginInstall's nil-checks then keep the saved values). sppath is wiring,
+    # not a setting, and must not be pinned to an old install location.
+    from genericmud.packs import PackStore
+
+    store = PackStore(tmp_path / "soundpacks")
+
+    def session():
+        voice = VoiceRouter(RecordingBackend(), clock=lambda: 0.0)
+        return EngineApp(voice, keymap=load_keymap("vipmud"), packs=store, name="Erion")
+
+    first = session()
+    first.on_connect("Erion")
+    first.engine.set_var("volume1", "42")
+    first.engine.set_var("sppath", str(tmp_path))
+    first.shutdown()
+
+    second = session()
+    second.on_connect("Erion")
+    assert second.engine.get_var("volume1") == "42"
+    assert second.engine.get_var("sppath") == ""  # not persisted
