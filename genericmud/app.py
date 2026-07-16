@@ -46,6 +46,8 @@ SPEEDWALK_PREFIX = "."  # ".3n2e" expands to n,n,n,e,e (leading char disambiguat
 SAFE_PREFIX = ".."  # "..3n2e" walks the same route one step at a time, halting if blocked
 CLIENT_PREFIX = "/"  # "/alias", "/trigger", ... ; unknown /verbs pass through to the MUD
 MAX_ALIAS_DEPTH = 20  # guard against an alias/trigger that re-fires itself forever
+_PLUGIN_TICK_SECONDS = 0.25  # OnPluginTick cadence (MUSHclient ticks faster; see _arm_plugin_ticks)
+
 _REVIEW_VERBS = frozenset(
     {"prev_line", "next_line", "prev_word", "next_word", "prev_char", "next_char", "top", "bottom"}
 )
@@ -110,6 +112,9 @@ class AppSink(EngineSink):
 
     def speak(self, text: str, channel: str = "main", interrupt: bool = False) -> None:
         self._voice.speak(text, channel, interrupt)
+
+    def stop_speech(self) -> None:
+        self._voice.flush()
 
     def play(
         self,
@@ -216,6 +221,8 @@ class EngineApp:
         self._client_error_spoken = False  # speak the first renderer error, echo the rest
         self._mush_packs: list[MushclientPack] = []  # loaded MUSHclient packs (hook dispatch)
         self._msdp_offered = False  # server sent WILL MSDP (replayed to late-loading packs)
+        self._ticks_armed = False  # the OnPluginTick chain is scheduled at most once
+        self._closed = False  # ends the tick chain at shutdown
         self._msdp_routed = 0  # subnegotiation count, for throttling the diag trace
 
     # --- soundpacks ---
@@ -286,8 +293,33 @@ class EngineApp:
             pack.dispatch_connect()
         if self._msdp_offered:  # negotiation happened before packs were ready: replay it
             self._dispatch_msdp_start()
+        self._arm_plugin_ticks()
         if self._diag is not None:
             self._diag.event("plugin.lifecycle.done")
+
+    def _arm_plugin_ticks(self) -> None:
+        """Run each pack's ``OnPluginTick`` on a repeating schedule.
+
+        MUSHclient ticks continuously; Erion's tick IS its music/ambience engine --
+        StartMusic/StartWeather/StartAmbiance restart a finished (non-looping) ambience
+        and rotate weather. Without it, ambience plays once per room and dies. 0.25s is
+        far below MUSHclient's rate but ambience-restart latency is imperceptible, and
+        each dispatch is a few variable reads. Skipped while disconnected so a tick
+        can't restart music after quit (the flush would be fighting the tick).
+        """
+        if self._ticks_armed or not any(p.has_hook("OnPluginTick") for p in self._mush_packs):
+            return
+        self._ticks_armed = True
+
+        def tick() -> None:
+            if self._closed:
+                return  # session torn down: let the chain end
+            if self.engine.connected:
+                for pack in self._mush_packs:
+                    pack.dispatch("OnPluginTick")
+            self._schedule(_PLUGIN_TICK_SECONDS, tick)
+
+        self._schedule(_PLUGIN_TICK_SECONDS, tick)
 
     def _dispatch_msdp_start(self) -> None:
         """Tell packs MSDP is on (the transport already answered DO). The SENT_DO round
@@ -303,6 +335,7 @@ class EngineApp:
 
     def shutdown(self) -> None:
         """Release session resources on close: leave the hub and stop logging."""
+        self._closed = True  # ends the OnPluginTick chain
         self._persist_pack_vars()
         if self.hub is not None and self.name:
             self.hub.unregister(self.name)
@@ -758,11 +791,16 @@ class EngineApp:
 
     def on_connection_status(self, message: str) -> None:
         """Surface a transport status line (reconnecting, reconnected) to the user."""
-        if message.startswith(("disconnected", "protocol error")):
+        if message.startswith(("disconnected", "protocol error", "reconnect failed")):
             # A terminal drop (quit, network death we won't reconnect): silence the pack's
             # looping music/ambience -- nothing will ever stop those cues otherwise. A
             # "reconnecting" status keeps them; the session is expected to resume.
+            # Also mark the engine disconnected: packs read IsConnected(), and the
+            # OnPluginTick chain pauses so a tick can't restart music after quit.
+            self.engine.connected = False
             self.sound.flush()
+        elif message.startswith("reconnected"):
+            self.engine.connected = True
         self._speak_system(message)
 
     def _log(self, text: str) -> None:

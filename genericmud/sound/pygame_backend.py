@@ -60,6 +60,7 @@ class PygameSoundBackend:
         self._channels: dict[str, object] = {}  # category -> Channel (only entries still live)
         self._indices: dict[str, int] = {}  # category -> physical mixer channel index
         self._loops: dict[str, bool] = {}  # category -> is it a looping cue (protected from eviction)
+        self._levels: dict[str, tuple[float, float]] = {}  # category -> (gain, pan) for adjust()
         self._warned: set[str] = set()  # paths already reported, so a missing cue warns once
 
     def play(self, file: str, channel: str, gain: float, pan: float, loop: bool) -> None:
@@ -70,6 +71,7 @@ class PygameSoundBackend:
         try:
             mixer_channel = self._channel(channel, loop)
             mixer_channel.play(sound, loops=-1 if loop else 0)
+            self._levels[channel] = (gain, pan)  # adjust() merges live changes over these
             mixer_channel.set_volume(*stereo_volume(gain, pan))
         except Exception as exc:  # noqa: BLE001 - a mixer fault must not crash the line; record it
             self._trace(file, "EXC", exc=f"{type(exc).__name__}: {exc}")
@@ -107,6 +109,28 @@ class PygameSoundBackend:
         existing = self._channels.get(channel)
         if existing is not None:
             existing.stop()
+
+    def adjust(self, channel: str, gain: float | None = None, pan: float | None = None) -> None:
+        """Change a PLAYING cue's volume/pan in place (None leaves that axis alone).
+
+        Soundpacks position and re-level running cues -- Cosmic Rage pans a cue right
+        after starting it (directional audio) and re-volumes named cues on server
+        command; Erion slides volumes. pygame's channel volume is one (left, right)
+        pair, so the last-known (gain, pan) is kept per channel and merged.
+        """
+        mixer_channel = self._channels.get(channel)
+        if mixer_channel is None:
+            return
+        current_gain, current_pan = self._levels.get(channel, (1.0, 0.0))
+        merged = (
+            gain if gain is not None else current_gain,
+            pan if pan is not None else current_pan,
+        )
+        self._levels[channel] = merged
+        try:
+            mixer_channel.set_volume(*stereo_volume(*merged))
+        except Exception:  # noqa: BLE001 - a mixer fault must not crash the caller
+            pass
 
     def is_playing(self, channel: str) -> bool:
         """Whether a cue is still audibly playing on this logical channel.
@@ -188,6 +212,7 @@ class PygameSoundBackend:
         self._channels.pop(category, None)
         self._indices.pop(category, None)
         self._loops.pop(category, None)
+        self._levels.pop(category, None)
 
     @staticmethod
     def _is_busy(channel: object) -> bool:

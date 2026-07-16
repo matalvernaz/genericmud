@@ -201,3 +201,36 @@ def test_pack_variables_persist_across_sessions(tmp_path):
     second.on_connect("Erion")
     assert second.engine.get_var("volume1") == "42"
     assert second.engine.get_var("sppath") == ""  # not persisted
+
+
+def test_plugin_tick_chain_dispatches_and_pauses_when_disconnected():
+    # The tick chain drives soundpack music engines (Erion restarts ambience there).
+    # It must dispatch on schedule, skip dispatch while disconnected, and end at close.
+    class _FakePack:
+        def __init__(self):
+            self.ticks = 0
+
+        def has_hook(self, name):
+            return name == "OnPluginTick"
+
+        def dispatch(self, name, *args, **kwargs):
+            if name == "OnPluginTick":
+                self.ticks += 1
+
+    scheduled = []
+    voice = VoiceRouter(RecordingBackend(), clock=lambda: 0.0)
+    app = EngineApp(voice, keymap=load_keymap("vipmud"),
+                    schedule=lambda delay, cb: scheduled.append(cb))
+    pack = _FakePack()
+    app._mush_packs = [pack]
+    app._arm_plugin_ticks()
+    assert len(scheduled) == 1
+    scheduled.pop()()  # first tick fires and reschedules
+    assert pack.ticks == 1 and len(scheduled) == 1
+    app.engine.connected = False
+    scheduled.pop()()  # disconnected: no dispatch, chain continues
+    assert pack.ticks == 1 and len(scheduled) == 1
+    app.engine.connected = True
+    app.shutdown()
+    scheduled.pop()()  # closed: chain ends, nothing rescheduled
+    assert pack.ticks == 1 and scheduled == []

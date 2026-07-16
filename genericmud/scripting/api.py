@@ -78,6 +78,13 @@ class ScriptApi:
     def speak(self, text: str, channel: str = "main", interrupt: bool = False) -> None:
         self._engine.sink.speak(str(text), channel, interrupt)
 
+    def stop_speech(self) -> None:
+        """Cut current speech (packs' interrupt-then-announce idiom, e.g. hp reports)."""
+        self._engine.sink.stop_speech()
+
+    def is_connected(self) -> bool:
+        return self._engine.connected
+
     def play(
         self,
         file: str,
@@ -85,13 +92,21 @@ class ScriptApi:
         gain: float = 1.0,
         pan: float = 0.0,
         loop: bool = False,
-    ) -> None:
+    ) -> bool:
+        """Play a cue; returns whether the file resolved to something that exists.
+
+        The return drives dialect-level failure reporting: VIPMud's %playhandle is 0
+        when a play failed, and packs branch on it (Cosmic Rage speaks the failure and
+        auto-fetches the missing file).
+        """
         if self._engine.diag is not None:
             self._engine.diag.event(
                 "play.entry", source=self._source or "?", file=file,
                 channel=channel, gain=gain, loop=loop,
             )
-        self._engine.sink.play(self._resolve(file), channel, gain, pan, loop)
+        resolved, exists = self._resolve(file)
+        self._engine.sink.play(resolved, channel, gain, pan, loop)
+        return exists
 
     def stop(self, channel: str = "sound") -> None:
         self._engine.sink.stop(channel)
@@ -105,7 +120,11 @@ class ScriptApi:
             self._engine.diag.event(
                 "play.entry", source=self._source or "?", file=file, channel=channel, kind="music"
             )
-        self._engine.sink.music(self._resolve(file), channel)
+        self._engine.sink.music(self._resolve(file)[0], channel)
+
+    def adjust(self, channel: str, gain: float | None = None, pan: float | None = None) -> None:
+        """Live volume/pan change on a playing cue (VIPMud #pc, bass setVol/slideVol)."""
+        self._engine.sound.adjust(channel, gain, pan)
 
     # --- variables ---
 
@@ -116,6 +135,11 @@ class ScriptApi:
         if len(str(value)) > _MAX_VAR_VALUE_LEN:
             return  # refuse an oversized value (memory-exhaustion guard)
         self._engine.set_var(name, value)
+
+    def delete_var(self, name: str) -> None:
+        """Remove a variable entirely (VIPMud #unvar / MUSHclient DeleteVariable):
+        a deleted variable must read as UNSET (nil / %defined 0), not empty-string."""
+        self._engine.delete_var(name)
 
     def get_gvar(self, name: str) -> str:
         return self._engine.get_gvar(name)
@@ -209,7 +233,7 @@ class ScriptApi:
         """The pack's root dir, for dialects that resolve their own paths (e.g. GetInfo)."""
         return self._base_dir
 
-    def _resolve(self, file: str) -> str:
+    def _resolve(self, file: str) -> tuple[str, bool]:
         original = file
         resolved = self._confine_media(file)
         exists = bool(resolved) and os.path.exists(resolved)
@@ -217,14 +241,14 @@ class ScriptApi:
         # it's a safe fallback for both a missing file and a rejected (unsafe/escaping) path.
         fallback = self._find_in_sounds_dir(original) if not exists else None
         final = fallback if fallback is not None else resolved
+        found = exists or fallback is not None
         if self._engine.diag is not None:
             self._engine.diag.event(
-                "play.resolve", input=original, resolved=final,
-                exists=(exists or fallback is not None),
+                "play.resolve", input=original, resolved=final, exists=found,
                 fallback=("sppath" if fallback is not None else "none"),
                 sppath=self._engine.get_var("sppath") or "",
             )
-        return final
+        return final, found
 
     def _confine_media(self, file: str) -> str:
         """Confine a pack/dialect sound path to the pack dir or @sppath; "" if it escapes.

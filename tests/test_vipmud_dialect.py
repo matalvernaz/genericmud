@@ -80,8 +80,13 @@ def test_sphook_play_action_named_wildcards_and_sppath_default():
     assert cue["loop"] is False
 
 
-def test_sphook_loop_action_loops_and_stores_handle():
-    sink, engine = _load(SPHOOK, base_dir="/snd")
+def test_sphook_loop_action_loops_and_stores_handle(tmp_path):
+    # A real file: a failed play now (correctly) stores handle 0, which is its own
+    # test -- this one is about the handle bookkeeping for a play that worked.
+    (tmp_path / "music").mkdir()
+    (tmp_path / "music" / "intro.wav").write_bytes(b"RIFF")
+    sink, engine = _load(SPHOOK, base_dir=str(tmp_path))
+    engine.set_var("sppath", str(tmp_path))
     engine.process_line(Line("$sphook loop:music/intro:100:0:0:42"))
     cue = sink.played[-1]
     assert cue["loop"] is True
@@ -95,9 +100,11 @@ def test_sphook_unknown_action_plays_nothing():
     assert sink.played == []
 
 
-def test_playloop_then_pc_stop_by_handle():
+def test_playloop_then_pc_stop_by_handle(tmp_path):
+    (tmp_path / "a.wav").write_bytes(b"RIFF")
     sink, engine = _load(
-        "#trigger {go} {#playloop {a.wav} 50}\n#trigger {halt} {#pc %playhandle stop}"
+        "#trigger {go} {#playloop {a.wav} 50}\n#trigger {halt} {#pc %playhandle stop}",
+        base_dir=str(tmp_path),
     )
     engine.process_line(Line("go"))
     channel = sink.played[-1]["channel"]
@@ -253,3 +260,88 @@ def test_gvar_sets_global_namespace_not_local():
     assert engine.get_gvar("realm") == "aetherius"  # landed in the global map
     assert "realm" not in engine._vars  # not the local map (#GVAR is not #VAR)
     assert engine.get_var("realm") == "aetherius"  # @-reads still resolve it via fallback
+
+
+# --- Cosmic Rage verification round (0.6.12): the parts of the real pack's $sphook
+# dispatch that were broken -- stop-by-stored-handle, <>, comments, #math, #trig,
+# alias expansion of bare body text, and failed-play handles.
+
+CR_DISPATCH = """#trigger {$sphook &{action}:&{soundpath}:&{volume}:&{pitch}:&{pan}:&{id}} {
+#if {@action = "loop"} {#playloop {@sppath/@soundpath.wav} @volume; #var @id %playhandle};
+#if {@action = "play"} {#play {@sppath/@soundpath.wav} @volume};
+#if {@pan <> "na"} {#math pan {@pan * 50}; #pc %playhandle pan @pan};
+#if {@action = "stop"} {#if {%defined(@id) = 1} {#pc %var(@id) stop}}}"""
+
+
+def _cr(tmp_path):
+    (tmp_path / "amb.wav").write_bytes(b"RIFF")
+    sink, engine = _load(CR_DISPATCH, base_dir=str(tmp_path))
+    engine.set_var("sppath", str(tmp_path))
+    return sink, engine
+
+
+def test_cr_stop_by_stored_handle(tmp_path):
+    # The server stores the loop's handle under a name it chose (%var/%defined were
+    # unimplemented, so a server-issued stop was a no-op -> ambience stacking).
+    sink, engine = _cr(tmp_path)
+    engine.process_line(Line("$sphook loop:amb:50:na:na:h1"))
+    assert sink.played[-1]["loop"] is True
+    assert engine.get_var("h1") == "1"
+    engine.process_line(Line("$sphook stop:na:na:na:na:h1"))
+    assert sink.stopped == ["vip-1"]
+
+
+def test_cr_not_equal_gates_and_math_pan(tmp_path):
+    # <> (not-equal) wasn't parsed and #math wasn't implemented: every directional
+    # cue collapsed to centre. pan "2" -> #math 2*50=100 -> #pc pan (live adjust).
+    sink, engine = _cr(tmp_path)
+    engine.process_line(Line("$sphook play:amb:80:na:2:na"))
+    assert sink.played[-1]["gain"] == 0.8
+    assert engine.get_var("pan") == "100"  # the #math result landed
+
+
+def test_comment_lines_are_not_sent():
+    # ";core variables"-style comment lines were tokenized as bare text and SENT to
+    # the MUD at load. Mid-line ';' stays a statement separator.
+    sink, _engine = _load(";comment at line start\n#var a 1;#var b 2\n  ;indented comment\n")
+    assert sink.sent == []
+
+
+def test_trig_abbreviation_registers_a_trigger():
+    # Cosmic Rage's voice-only line arrives via `#trig {$buffer *}` -- TRIG wasn't a
+    # recognized definition command, so the pack's speech line never registered.
+    sink, engine = _load("#trig {$buffer *} {#say %1}")
+    engine.process_line(Line("$buffer docking clamps released"))
+    assert [s[0] for s in sink.spoken] == ["docking clamps released"]
+
+
+def test_bare_body_text_expands_aliases():
+    # VIPMud script bodies run text "as if typed": a body may call the pack's own
+    # alias by name (CR's `makebetter`). Unmatched text still reaches the wire.
+    sink, engine = _load(
+        "#alias {makebetter} {#var better 1}\n"
+        "#trigger {improve} {makebetter; look}\n"
+    )
+    engine.process_line(Line("improve"))
+    assert engine.get_var("better") == "1"  # alias consumed
+    assert sink.sent == ["look"]  # non-alias text sent
+
+
+def test_failed_play_reports_handle_zero(tmp_path):
+    # VIPMud reports a failed play as %playhandle 0; CR branches on it to speak the
+    # failure and auto-fetch the file.
+    sink, engine = _load(
+        "#trigger {chirp} {#play {missing.wav}; #if {%playhandle=0} {#say failed}}",
+        base_dir=str(tmp_path),
+    )
+    engine.process_line(Line("chirp"))
+    assert [s[0] for s in sink.spoken] == ["failed"]
+
+
+def test_unvar_deletes_for_defined(tmp_path):
+    sink, engine = _load(
+        "#trigger {setup} {#var flag 1; #unvar flag;"
+        " #if {%defined(flag) = 0} {#say gone}}"
+    )
+    engine.process_line(Line("setup"))
+    assert [s[0] for s in sink.spoken] == ["gone"]

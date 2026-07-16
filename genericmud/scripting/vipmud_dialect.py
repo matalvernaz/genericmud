@@ -39,7 +39,7 @@ from genericmud.model.buffer import Line
 from genericmud.safepath import confine
 from genericmud.scripting.api import ScriptApi
 
-_DEFINITIONS = {"TRIGGER", "TR", "GTRIGGER", "ALIAS", "KEY"}
+_DEFINITIONS = {"TRIGGER", "TRIG", "TR", "GTRIGGER", "ALIAS", "KEY"}  # VIPMud allows abbreviation
 _VAR_RE = re.compile(r"@(\w+)")
 _WILDCARD_RE = re.compile(r"%(\d)")
 _FORALL_VAR_RE = re.compile(r"%[Ii]\b")  # #ForAll loop variable (%I / %i), expanded per item
@@ -48,10 +48,21 @@ _SOUND_VARIANT_RE = re.compile(r"\*(\d+)(\.\w+)$")  # "name*N.ext": one random v
 _PATTERN_WILDCARD_RE = re.compile(r"&\{(\w+)\}|&(\w+)|(\*)|(\?)")
 # A bare "@name = value" statement is an assignment, not text to send.
 _ASSIGN_RE = re.compile(r"^@(\w+)\s*=\s*(.*)$")
-# A single comparison for #if: left <op> right (longer operators first).
-_CONDITION_RE = re.compile(r"^(.*?)\s*(<=|>=|<|>|=)\s*(.*)$")
+# A single comparison for #if: left <op> right (longer operators first; <> is
+# VIPMud's not-equal and packs use it heavily, e.g. every pan/pitch gate in
+# Cosmic Rage's $sphook dispatch).
+_CONDITION_RE = re.compile(r"^(.*?)\s*(<=|>=|<>|!=|<|>|=)\s*(.*)$")
+# Fire-time %function(arg) calls the sound core needs: %var (indirect variable
+# read -- how a pack stops a cue whose handle it stored under a server-supplied
+# name) and %defined (guards those reads). Expanded after @vars, so %var(@id)
+# sees the substituted name.
+_FUNC_RE = re.compile(r"%(var|defined)\(([^()]*)\)", re.IGNORECASE)
+# #math accepts plain arithmetic once variables are substituted; anything else
+# (names, quotes) is refused rather than guessed at.
+_MATH_SAFE_RE = re.compile(r"^[\d\s.+\-*/()]+$")
 _DEFAULT_VOLUME = 100
 _MASTER_HANDLE = "0"  # VIPMud handle 0 == all cues / master volume
+_MAX_EXEC_DEPTH = 20  # bare-text alias expansion recursion cap (self-invoking alias)
 _PLAY_HANDLE_TOKEN = "%playhandle"
 
 
@@ -90,8 +101,25 @@ def tokenize_statements(source: str) -> list[tuple[str | None, list[_Tok]]]:
     i = 0
     n = len(source)
     while i < n:
-        while i < n and source[i] in " \t\r\n;":
-            i += 1
+        while i < n:
+            c = source[i]
+            if c in " \t\r\n":
+                i += 1
+            elif c == ";":
+                # A ';' with nothing but whitespace before it on its line begins a
+                # comment (VIPMud .set convention, ";core variables"); consumed to EOL.
+                # Mid-line it is the statement separator, skipped like whitespace --
+                # without the distinction, comment text was SENT to the MUD at load.
+                k = i - 1
+                while k >= 0 and source[k] in " \t":
+                    k -= 1
+                if k < 0 or source[k] in "\r\n":
+                    while i < n and source[i] != "\n":
+                        i += 1
+                else:
+                    i += 1
+            else:
+                break
         if i >= n:
             break
         if source.startswith("//", i):
@@ -121,7 +149,10 @@ def tokenize_statements(source: str) -> list[tuple[str | None, list[_Tok]]]:
             statements.append((command, args))
         else:
             line_start = i
-            while i < n and source[i] not in "\r\n":
+            # ';' separates statements in bare text too ("makebetter; look" is two
+            # commands); without the split the whole line went out as one string and
+            # a leading alias name prefix-matched, swallowing the rest.
+            while i < n and source[i] not in "\r\n;":
                 i += 1
             text = source[line_start:i].strip()
             if text:
@@ -238,6 +269,7 @@ class VipMudPack:
         self._files: dict[str, _VipFile] = {}  # #file handle -> open settings file
         self._handles: dict[str, str] = {}  # VIPMud play handle -> sound bus channel
         self._next_handle = 1
+        self._exec_depth = 0  # bare-text -> alias-pipeline recursion guard
         self._last_handle = _MASTER_HANDLE
         # Server-controlled packs build sound paths from @sppath; the pack's own
         # settings loader (file I/O, deferred) normally sets it. Default it (and the
@@ -264,7 +296,7 @@ class VipMudPack:
         if not args:
             return
         body = args[1].text if len(args) > 1 else ""  # {body} is the first block after the pattern
-        if command in ("TRIGGER", "TR", "GTRIGGER"):
+        if command in ("TRIGGER", "TRIG", "TR", "GTRIGGER"):
             flags = "(?i)" if any(a.text.lower() == "anycase" for a in args[2:]) else ""
             self._api.add_trigger(
                 flags + vip_pattern_to_regex(args[0].text), self._runner(body), regex=True
@@ -304,6 +336,10 @@ class VipMudPack:
         elif command == "GVAR" and len(args) > 1:  # global namespace; @-reads still resolve it
             name = self._subst(args[0].text, wildcards)
             self._api.set_gvar(name, self._subst(args[1].text, wildcards))
+        elif command == "UNVAR" and args:
+            self._api.delete_var(self._subst(args[0].text, wildcards))
+        elif command == "MATH" and len(args) > 1:
+            self._execute_math(args, wildcards)
         elif command == "STOP":
             self._api.stop()
         elif command == "IF" and args:
@@ -436,8 +472,18 @@ class VipMudPack:
         assignment = _ASSIGN_RE.match(text)
         if assignment:  # "@name = value" sets a variable; it isn't sent to the MUD
             self._api.set_var(assignment.group(1), self._subst(assignment.group(2), wildcards))
-        else:
-            self._api.send(self._subst(text, wildcards))
+            return
+        # Bare text runs "as if typed": VIPMud expands aliases in script bodies (packs
+        # call their own aliases by name, e.g. CR's `makebetter`), so route through the
+        # alias pipeline; unmatched text still reaches the wire. Depth-capped: an alias
+        # whose body re-invokes itself would otherwise recurse without bound.
+        if self._exec_depth >= _MAX_EXEC_DEPTH:
+            return
+        self._exec_depth += 1
+        try:
+            self._api.execute(self._subst(text, wildcards))
+        finally:
+            self._exec_depth -= 1
 
     def _play(self, args: list[_Tok], wildcards: list[str], *, loop: bool) -> None:
         file = _expand_sound_variant(self._subst(args[0].text, wildcards))
@@ -448,8 +494,10 @@ class VipMudPack:
         self._next_handle += 1
         channel = f"vip-{handle}"  # one channel per cue so #pc can target it later
         self._handles[handle] = channel
-        self._last_handle = handle
-        self._api.play(file, channel=channel, gain=volume / 100, loop=loop)
+        played = self._api.play(file, channel=channel, gain=volume / 100, loop=loop)
+        # VIPMud reports a failed play as handle 0, and packs branch on it -- Cosmic
+        # Rage speaks the failure and auto-downloads the missing file.
+        self._last_handle = handle if played else "0"
 
     def _execute_if(self, args: list[_Tok], wildcards: list[str], line: Line | None = None) -> None:
         branch = 1 if self._eval_condition(args[0].text, wildcards) else 2  # then : else
@@ -483,6 +531,22 @@ class VipMudPack:
         body = args[1].text
         self._api.add_timer(delay, lambda: self._execute_body(body, []))
 
+    def _execute_math(self, args: list[_Tok], wildcards: list[str]) -> None:
+        """``#math <var> {expr}`` — arithmetic into a variable. Cosmic Rage computes its
+        stereo pan with it (``#math pan {@pan * 50}``), so without it every directional
+        cue collapsed to center. Only plain arithmetic survives substitution; anything
+        with residual names is refused (never eval'd)."""
+        expression = self._subst(args[1].text, wildcards)
+        if not _MATH_SAFE_RE.match(expression):
+            return
+        try:
+            result = eval(expression, {"__builtins__": {}}, {})  # noqa: S307 - digits/operators only (regex-gated)
+        except (SyntaxError, ZeroDivisionError, ValueError, TypeError):
+            return
+        if isinstance(result, float) and result.is_integer():
+            result = int(result)
+        self._api.set_var(self._subst(args[0].text, wildcards), result)
+
     def _eval_condition(self, condition: str, wildcards: list[str]) -> bool:
         match = _CONDITION_RE.match(self._subst(condition, wildcards).strip())
         if not match:
@@ -490,6 +554,8 @@ class VipMudPack:
         left, op, right = _unquote(match.group(1)), match.group(2), _unquote(match.group(3))
         if op == "=":
             return left.lower() == right.lower()
+        if op in ("<>", "!="):
+            return left.lower() != right.lower()
         left_n, right_n = _as_number(left), _as_number(right)
         if left_n is None or right_n is None:
             return False
@@ -512,15 +578,31 @@ class VipMudPack:
         if action == "stop":
             self._api.stop(channel)
         elif action == "volume":
-            self._api.set_volume(channel, _to_int(value, _DEFAULT_VOLUME) / 100)
-        # pan / frequency: no live per-cue control in the bus yet — accepted, ignored.
+            # Live change on the playing cue (a per-cue channel's future is one cue, so
+            # the old category-policy set_volume adjusted nothing anyone would hear).
+            self._api.adjust(channel, gain=_to_int(value, _DEFAULT_VOLUME) / 100)
+        elif action == "pan":
+            # VIPMud pan is -100..100; the bus wants -1..1.
+            self._api.adjust(channel, pan=max(-1.0, min(1.0, _to_int(value, 0) / 100)))
+        # frequency: no live pitch control in the bus — accepted, ignored.
 
     def _subst(self, text: str, wildcards: list[str]) -> str:
         text = _VAR_RE.sub(lambda m: self._api.get_var(m.group(1)), text)
         text = text.replace(_PLAY_HANDLE_TOKEN, self._last_handle)
+        # %var/%defined AFTER @vars so %var(@id) reads the variable @id names. This
+        # pair is the sound core's stop path: packs store a cue handle under a
+        # server-supplied name and later do `#pc %var(@id) stop` guarded by %defined.
+        text = _FUNC_RE.sub(self._call_function, text)
 
         def wildcard(match: re.Match[str]) -> str:
             index = int(match.group(1))
             return wildcards[index] if index < len(wildcards) else ""
 
         return _WILDCARD_RE.sub(wildcard, text)
+
+    def _call_function(self, match: re.Match[str]) -> str:
+        name, arg = match.group(1).lower(), _unquote(match.group(2).strip())
+        value = self._api.get_var(arg, None)
+        if name == "defined":
+            return "1" if value is not None else "0"
+        return value if value is not None else ""  # %var of an unset name reads empty

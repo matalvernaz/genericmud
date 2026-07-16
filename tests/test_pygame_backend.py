@@ -272,3 +272,16 @@ def test_real_pygame_backend_smoke(tmp_path, monkeypatch):
     bus.music(str(wav), "music")
     bus.stop("sound")
     bus.flush()  # must not raise
+
+
+def test_adjust_changes_live_volume_and_merges_pan():
+    # Live re-level/re-pan (VIPMud #pc volume/pan, bass slideVol): adjusting one axis
+    # must keep the other's last-known value.
+    backend = PygameSoundBackend(_FakeMixer())
+    backend.play("a.wav", "cue", 1.0, 0.0, False)
+    channel = backend._channels["cue"]
+    backend.adjust("cue", gain=0.5)
+    assert channel.volume == (0.5, 0.5)  # gain changed, pan still centre
+    backend.adjust("cue", pan=1.0)
+    assert channel.volume == (0.0, 0.5)  # pan changed, gain kept
+    backend.adjust("nosuch", gain=0.1)  # unknown channel: silent no-op

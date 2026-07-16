@@ -141,6 +141,7 @@ class MushclientPack:
         self._install_api()
         self._install_sendpkt()
         self._install_audio()
+        self._install_nvda()
         # Calls fn(option, <lua byte-string>) entirely on the Lua side: an MSDP payload
         # is rarely valid UTF-8, so it crosses the lupa boundary as a table of byte
         # values, never as a string (lupa's string conversion would raise or mangle it).
@@ -167,16 +168,15 @@ class MushclientPack:
         )
         # Only API-shaped names fall into the black hole: MUSHclient functions are CapWords
         # (Sound, WindowCreate, BroadcastPlugin...) plus a few lowercase host libraries
-        # (utils/bit/rex/serialize) and native modules a plugin loads via loadlib (nvda --
-        # mushReader's speech object; genericMud self-voices every line already, so its
-        # say()/stop() no-op rather than double-speaking). A plain script variable (var,
+        # (utils/rex/serialize). `bit` and `nvda` used to be here but are real shims now
+        # (AddTriggerEx flag math; the pack speech object). A plain script variable (var,
         # dir, roomName) must read
         # back as nil -- assigning nil to a global DELETES it, so an unconditional fallback
         # made `if var ~= nil` true right after `var = nil` and Erion's OnPluginInstall
         # stored the black hole into every sound toggle instead of defaulting them to 1.
         self._lua.eval(
             "function(bh)\n"
-            "  local hosted = {utils=true, bit=true, rex=true, serialize=true, nvda=true}\n"
+            "  local hosted = {utils=true, rex=true, serialize=true}\n"
             "  setmetatable(_G, {__index = function(_, key)\n"
             "    if type(key) == 'string' and (string.match(key, '^%u') or hosted[key]) then\n"
             "      return bh\n"
@@ -227,7 +227,12 @@ class MushclientPack:
             "ArrayCreate": self._array_create,
             "ArraySet": self._array_set,
             "ArrayGet": self._array_get,
-            "DeleteVariable": lambda name: api.set_var(name, ""),
+            # Truly delete: MUSHclient's GetVariable answers nil after a delete, and
+            # packs distinguish nil ("use my default") from "" (a saved empty value).
+            "DeleteVariable": lambda name="": api.delete_var(str(name)),
+            # Real transport state: Erion's OnPluginTick branches on it to run its
+            # music engine vs. stop everything (the black hole answered truthy-table).
+            "IsConnected": lambda *_a: api.is_connected(),
             "Accelerator": self._accelerator,
             "AddTriggerEx": self._add_trigger_ex,
             "DeleteTrigger": self._delete_trigger,
@@ -360,10 +365,15 @@ class MushclientPack:
             stop(cue_id)
 
         def slide_vol(cue_id: object = 0, vol: object = None, *_rest: object) -> None:
-            # bass slides the cue's volume over time; sliding to 0 is a fade-to-stop.
-            # A slide to a nonzero level stays a no-op (no per-cue live gain in the bus).
-            if _to_float(vol) == 0:
+            # bass slides the cue's volume over time; the end state is what matters:
+            # 0 is a fade-to-stop, anything else lands the cue at that level (no ramp).
+            target = _to_float(vol)
+            if target == 0:
                 stop(cue_id)
+                return
+            channel = channels.get(int(_to_float(cue_id) or 0))
+            if channel is not None and target is not None:
+                api.adjust(channel, gain=target / _VOLUME_MAX)
 
         # A table backed by a no-op __index, so any bass method we don't implement
         # (pan/freq/pitch/slidePan/slidePitch/dll) is safely callable and just does nothing.
@@ -379,6 +389,26 @@ class MushclientPack:
         audio.getVolume = lambda *_a: _VOLUME_MAX
         audio.isPlaying = is_playing
         self._lua.globals().audio = audio
+
+    def _install_nvda(self) -> None:
+        """Provide the ``nvda`` object MushReader.dll would have installed.
+
+        The pack's whole speech surface funnels through it: ``tts_interrupt`` (how the
+        F-key hp/mana reports and the history browser talk) does ``nvda.stop(); say(...)``
+        with ``say`` wrapping ``nvda.say``. As a black hole those were silent no-ops --
+        the report chain ran perfectly and said nothing. ``say`` speaks through the
+        engine (own channel, so channel policy can tune it), ``stop`` cuts current
+        speech (the interrupt half of the idiom). Every OTHER method must be callable
+        but return nil -- the pack probes ``nvda.jaws_running()`` and a truthy
+        black-hole answer sent speech to a JAWS object that doesn't exist.
+        """
+        api = self._api
+        nvda = self._lua.eval(
+            "setmetatable({}, {__index = function() return function() return nil end end})"
+        )
+        nvda.say = lambda text="", *_a: api.speak(str(text).strip(), channel="pack")
+        nvda.stop = lambda *_a: api.stop_speech()
+        self._lua.globals().nvda = nvda
 
     def _colour_note(self, *args: object) -> None:
         # ColourNote(fg, bg, text [, fg, bg, text]...) — concatenate the text parts.
@@ -703,6 +733,10 @@ class MushclientPack:
                                error=f"{type(exc).__name__}: {exc}")
             finally:
                 self._current_plugin = previous
+
+    def has_hook(self, name: str) -> bool:
+        """Whether any loaded plugin defined this lifecycle hook (drives tick arming)."""
+        return any(hooks.get(name) is not None for hooks in self._hooks.values())
 
     def dispatch_install(self) -> None:
         """MUSHclient calls each plugin's ``OnPluginInstall`` at load; packs set their

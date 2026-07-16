@@ -49,6 +49,7 @@ class EngineSink:
     def send_packet(self, data: bytes) -> None: ...
     def echo(self, text: str, channel: str = "main") -> None: ...
     def speak(self, text: str, channel: str = "main", interrupt: bool = False) -> None: ...
+    def stop_speech(self) -> None: ...
     def play(
         self,
         file: str,
@@ -126,6 +127,7 @@ class AutomationEngine:
         self.sound = sound or SoundBus()  # per-category audio mixing, scriptable via ScriptApi
         self.hub: SessionHub | None = None  # cross-session bus (set by the app)
         self.session_name = ""  # this session's name, for broadcast-exclude
+        self.connected = True  # transport state, maintained by the app (packs read it)
         self.diag: DiagnosticLog | None = None  # sound-path trace (set by the app)
 
     # --- registration ---
@@ -213,6 +215,9 @@ class AutomationEngine:
 
     def set_var(self, name: str, value: object) -> None:
         self._vars[name] = str(value)
+
+    def delete_var(self, name: str) -> None:
+        self._vars.pop(name, None)
 
     def all_vars(self) -> dict[str, str]:
         """A snapshot of session variables (for pack-state persistence)."""

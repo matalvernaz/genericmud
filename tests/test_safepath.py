@@ -96,13 +96,13 @@ def _api(base: str) -> ScriptApi:
 def test_scriptapi_resolve_relative_ok(tmp_path):
     (tmp_path / "hit.wav").write_bytes(b"x")
     api = _api(str(tmp_path))
-    assert api._resolve("hit.wav") == os.path.join(str(tmp_path), "hit.wav")
+    assert api._resolve("hit.wav")[0] == os.path.join(str(tmp_path), "hit.wav")
 
 
 def test_scriptapi_resolve_blocks_absolute_and_unc(tmp_path):
     api = _api(str(tmp_path))
-    assert api._resolve("/etc/passwd") == ""
-    assert api._resolve("\\\\attacker\\share\\x.wav") == ""
+    assert api._resolve("/etc/passwd")[0] == ""
+    assert api._resolve("\\\\attacker\\share\\x.wav")[0] == ""
 
 
 def test_scriptapi_resolve_blocks_traversal(tmp_path):
@@ -111,7 +111,7 @@ def test_scriptapi_resolve_blocks_traversal(tmp_path):
     outside.write_bytes(b"x")
     api = _api(str(tmp_path / "pack"))
     (tmp_path / "pack").mkdir()
-    assert api._resolve("../secret.wav") == ""
+    assert api._resolve("../secret.wav")[0] == ""
 
 
 def test_scriptapi_resolve_unsafe_falls_back_to_sounds_dir(tmp_path):
@@ -123,4 +123,4 @@ def test_scriptapi_resolve_unsafe_falls_back_to_sounds_dir(tmp_path):
     engine.set_var("sppath", str(sounds))
     api = ScriptApi(engine, base_dir=str(tmp_path / "pack"))
     (tmp_path / "pack").mkdir()
-    assert api._resolve("C:/anywhere/hit.wav") == str(sounds / "hit.wav")
+    assert api._resolve("C:/anywhere/hit.wav")[0] == str(sounds / "hit.wav")

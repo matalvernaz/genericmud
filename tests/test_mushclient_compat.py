@@ -265,7 +265,8 @@ def test_resolve_keeps_forward_slashes_and_collapses_doubles():
     # it to a single FORWARD slash on every OS. os.path.normpath would flip / to \ on Windows
     # -- the dev host is Linux so only the Windows CI catches that; this pins the contract.
     api = ScriptApi(AutomationEngine(RecordingSink()), base_dir="/p")
-    assert api._resolve("/p/sounds//x.ogg") == "/p/sounds/x.ogg"
+    resolved, _exists = api._resolve("/p/sounds//x.ogg")
+    assert resolved == "/p/sounds/x.ogg"
 
 
 def test_get_info_anchors_on_the_world_dir_not_pack_root(tmp_path):
@@ -800,3 +801,40 @@ def test_subnegotiation_payload_reaches_plugin_byte_exact(tmp_path):
     payload = bytes([1]) + b"SOUND" + bytes([2]) + b"hit" + bytes([233])
     pack.dispatch_telnet_subnegotiation(69, payload)
     assert len(sink.played) == 1  # byte-exact round trip; the gated cue fired
+
+
+def test_nvda_speaks_and_probes_read_falsy(tmp_path):
+    """The pack's speech object: tts_interrupt does nvda.stop(); say(text) -- as a
+    black hole both were silent no-ops, so the F-key hp reports ran and said nothing.
+    Probes like nvda.jaws_running() must read FALSY (the truthy black hole sent
+    speech to a JAWS object that doesn't exist)."""
+    sink, engine, pack = _make_pack(
+        tmp_path,
+        "<muclient><script><![CDATA[\n"
+        "if not nvda.jaws_running() then\n"
+        "  nvda.stop()\n"
+        '  nvda.say("42 % hp")\n'
+        "end\n"
+        "]]></script></muclient>",
+    )
+    assert sink.speech_stops == 1
+    assert [s[0] for s in sink.spoken] == ["42 % hp"]
+
+
+def test_onplugintick_reaches_plugin_and_isconnected_is_real(tmp_path):
+    """Erion's OnPluginTick is its music/ambience engine (restarts finished ambience);
+    it branches on IsConnected(), which must be the real transport state, not a
+    truthy black hole."""
+    sink, engine, pack = _make_pack(
+        tmp_path,
+        "<muclient><script><![CDATA[\n"
+        "ticks = 0\n"
+        'function OnPluginTick() if IsConnected() then ticks = ticks + 1 Send("tick") end end\n'
+        "]]></script></muclient>",
+    )
+    assert pack.has_hook("OnPluginTick")
+    pack.dispatch("OnPluginTick")
+    assert sink.sent == ["tick"]
+    engine.connected = False
+    pack.dispatch("OnPluginTick")
+    assert sink.sent == ["tick"]  # disconnected: the guard held

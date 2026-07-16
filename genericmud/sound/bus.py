@@ -40,6 +40,9 @@ class SoundBackend:
         (the renderer post path) answer False, matching the pre-query behaviour."""
         return False
 
+    def adjust(self, channel: str, gain: float | None = None, pan: float | None = None) -> None:
+        """Re-level/re-pan a playing cue; backends without live control ignore it."""
+
 
 class SoundBus:
     def __init__(self, backend: SoundBackend | None = None, *, master: float = 1.0) -> None:
@@ -104,6 +107,12 @@ class SoundBus:
         # The backend is the truth (a one-shot ends on its own); `_playing` only
         # records what was started, so it can't answer this.
         return self._backend.is_playing(channel)
+
+    def adjust(self, channel: str, gain: float | None = None, pan: float | None = None) -> None:
+        """Live volume/pan change on a playing cue. ``gain`` is the CUE gain; the
+        master and category gains scale it exactly as at play time."""
+        effective = self.effective_gain(channel, gain) if gain is not None else None
+        self._backend.adjust(channel, effective, pan)
 
     def flush(self) -> None:
         """Stop every playing category (the sound panic key, e.g. Shift+F11)."""

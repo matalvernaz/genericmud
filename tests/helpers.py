@@ -21,6 +21,7 @@ class RecordingSink(EngineSink):
     stopped: list[str] = field(default_factory=list)
     musics: list[str] = field(default_factory=list)
     scheduled: list[tuple[float, Callable[[], None]]] = field(default_factory=list)
+    speech_stops: int = 0
 
     def send(self, text: str) -> None:
         self.sent.append(text)
@@ -33,6 +34,9 @@ class RecordingSink(EngineSink):
 
     def speak(self, text: str, channel: str = "main", interrupt: bool = False) -> None:
         self.spoken.append((text, channel, interrupt))
+
+    def stop_speech(self) -> None:
+        self.speech_stops += 1
 
     def play(
         self,
