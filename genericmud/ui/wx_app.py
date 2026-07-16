@@ -54,6 +54,16 @@ from genericmud.packs import (
     world_from_pack,
 )
 from genericmud.packs.manifest import CODE_EXEC_DIALECTS
+from genericmud.packs.user_rules import (
+    UserAlias,
+    UserChannel,
+    UserKey,
+    UserRules,
+    UserTrigger,
+    copy_sound_into_pack,
+    load_rules,
+    save_rules,
+)
 from genericmud.packs.store import extract_pack
 from genericmud.session.crashlog import install_loop_exception_handler
 from genericmud.session.credentials import PlaintextCredentialStore
@@ -1025,6 +1035,376 @@ class VaultBrowserDialog(wx.Dialog):
 
 # ShowModal return values for UpdateNotificationDialog (distinct from wx.ID_OK/CANCEL so the
 # caller can tell the buttons apart). wx.ID_HIGHEST is the top of wx's own reserved range.
+class _KeyCaptureCtrl(wx.TextCtrl):
+    """A read-only-ish field that records the key combination pressed in it.
+
+    Focus it and press the combo (e.g. Ctrl+H, Alt+Shift+F2); the combo text lands
+    in the field. Tab/Shift+Tab still navigate and Escape still cancels, so a
+    keyboard-only (screen reader) user is never trapped in the control.
+    """
+
+    def __init__(self, parent: wx.Window) -> None:
+        super().__init__(parent)
+        self.Bind(wx.EVT_KEY_DOWN, self._on_key)
+
+    def _on_key(self, event: wx.KeyEvent) -> None:
+        code = event.GetKeyCode()
+        plain = not (event.ControlDown() or event.AltDown() or event.ShiftDown())
+        if code in (wx.WXK_TAB, wx.WXK_ESCAPE) and plain:
+            event.Skip()  # keep dialog navigation working
+            return
+        combo = _key_combo(event)
+        if combo:
+            self.SetValue(combo)
+        # swallow everything else: this field records combos, it doesn't edit text
+
+
+class _RuleEditorBase(wx.Dialog):
+    """Shared layout helpers for the builder dialogs (NVDA: label precedes control)."""
+
+    def _grid(self) -> wx.FlexGridSizer:
+        grid = wx.FlexGridSizer(0, 2, 6, 6)
+        grid.AddGrowableCol(1)
+        return grid
+
+    def _text(self, grid: wx.FlexGridSizer, label: str, value: str = "") -> wx.TextCtrl:
+        grid.Add(wx.StaticText(self, label=label), 0, wx.ALIGN_CENTER_VERTICAL)
+        ctrl = wx.TextCtrl(self, value=value)
+        grid.Add(ctrl, 1, wx.EXPAND)
+        return ctrl
+
+    def _slider(
+        self, grid: wx.FlexGridSizer, label: str, value: int, low: int, high: int
+    ) -> wx.Slider:
+        grid.Add(wx.StaticText(self, label=label), 0, wx.ALIGN_CENTER_VERTICAL)
+        ctrl = wx.Slider(self, value=value, minValue=low, maxValue=high)
+        grid.Add(ctrl, 1, wx.EXPAND)
+        return ctrl
+
+    def _finish(self, outer: wx.BoxSizer, grid: wx.FlexGridSizer) -> None:
+        outer.Add(grid, 1, wx.ALL | wx.EXPAND, 10)
+        outer.Add(self.CreateStdDialogButtonSizer(wx.OK | wx.CANCEL), 0, wx.ALL | wx.EXPAND, 10)
+        self.SetSizerAndFit(outer)
+
+
+class TriggerEditorDialog(_RuleEditorBase):
+    """Create/edit one user trigger: everything a scripted trigger can do, as fields."""
+
+    def __init__(self, parent: wx.Window, pack_dir: Path, trigger: UserTrigger) -> None:
+        super().__init__(parent, title="Trigger")
+        self._pack_dir = pack_dir
+        outer = wx.BoxSizer(wx.VERTICAL)
+        grid = self._grid()
+        self._pattern = self._text(
+            grid, "&Match text (* = anything, ? = one character):", trigger.pattern
+        )
+        self._regex = wx.CheckBox(self, label="Match is a &regular expression (advanced)")
+        self._regex.SetValue(trigger.regex)
+        grid.Add(wx.StaticText(self, label=""))
+        grid.Add(self._regex)
+        self._sound = self._text(grid, "&Sound file (optional):", trigger.sound)
+        browse = wx.Button(self, label="&Browse for sound...")
+        browse.Bind(wx.EVT_BUTTON, self._on_browse)
+        grid.Add(wx.StaticText(self, label=""))
+        grid.Add(browse)
+        self._volume = self._slider(grid, "&Volume (0-100):", trigger.volume, 0, 100)
+        self._pan = self._slider(grid, "&Pan (-100 left to 100 right):", trigger.pan, -100, 100)
+        self._loop = wx.CheckBox(self, label="&Loop the sound until stopped")
+        self._loop.SetValue(trigger.loop)
+        grid.Add(wx.StaticText(self, label=""))
+        grid.Add(self._loop)
+        self._speak = self._text(grid, "Spea&k this text (%1 = first wildcard):", trigger.speak)
+        self._send = self._text(grid, "S&end this command to the MUD:", trigger.send)
+        self._gag = wx.RadioBox(
+            self, label="&What happens to the matched line",
+            choices=["Read and show it normally", "Silence it but keep it in the window",
+                     "Remove it entirely"],
+            majorDimension=1, style=wx.RA_SPECIFY_COLS,
+        )
+        self._gag.SetSelection({"none": 0, "speech": 1, "line": 2}.get(trigger.gag, 0))
+        outer_gag = self._gag
+        grid.Add(wx.StaticText(self, label=""))
+        grid.Add(outer_gag, 1, wx.EXPAND)
+        self._channel = self._text(
+            grid, "Route to &channel (optional, e.g. chat):", trigger.channel
+        )
+        self._stop_channel = self._text(
+            grid, "S&top my cue channel first (optional):", trigger.stop_channel
+        )
+        self._finish(outer, grid)
+
+    def _on_browse(self, _event: wx.CommandEvent) -> None:
+        dialog = wx.FileDialog(
+            self, "Choose a sound file",
+            wildcard="Sound files (*.wav;*.ogg;*.mp3;*.flac)|*.wav;*.ogg;*.mp3;*.flac|"
+                     "All files (*.*)|*.*",
+            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST,
+        )
+        if dialog.ShowModal() == wx.ID_OK:
+            self._sound.SetValue(copy_sound_into_pack(self._pack_dir, dialog.GetPath()))
+        dialog.Destroy()
+
+    def result(self) -> UserTrigger:
+        return UserTrigger(
+            pattern=self._pattern.GetValue().strip(),
+            regex=self._regex.GetValue(),
+            sound=self._sound.GetValue().strip(),
+            volume=self._volume.GetValue(),
+            pan=self._pan.GetValue(),
+            loop=self._loop.GetValue(),
+            speak=self._speak.GetValue().strip(),
+            send=self._send.GetValue().strip(),
+            gag=("none", "speech", "line")[self._gag.GetSelection()],
+            channel=self._channel.GetValue().strip(),
+            stop_channel=self._stop_channel.GetValue().strip(),
+        )
+
+
+class AliasEditorDialog(_RuleEditorBase):
+    def __init__(self, parent: wx.Window, alias: UserAlias) -> None:
+        super().__init__(parent, title="Alias")
+        outer = wx.BoxSizer(wx.VERTICAL)
+        grid = self._grid()
+        self._pattern = self._text(
+            grid, "&When I type (* = anything, e.g. sh *):", alias.pattern
+        )
+        self._regex = wx.CheckBox(self, label="Pattern is a &regular expression (advanced)")
+        self._regex.SetValue(alias.regex)
+        grid.Add(wx.StaticText(self, label=""))
+        grid.Add(self._regex)
+        self._send = self._text(grid, "&Send instead (%1 = first wildcard):", alias.send)
+        self._speak = self._text(grid, "Spea&k this confirmation (optional):", alias.speak)
+        self._finish(outer, grid)
+
+    def result(self) -> UserAlias:
+        return UserAlias(
+            pattern=self._pattern.GetValue().strip(),
+            regex=self._regex.GetValue(),
+            send=self._send.GetValue().strip(),
+            speak=self._speak.GetValue().strip(),
+        )
+
+
+class KeyEditorDialog(_RuleEditorBase):
+    def __init__(self, parent: wx.Window, pack_dir: Path, key: UserKey) -> None:
+        super().__init__(parent, title="Hotkey")
+        self._pack_dir = pack_dir
+        outer = wx.BoxSizer(wx.VERTICAL)
+        grid = self._grid()
+        grid.Add(wx.StaticText(self, label="&Press the key combination:"), 0,
+                 wx.ALIGN_CENTER_VERTICAL)
+        self._key = _KeyCaptureCtrl(self)
+        self._key.SetValue(key.key)
+        grid.Add(self._key, 1, wx.EXPAND)
+        self._send = self._text(grid, "&Send this command:", key.send)
+        self._speak = self._text(grid, "Spea&k this text:", key.speak)
+        self._sound = self._text(grid, "Play this s&ound (optional):", key.sound)
+        browse = wx.Button(self, label="&Browse for sound...")
+        browse.Bind(wx.EVT_BUTTON, self._on_browse)
+        grid.Add(wx.StaticText(self, label=""))
+        grid.Add(browse)
+        self._finish(outer, grid)
+
+    def _on_browse(self, _event: wx.CommandEvent) -> None:
+        dialog = wx.FileDialog(
+            self, "Choose a sound file",
+            wildcard="Sound files (*.wav;*.ogg;*.mp3;*.flac)|*.wav;*.ogg;*.mp3;*.flac",
+            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST,
+        )
+        if dialog.ShowModal() == wx.ID_OK:
+            self._sound.SetValue(copy_sound_into_pack(self._pack_dir, dialog.GetPath()))
+        dialog.Destroy()
+
+    def result(self) -> UserKey:
+        return UserKey(
+            key=self._key.GetValue().strip(),
+            send=self._send.GetValue().strip(),
+            speak=self._speak.GetValue().strip(),
+            sound=self._sound.GetValue().strip(),
+        )
+
+
+class ChannelEditorDialog(_RuleEditorBase):
+    def __init__(self, parent: wx.Window, channel: UserChannel) -> None:
+        super().__init__(parent, title="Channel")
+        outer = wx.BoxSizer(wx.VERTICAL)
+        grid = self._grid()
+        self._name = self._text(grid, "Channel &name:", channel.name)
+        self._speak = wx.CheckBox(self, label="&Speak lines on this channel")
+        self._speak.SetValue(channel.speak)
+        self._display = wx.CheckBox(self, label="Show lines in the &window")
+        self._display.SetValue(channel.display)
+        self._interrupt = wx.CheckBox(self, label="&Interrupt current speech (alerts)")
+        self._interrupt.SetValue(channel.interrupt)
+        for box in (self._speak, self._display, self._interrupt):
+            grid.Add(wx.StaticText(self, label=""))
+            grid.Add(box)
+        self._finish(outer, grid)
+
+    def result(self) -> UserChannel:
+        return UserChannel(
+            name=self._name.GetValue().strip(),
+            speak=self._speak.GetValue(),
+            display=self._display.GetValue(),
+            interrupt=self._interrupt.GetValue(),
+        )
+
+
+def _rule_summary(kind: str, rule) -> str:
+    """One spoken line per rule for the manager list."""
+    # Plain words, no arrow/dash glyphs: these lines are read by a screen reader.
+    if kind == "trigger":
+        actions = [part for part in (
+            f"sound {Path(rule.sound).name}" if rule.sound else "",
+            f"speak {rule.speak}" if rule.speak else "",
+            f"send {rule.send}" if rule.send else "",
+            {"speech": "silence line", "line": "remove line"}.get(rule.gag, ""),
+            f"channel {rule.channel}" if rule.channel else "",
+        ) if part]
+        return f"Trigger: {rule.pattern}: {'; '.join(actions) or 'no action'}"
+    if kind == "alias":
+        return f"Alias: {rule.pattern} sends {rule.send}"
+    if kind == "key":
+        action = rule.send or rule.speak or rule.sound
+        return f"Hotkey: {rule.key} runs {action}"
+    return (
+        f"Channel: {rule.name}"
+        f" ({'speaks' if rule.speak else 'silent'},"
+        f" {'shown' if rule.display else 'hidden'}"
+        f"{', interrupts' if rule.interrupt else ''})"
+    )
+
+
+class RulesBuilderDialog(wx.Dialog):
+    """The soundpack builder: list + create/edit/delete of the world's user rules.
+
+    Every change saves rules.json immediately and live-reloads the session's engine,
+    so a new trigger works on the very next MUD line -- no reconnect. Build-blind
+    (no wx on the dev host); the rules engine itself is tested headless.
+    """
+
+    def __init__(self, parent: wx.Window, panel: SessionPanel) -> None:
+        super().__init__(parent, title=f"Soundpack builder — {panel.world.name}",
+                         size=(640, 480))
+        self._panel = panel
+        self._pack_dir = panel.app.user_rules_dir() if panel.app is not None else None
+        self._rules = load_rules(self._pack_dir) if self._pack_dir else UserRules()
+        outer = wx.BoxSizer(wx.VERTICAL)
+        outer.Add(wx.StaticText(self, label="&Rules:"), 0, wx.LEFT | wx.TOP, 10)
+        self._list = wx.ListBox(self)
+        outer.Add(self._list, 1, wx.ALL | wx.EXPAND, 10)
+        buttons = wx.BoxSizer(wx.HORIZONTAL)
+        for label, handler in (
+            ("New &trigger...", self._on_new_trigger),
+            ("New &alias...", self._on_new_alias),
+            ("New &hotkey...", self._on_new_key),
+            ("New &channel...", self._on_new_channel),
+            ("&Edit...", self._on_edit),
+            ("&Delete", self._on_delete),
+        ):
+            button = wx.Button(self, label=label)
+            button.Bind(wx.EVT_BUTTON, handler)
+            buttons.Add(button, 0, wx.RIGHT, 6)
+        outer.Add(buttons, 0, wx.ALL, 10)
+        close = wx.Button(self, wx.ID_CANCEL, "Cl&ose")
+        outer.Add(close, 0, wx.ALL | wx.ALIGN_RIGHT, 10)
+        self.SetSizer(outer)
+        self._refresh()
+
+    # The list is a flat view over four collections; _entries maps row -> (kind, index).
+    def _refresh(self) -> None:
+        self._entries: list[tuple[str, int]] = []
+        labels: list[str] = []
+        for kind, items in (
+            ("trigger", self._rules.triggers), ("alias", self._rules.aliases),
+            ("key", self._rules.keys), ("channel", self._rules.channels),
+        ):
+            for index, rule in enumerate(items):
+                self._entries.append((kind, index))
+                labels.append(_rule_summary(kind, rule))
+        selection = self._list.GetSelection()
+        self._list.Set(labels)
+        if labels:
+            self._list.SetSelection(min(max(selection, 0), len(labels) - 1))
+
+    def _save_and_reload(self) -> None:
+        if self._pack_dir is None:
+            return
+        save_rules(self._pack_dir, self._rules)
+        panel = self._panel
+        if panel.app is not None:
+            panel._loop.call_soon_threadsafe(panel.app.reload_user_rules)
+        self._refresh()
+
+    def _edit(self, kind: str, rule):
+        if kind == "trigger":
+            dialog = TriggerEditorDialog(self, self._pack_dir, rule)
+        elif kind == "alias":
+            dialog = AliasEditorDialog(self, rule)
+        elif kind == "key":
+            dialog = KeyEditorDialog(self, self._pack_dir, rule)
+        else:
+            dialog = ChannelEditorDialog(self, rule)
+        result = dialog.result() if dialog.ShowModal() == wx.ID_OK else None
+        dialog.Destroy()
+        return result
+
+    def _on_new_trigger(self, _event: wx.CommandEvent) -> None:
+        result = self._edit("trigger", UserTrigger())
+        if result is not None and result.pattern:
+            self._rules.triggers.append(result)
+            self._save_and_reload()
+
+    def _on_new_alias(self, _event: wx.CommandEvent) -> None:
+        result = self._edit("alias", UserAlias())
+        if result is not None and result.pattern:
+            self._rules.aliases.append(result)
+            self._save_and_reload()
+
+    def _on_new_key(self, _event: wx.CommandEvent) -> None:
+        result = self._edit("key", UserKey())
+        if result is not None and result.key:
+            self._rules.keys.append(result)
+            self._save_and_reload()
+
+    def _on_new_channel(self, _event: wx.CommandEvent) -> None:
+        result = self._edit("channel", UserChannel())
+        if result is not None and result.name:
+            self._rules.channels.append(result)
+            self._save_and_reload()
+
+    def _selected(self) -> tuple[str, int] | None:
+        row = self._list.GetSelection()
+        if row == wx.NOT_FOUND or row >= len(self._entries):
+            return None
+        return self._entries[row]
+
+    def _collection(self, kind: str) -> list:
+        return {
+            "trigger": self._rules.triggers, "alias": self._rules.aliases,
+            "key": self._rules.keys, "channel": self._rules.channels,
+        }[kind]
+
+    def _on_edit(self, _event: wx.CommandEvent) -> None:
+        selected = self._selected()
+        if selected is None:
+            return
+        kind, index = selected
+        items = self._collection(kind)
+        result = self._edit(kind, items[index])
+        if result is not None:
+            items[index] = result
+            self._save_and_reload()
+
+    def _on_delete(self, _event: wx.CommandEvent) -> None:
+        selected = self._selected()
+        if selected is None:
+            return
+        kind, index = selected
+        del self._collection(kind)[index]
+        self._save_and_reload()
+
+
 _ID_UPDATE_NOW = wx.ID_HIGHEST + 101
 _ID_RELEASE_PAGE = wx.ID_HIGHEST + 102
 _ID_SNOOZE = wx.ID_HIGHEST + 103
@@ -1170,6 +1550,10 @@ class GenericMudFrame(wx.Frame):
         quit_item = file_menu.Append(wx.ID_EXIT, "E&xit\tCtrl+Q")
         menubar.Append(file_menu, "&File")
 
+        rules_menu = wx.Menu()
+        builder_item = rules_menu.Append(wx.ID_ANY, "Soundpack &builder...\tCtrl+B")
+        menubar.Append(rules_menu, "&Rules")
+
         view_menu = wx.Menu()
         self._self_voice_item = view_menu.AppendCheckItem(wx.ID_ANY, "Self-&voice\tCtrl+M")
         self._self_voice_item.Check(True)
@@ -1183,6 +1567,7 @@ class GenericMudFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, self._on_manage_packs, packs_item)
         self.Bind(wx.EVT_MENU, self._on_setup_pack, setup_item)
         self.Bind(wx.EVT_MENU, self._on_browse_online, browse_item)
+        self.Bind(wx.EVT_MENU, self._on_rules_builder, builder_item)
         self.Bind(wx.EVT_MENU, lambda _e: self.check_for_updates(manual=True), updates_item)
         self.Bind(wx.EVT_MENU, lambda _e: self.Close(), quit_item)
         self.Bind(wx.EVT_MENU, self._on_toggle_self_voice, self._self_voice_item)
@@ -1251,6 +1636,19 @@ class GenericMudFrame(wx.Frame):
             self.announce(f"Disconnecting from {panel.world.name}.")
         else:
             self.announce("Not connected.")
+
+    def _on_rules_builder(self, _event: wx.CommandEvent) -> None:
+        index = self.book.GetSelection()
+        if index == wx.NOT_FOUND or not self.book.GetPageCount():
+            self.announce("Open a session first; rules are saved per world.")
+            return
+        panel = self.book.GetPage(index)
+        if panel.app is None or panel.app.user_rules_dir() is None:
+            self.announce("This session isn't ready yet.")
+            return
+        dialog = RulesBuilderDialog(self, panel)
+        dialog.ShowModal()
+        dialog.Destroy()
 
     def _on_frame_close(self, event: wx.CloseEvent) -> None:
         """Confirm before quitting if any session is live, then disconnect them all."""

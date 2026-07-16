@@ -120,7 +120,8 @@ class AutomationEngine:
         self._triggers: list[_Rule] = []
         self._aliases: list[_Rule] = []
         self._keys: dict[str, Callback] = {}  # effective binding (last writer wins)
-        self._key_bindings: list[tuple[str, str]] = []  # (key, source) log for conflict reports
+        # (key, source, callback) log: conflict reports + replay-rebuild on remove_source.
+        self._key_bindings: list[tuple[str, str, Callback]] = []
         self._vars: dict[str, str] = {}
         self._gvars: dict[str, str] = {}
         self.channels = ChannelRouter()  # output routing/policy, scriptable via ScriptApi
@@ -187,7 +188,7 @@ class AutomationEngine:
 
     def add_key(self, key: str, callback: Callback, *, source: str = "") -> None:
         self._keys[key.lower()] = callback
-        self._key_bindings.append((key.lower(), source))
+        self._key_bindings.append((key.lower(), source, callback))
 
     def registrations_by_source(self) -> dict[str, dict[str, list[str]]]:
         """Every trigger/alias/key grouped by the pack that registered it.
@@ -204,7 +205,7 @@ class AutomationEngine:
             bucket(rule.source)["trigger"].append(rule.pattern.pattern)
         for rule in self._aliases:
             bucket(rule.source)["alias"].append(rule.pattern.pattern)
-        for key, source in self._key_bindings:
+        for key, source, _callback in self._key_bindings:
             bucket(source)["key"].append(key)
         return reg
 
@@ -215,6 +216,20 @@ class AutomationEngine:
 
     def set_var(self, name: str, value: object) -> None:
         self._vars[name] = str(value)
+
+    def remove_source(self, source: str) -> None:
+        """Drop every trigger/alias/key a source registered (live rule-editor reload).
+
+        Keys are rebuilt from the surviving bindings in registration order, preserving
+        the last-writer-wins the original registrations produced.
+        """
+        self._triggers = [rule for rule in self._triggers if rule.source != source]
+        self._aliases = [rule for rule in self._aliases if rule.source != source]
+        if any(bind_source == source for _key, bind_source, _cb in self._key_bindings):
+            self._key_bindings = [b for b in self._key_bindings if b[1] != source]
+            # Replay the surviving bindings in order: last writer wins again, and a
+            # combo the removed source had shadowed falls back to the earlier owner.
+            self._keys = {key: callback for key, _source, callback in self._key_bindings}
 
     def delete_var(self, name: str) -> None:
         self._vars.pop(name, None)

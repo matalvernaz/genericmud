@@ -24,11 +24,13 @@ from genericmud.config.worlds import config_dir
 from genericmud.model.buffer import Buffer, Line
 from genericmud.navigation import Navigator, SafeWalk, expand_speedwalk
 from genericmud.packs import ActivationResult, PackStore, activate_world
+from genericmud.packs import user_rules
 from genericmud.protocol import telnet as T
 from genericmud.protocol.msp import parse_msp_line
 from genericmud.protocol.oob import OobMessage, ServerStatus, from_subnegotiation
 from genericmud.render.ansi import parse_ansi
 from genericmud.review.cursor import ReviewCursor
+from genericmud.scripting.api import ScriptApi
 from genericmud.safepath import is_unsafe, sanitize_component
 from genericmud.scripting.mushclient_compat import MushclientPack
 from genericmud.session.credentials import CredentialStore
@@ -223,6 +225,8 @@ class EngineApp:
         self._msdp_offered = False  # server sent WILL MSDP (replayed to late-loading packs)
         self._ticks_armed = False  # the OnPluginTick chain is scheduled at most once
         self._closed = False  # ends the tick chain at shutdown
+        self._server_latin1 = False  # latched by _decode_server_bytes on invalid UTF-8
+        self._decode_pending = b""  # incomplete UTF-8 tail held across telnet chunks
         self._msdp_routed = 0  # subnegotiation count, for throttling the diag trace
 
     # --- soundpacks ---
@@ -252,6 +256,7 @@ class EngineApp:
         # settings (volumes, toggles) across sessions -- with nothing seeded, every
         # launch silently reset them to defaults.
         self._restore_pack_vars()
+        self.reload_user_rules()  # dialog-built rules load alongside installed packs
         result = self.activate_packs(world)
         if self._diag is not None:
             # Always emitted, even with zero packs: this is the marker that on_connect
@@ -343,6 +348,26 @@ class EngineApp:
             self.logger.stop()
             self.logger = None
 
+    # --- user rules (the no-code soundpack builder) ---
+
+    def user_rules_dir(self) -> Path | None:
+        """This world's user-pack dir (rules.json + copied sounds); None headless."""
+        if self.packs is None or not self.name:
+            return None
+        root = getattr(self.packs, "root", None)
+        if root is None:
+            return None
+        return Path(root).parent / "userpacks" / sanitize_component(self.name)
+
+    def reload_user_rules(self) -> None:
+        """(Re)register the world's dialog-built rules; safe to call live after a save."""
+        pack_dir = self.user_rules_dir()
+        if pack_dir is None:
+            return
+        self.engine.remove_source(user_rules.SOURCE)
+        api = ScriptApi(self.engine, source=user_rules.SOURCE, base_dir=str(pack_dir))
+        user_rules.register_rules(api, user_rules.load_rules(pack_dir))
+
     # --- pack-variable persistence (MUSHclient SaveState equivalent) ---
 
     def _pack_vars_path(self) -> Path | None:
@@ -429,7 +454,7 @@ class EngineApp:
 
     def on_telnet_event(self, event: T.Event) -> None:
         if isinstance(event, T.DataReceived):
-            self._feed_text(event.data.decode("utf-8", "replace"))
+            self._feed_text(self._decode_server_bytes(event.data))
         elif isinstance(event, T.Subnegotiation):
             self._handle_subnegotiation(event)
         elif isinstance(event, T.Command) and event.command in (T.GA, T.EOR):
@@ -442,6 +467,32 @@ class EngineApp:
             # Server offers MSDP (once per connection, so a reconnect re-arms too).
             self._msdp_offered = True
             self._dispatch_msdp_start()
+
+    def _decode_server_bytes(self, data: bytes) -> str:
+        """Decode server text: UTF-8 first, permanently falling back to Latin-1.
+
+        Many legacy MUDs (notably Spanish-language ones) send Latin-1; the old hard
+        utf-8/replace decode turned every accented letter into U+FFFD, which a screen
+        reader speaks as garbage. A multibyte sequence split across telnet chunks is
+        NOT evidence of Latin-1 -- the incomplete tail is buffered for the next chunk.
+        The first genuinely invalid byte latches Latin-1 for the session (a MUD's
+        encoding doesn't change mid-stream, and Latin-1 decodes anything).
+        """
+        if self._server_latin1:
+            return data.decode("latin-1")
+        buf = self._decode_pending + data
+        self._decode_pending = b""
+        try:
+            return buf.decode("utf-8")
+        except UnicodeDecodeError as err:
+            if err.reason == "unexpected end of data" and err.start >= len(buf) - 3:
+                # A multibyte char truncated at the chunk boundary: hold the tail.
+                self._decode_pending = buf[err.start :]
+                return buf[: err.start].decode("utf-8")
+            self._server_latin1 = True
+            if self._diag is not None:
+                self._diag.event("encoding.latch", encoding="latin-1", at=err.start)
+            return buf.decode("latin-1")
 
     def _feed_text(self, text: str) -> None:
         self._pending += text
