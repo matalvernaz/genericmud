@@ -37,15 +37,14 @@ class VoiceRouter:
     def speak(self, text: str, channel: str = MAIN_CHANNEL, interrupt: bool = False) -> None:
         if self._muted:
             return
-        if channel == self._governed:
-            if not self._bucket.take():
-                self._suppressed += 1
-                return
-            if self._suppressed:
-                self._safe(self._backend.speak, f"{self._suppressed} more lines")
-                self._suppressed = 0
+        if channel == self._governed and not self._bucket.take():
+            self._suppressed += 1
+            return
         if interrupt:
-            self._safe(self._backend.stop)
+            self._safe(self._backend.stop)  # barge in BEFORE the summary so it isn't truncated
+        if channel == self._governed and self._suppressed:
+            self._safe(self._backend.speak, f"{self._suppressed} more lines")
+            self._suppressed = 0
         self._safe(self._backend.speak, text)
 
     def flush(self) -> None:

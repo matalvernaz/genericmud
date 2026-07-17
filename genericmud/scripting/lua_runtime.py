@@ -22,7 +22,10 @@ from genericmud.automation.engine import MatchContext
 from genericmud.scripting.api import ScriptApi
 from genericmud.scripting.guard import ScriptGuard, ScriptTimeout
 
-# Removed from the sandbox: filesystem, process, dynamic code loading, lupa bridge.
+# Removed from the sandbox: filesystem, process, dynamic code loading, lupa bridge, and
+# coroutines. The loop guard's debug count-hook is per-Lua-thread and is NOT inherited by a
+# coroutine, so an untrusted pack could run `coroutine.resume(coroutine.create(loop-forever))`
+# and hang the engine past the 1s deadline. Trusted (full_stdlib) packs keep coroutine.
 _SANDBOX_REMOVE = (
     "os",
     "io",
@@ -34,6 +37,7 @@ _SANDBOX_REMOVE = (
     "loadstring",
     "debug",
     "python",
+    "coroutine",
 )
 
 
@@ -208,10 +212,26 @@ def install_pack_require(
 class LuaPackRuntime:
     def __init__(self, api: ScriptApi) -> None:
         self._api = api
+        self._script_error_spoken = False  # speak the first fire-time script fault, trace the rest
         self._lua, install_hook = make_sandboxed_runtime()
-        self._guard = ScriptGuard(install_hook, require_hook=True)  # native packs are sandboxed
+        # native packs are sandboxed; report contained faults so a broken trigger isn't silent
+        self._guard = ScriptGuard(install_hook, require_hook=True, report=self._report_error)
         self._install_mud()
         install_pack_require(self._lua, api.base_dir)
+
+    def _report_error(self, error: Exception) -> None:
+        """A fire-time trigger/timer fault is contained by the guard; trace every one and speak
+        the first, so a silently-dropped callback (a missing accessibility cue) isn't invisible."""
+        if self._api.diag is not None:
+            self._api.diag.event(
+                "script.error", source=self._api.source or "?",
+                error=f"{type(error).__name__}: {error}",
+            )
+        if not self._script_error_spoken:
+            self._script_error_spoken = True
+            self._api.speak(
+                f"A soundpack script error occurred: {type(error).__name__}", channel="system"
+            )
 
     def _install_mud(self) -> None:
         api = self._api

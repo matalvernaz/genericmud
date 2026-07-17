@@ -22,6 +22,7 @@ OPPOSITE = {
 DIRECTIONS = frozenset(OPPOSITE)
 # Two-char directions must be tried before one-char so "ne" doesn't read as "n"+"e".
 _TOKEN = re.compile(r"(\d*)(ne|nw|se|sw|n|s|e|w|u|d)")
+_MAX_SPEEDWALK_STEPS = 1000  # a real route is tens of steps; a typo like ".999999999n" is refused
 
 
 def expand_speedwalk(run: str) -> list[str]:
@@ -39,6 +40,8 @@ def expand_speedwalk(run: str) -> list[str]:
         if match.start() != position:
             return []  # a gap means an unrecognized character -> not a speedwalk
         count = int(match.group(1)) if match.group(1) else 1
+        if count > _MAX_SPEEDWALK_STEPS or len(directions) + count > _MAX_SPEEDWALK_STEPS:
+            return []  # absurd repeat count (a typo/paste): refuse before allocating the list
         directions.extend([match.group(2)] * count)
         position = match.end()
     return directions if position == len(run) else []

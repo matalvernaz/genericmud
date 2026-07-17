@@ -31,10 +31,12 @@ class ScriptGuard:
         max_seconds: float = MAX_SCRIPT_SECONDS,
         *,
         require_hook: bool = False,
+        report: Callable[[Exception], None] | None = None,
     ) -> None:
         self._deadline = 0.0
         self._max_seconds = max_seconds
         self.last_error: Exception | None = None
+        self._report = report  # called with a contained fault; else the cue vanishes silently
         self.enabled = install_hook is not None
         if require_hook and not self.enabled:
             # Fail closed: never run an untrusted pack with no runaway-loop protection at all.
@@ -53,6 +55,8 @@ class ScriptGuard:
             return fn(*args)
         except Exception as error:  # timeout or script error — keep the engine alive
             self.last_error = error
+            if self._report is not None:
+                self._report(error)
             return None
 
     def run_strict(self, fn: Callable, *args: object):

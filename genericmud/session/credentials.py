@@ -10,7 +10,10 @@ caller changes.
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
+import tempfile
 from pathlib import Path
 from typing import Protocol
 
@@ -48,10 +51,26 @@ class PlaintextCredentialStore:
     def _load(self) -> dict:
         if not self._path.is_file():
             return {}
-        with open(self._path, encoding="utf-8") as handle:
-            return json.load(handle)
+        try:
+            with open(self._path, encoding="utf-8") as handle:
+                data = json.load(handle)
+        except (OSError, ValueError):
+            # A corrupt/partial file (e.g. a crash mid-write before this was atomic) must not
+            # crash session startup; treat it as no stored credentials.
+            return {}
+        return data if isinstance(data, dict) else {}
 
     def _save(self, data: dict) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self._path, "w", encoding="utf-8") as handle:
-            json.dump(data, handle, indent=2, sort_keys=True)
+        # mkstemp creates the temp readable/writable only by this user (0600 on POSIX), and the
+        # atomic replace means the plaintext passwords file is never world-readable and never
+        # left half-written. (The old direct write inherited the umask -- 0644 on most *nix.)
+        fd, tmp = tempfile.mkstemp(dir=self._path.parent, prefix=".cred-", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(data, handle, indent=2, sort_keys=True)
+            os.replace(tmp, self._path)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
+            raise

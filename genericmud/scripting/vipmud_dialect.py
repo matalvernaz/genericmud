@@ -58,8 +58,11 @@ _CONDITION_RE = re.compile(r"^(.*?)\s*(<=|>=|<>|!=|<|>|=)\s*(.*)$")
 # sees the substituted name.
 _FUNC_RE = re.compile(r"%(var|defined)\(([^()]*)\)", re.IGNORECASE)
 # #math accepts plain arithmetic once variables are substituted; anything else
-# (names, quotes) is refused rather than guessed at.
+# (names, quotes) is refused rather than guessed at. The character class allows `*`, hence `**`,
+# so exponentiation is rejected separately below -- `9**9**9` is regex-clean but a big-int CPU/
+# memory bomb (and a hostile MUD can feed the operands via a captured variable).
 _MATH_SAFE_RE = re.compile(r"^[\d\s.+\-*/()]+$")
+_MATH_MAX_LEN = 256  # a pan/level calc is tiny; refuse anything pathologically long
 _DEFAULT_VOLUME = 100
 _MASTER_HANDLE = "0"  # VIPMud handle 0 == all cues / master volume
 _MAX_EXEC_DEPTH = 20  # bare-text alias expansion recursion cap (self-invoking alias)
@@ -537,10 +540,11 @@ class VipMudPack:
         cue collapsed to center. Only plain arithmetic survives substitution; anything
         with residual names is refused (never eval'd)."""
         expression = self._subst(args[1].text, wildcards)
-        if not _MATH_SAFE_RE.match(expression):
-            return
+        clean = _MATH_SAFE_RE.match(expression) and "**" not in expression
+        if not clean or len(expression) > _MATH_MAX_LEN:
+            return  # reject names, exponentiation (a big-int bomb), and over-long expressions
         try:
-            result = eval(expression, {"__builtins__": {}}, {})  # noqa: S307 - digits/operators only (regex-gated)
+            result = eval(expression, {"__builtins__": {}}, {})  # noqa: S307 - regex-gated, no **
         except (SyntaxError, ZeroDivisionError, ValueError, TypeError):
             return
         if isinstance(result, float) and result.is_integer():

@@ -105,6 +105,9 @@ def activate_world(
             if diag is not None:
                 diag.event("pack.load", id=manifest.id, dialect=manifest.dialect, status="loaded")
         except Exception as exc:  # noqa: BLE001 - one bad pack must not sink the others
+            # Roll back anything it registered before raising: a half-loaded pack's triggers
+            # would otherwise stay live and could gag/reroute/send with incomplete state.
+            engine.remove_source(manifest.id)
             result.failed[manifest.id] = f"{type(exc).__name__}: {exc}"
             if diag is not None:
                 diag.event("pack.load", id=manifest.id, dialect=manifest.dialect,

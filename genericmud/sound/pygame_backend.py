@@ -62,6 +62,7 @@ class PygameSoundBackend:
         self._loops: dict[str, bool] = {}  # category -> is it a looping cue (protected from eviction)
         self._levels: dict[str, tuple[float, float]] = {}  # category -> (gain, pan) for adjust()
         self._warned: set[str] = set()  # paths already reported, so a missing cue warns once
+        self._music_channel: str | None = None  # logical channel the streaming music cue is on
 
     def play(self, file: str, channel: str, gain: float, pan: float, loop: bool) -> None:
         sound = self._sound(file)
@@ -81,12 +82,13 @@ class PygameSoundBackend:
     def music(self, file: str, channel: str, gain: float) -> None:
         try:
             self._mixer.music.load(file)
-        except Exception:  # noqa: BLE001 - a missing/bad music file must not crash the line
+            self._mixer.music.set_volume(_clamp(gain))
+            self._mixer.music.play(loops=-1)  # background music loops until stopped
+        except Exception:  # noqa: BLE001 - a missing/bad file OR a mixer fault must not crash the line
             self._warn(file)
             self._trace(file, "SKIP", kind="music")
             return
-        self._mixer.music.set_volume(_clamp(gain))
-        self._mixer.music.play(loops=-1)  # background music loops until stopped
+        self._music_channel = channel  # so stop()/flush() on this channel reaches the music stream
         self._trace(file, "OK", kind="music", gain=gain)
 
     def _trace(self, file: str, result: str, **fields: object) -> None:
@@ -104,8 +106,12 @@ class PygameSoundBackend:
         )
 
     def stop(self, channel: str) -> None:
-        if channel == MUSIC_CATEGORY:
+        # music() always drives the single global stream but may be logically filed under a
+        # channel other than "music"; stop it when either name is asked for, or it plays forever.
+        if channel == MUSIC_CATEGORY or channel == self._music_channel:
             self._mixer.music.stop()
+            if channel == self._music_channel:
+                self._music_channel = None
         existing = self._channels.get(channel)
         if existing is not None:
             existing.stop()
@@ -140,7 +146,7 @@ class PygameSoundBackend:
         running cue" and "just start the new one" -- an always-false answer makes them
         stack a new ambience on top of the old every room change.
         """
-        if channel == MUSIC_CATEGORY:
+        if channel == MUSIC_CATEGORY or channel == self._music_channel:
             try:
                 return bool(self._mixer.music.get_busy())
             except Exception:  # noqa: BLE001 - a mixer probe fault reads as "not playing"

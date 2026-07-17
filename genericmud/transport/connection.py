@@ -107,10 +107,24 @@ class MudConnection:
         self._closing = False
         self._quit_sent_at = None  # a prior session's quit must not suppress this one's drops
         self._target = (host, port, tls, ssl_context)
+        # A reconnect reuses this object, so every connection must start from clean protocol
+        # state. Otherwise the previous link's MCCP (zlib) stream stays "active" and the new
+        # server's plaintext greeting is fed through a dead decompressor -> protocol error and a
+        # terminal drop; and the still-"enabled" option sets suppress the DO replies that re-arm
+        # GMCP/MSDP, so OOB soundpack cues silently stop after a reconnect.
+        self._parser = TelnetParser()
+        self._remote_enabled.clear()
+        self._local_enabled.clear()
         ctx: ssl.SSLContext | None = None
         if tls or ssl_context is not None:
             ctx = ssl_context or ssl.create_default_context()
-        self._reader, self._writer = await asyncio.open_connection(host, port, ssl=ctx)
+        reader, writer = await asyncio.open_connection(host, port, ssl=ctx)
+        if self._closing:
+            # Disconnected during the connect handshake: close() couldn't cancel a read task that
+            # didn't exist yet, so drop the socket here instead of going live behind the user.
+            writer.close()
+            return
+        self._reader, self._writer = reader, writer
         self._read_task = asyncio.create_task(self._read_loop())
 
     async def _read_loop(self) -> None:

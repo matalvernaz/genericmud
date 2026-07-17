@@ -134,10 +134,13 @@ class MushclientPack:
         self._dynamic_triggers: dict[str, dict] = {}
         # MUSHclient targets Lua 5.1; trusted packs keep the full stdlib their
         # libraries assume (os/io/loadstring + the module(..., package.seeall) idiom).
+        self._script_error_spoken = False  # speak the first fire-time script fault, trace the rest
         self._lua, install_hook = make_sandboxed_runtime(lua51=True, full_stdlib=full_stdlib)
         # Untrusted packs fail closed if the runaway-loop guard can't be installed; a trusted
         # pack is user-vouched arbitrary code, so a missing hook is acceptable there.
-        self._guard = ScriptGuard(install_hook, require_hook=not full_stdlib)
+        self._guard = ScriptGuard(
+            install_hook, require_hook=not full_stdlib, report=self._report_error
+        )
         self._install_api()
         self._install_sendpkt()
         self._install_audio()
@@ -448,6 +451,20 @@ class MushclientPack:
         globals_["SendPkt"] = sendpkt
         globals_.world["SendPkt"] = sendpkt  # packs also call through the world object
 
+    def _report_error(self, error: Exception) -> None:
+        """A fire-time hook/timer fault is contained by the guard; trace every one and speak the
+        first, so a broken pack callback (a missing accessibility cue) isn't silently swallowed."""
+        if self._api.diag is not None:
+            self._api.diag.event(
+                "script.error", source=self._api.source or "?",
+                error=f"{type(error).__name__}: {error}",
+            )
+        if not self._script_error_spoken:
+            self._script_error_spoken = True
+            self._api.speak(
+                f"A soundpack script error occurred: {type(error).__name__}", channel="system"
+            )
+
     def _deliver_packet(self, table: object) -> None:
         data = bytes(bytearray(table[i] for i in range(1, len(table) + 1)))
         self._api.send_packet(data)
@@ -460,7 +477,14 @@ class MushclientPack:
         volume: object = 100,
         pan: object = 0,
     ) -> None:
-        self._api.play(str(file), loop=bool(loop))
+        # MUSHclient PlaySound(buffer, file, loop, volume, pan): volume 0..100, pan -100..100.
+        # Both were dropped before, so every cue played full-volume and centered -- pan carries
+        # directional information for a blind user, so that's a real accessibility loss.
+        vol = _to_float(volume)
+        pan_value = _to_float(pan)
+        gain = vol / _VOLUME_MAX if vol is not None else 1.0
+        pan_out = max(-1.0, min(1.0, pan_value / _PAN_MAX)) if pan_value is not None else 0.0
+        self._api.play(str(file), channel=_SOUND_CHANNEL, gain=gain, pan=pan_out, loop=bool(loop))
 
     def _sound(self, arg: object = "", *_rest: object) -> None:
         """MUSHclient ``Sound``: a path plays it; a ``key=value`` string is a control
@@ -482,7 +506,9 @@ class MushclientPack:
         if level <= 0:
             self._api.stop(_SOUND_CHANNEL)  # "volume=0" is the soundpack idiom for stop
         else:
-            self._api.set_volume(_SOUND_CHANNEL, level / _VOLUME_MAX)
+            # adjust() re-levels the PLAYING cue; set_volume would permanently drop the whole
+            # sound category (every future cue) and wouldn't even change the running loop.
+            self._api.adjust(_SOUND_CHANNEL, gain=level / _VOLUME_MAX)
 
     def _get_info(self, code: object = 0) -> str:
         """MUSHclient ``GetInfo``: the world file's directory for dir codes, else ``""``.

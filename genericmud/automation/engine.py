@@ -60,7 +60,7 @@ class EngineSink:
     ) -> None: ...
     def stop(self, channel: str) -> None: ...
     def music(self, file: str, channel: str = "music") -> None: ...
-    def schedule(self, delay: float, callback: Callable[[], None]) -> None: ...
+    def schedule(self, delay: float, callback: Callable[[], None]) -> object | None: ...
 
 
 def compile_pattern(pattern: str, regex: bool) -> re.Pattern[str]:
@@ -130,6 +130,7 @@ class AutomationEngine:
         self.session_name = ""  # this session's name, for broadcast-exclude
         self.connected = True  # transport state, maintained by the app (packs read it)
         self.diag: DiagnosticLog | None = None  # sound-path trace (set by the app)
+        self._timer_handles: list = []  # pending pack-timer handles, cancelled at session close
 
     # --- registration ---
 
@@ -243,6 +244,35 @@ class AutomationEngine:
 
     def set_gvar(self, name: str, value: object) -> None:
         self._gvars[name] = str(value)
+
+    # --- timers ---
+
+    def schedule_timer(self, delay: float, callback: Callable[[], None]) -> object | None:
+        """Schedule a pack timer through the sink and track its handle.
+
+        Tracked so :meth:`cancel_timers` can drop everything still pending at session close;
+        a one-shot cue timer that outlives its tab would otherwise fire and start audio with no
+        session left to stop it.
+        """
+        handle = self.sink.schedule(delay, callback)
+        if handle is not None:
+            self._timer_handles.append(handle)
+        return handle
+
+    def discard_timer(self, handle: object) -> None:
+        """Forget a handle once it has fired, so the tracking list can't grow unbounded."""
+        try:
+            self._timer_handles.remove(handle)
+        except ValueError:
+            pass
+
+    def cancel_timers(self) -> None:
+        """Cancel every still-pending pack timer (session teardown)."""
+        for handle in self._timer_handles:
+            cancel = getattr(handle, "cancel", None)
+            if cancel is not None:
+                cancel()
+        self._timer_handles.clear()
 
     # --- evaluation ---
 

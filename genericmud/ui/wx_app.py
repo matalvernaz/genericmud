@@ -259,6 +259,13 @@ class SessionPanel(wx.Panel):
             if self._diag is not None:
                 self._diag.event("connect.failed", error=str(error))
             self._post(protocol.echo(f"* Connect failed: {error}"))
+            # The engine defaults to connected=True and packs/OnPluginTick read it, so a failed
+            # connect must flip it off or ticks run against a socket that never opened. And speak
+            # it -- a visual-only echo leaves a blind user with no idea the connect ever failed.
+            if self.app is not None:
+                self.app.engine.connected = False
+            if self._voice is not None:
+                self._voice.speak(f"Connect failed: {error}", channel="system", interrupt=True)
 
     def _send(self, text: str) -> None:
         try:
@@ -371,6 +378,10 @@ class SessionPanel(wx.Panel):
     def _apply_active(self, active: bool) -> None:  # loop thread
         if self._voice is not None:
             self._voice.set_muted(not active)  # only the foreground MUD self-voices
+            if not active:
+                # Muting gates only FUTURE lines; without this, speech already queued in the
+                # async backend keeps talking over the session the user just switched to.
+                self._voice.flush()
 
     def close(self) -> None:
         """Tear down the session; safe to call from the wx thread on tab close."""
@@ -1049,8 +1060,13 @@ class _KeyCaptureCtrl(wx.TextCtrl):
 
     def _on_key(self, event: wx.KeyEvent) -> None:
         code = event.GetKeyCode()
-        plain = not (event.ControlDown() or event.AltDown() or event.ShiftDown())
-        if code in (wx.WXK_TAB, wx.WXK_ESCAPE) and plain:
+        mods_besides_shift = event.ControlDown() or event.AltDown()
+        # Tab and Shift+Tab must both reach dialog navigation (forward AND reverse) -- swallowing
+        # Shift+Tab trapped reverse-tab. Escape cancels. Only a Ctrl/Alt-modified Tab is a combo.
+        if code == wx.WXK_TAB and not mods_besides_shift:
+            event.Skip()
+            return
+        if code == wx.WXK_ESCAPE and not (mods_besides_shift or event.ShiftDown()):
             event.Skip()  # keep dialog navigation working
             return
         combo = _key_combo(event)

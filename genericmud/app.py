@@ -49,18 +49,22 @@ SAFE_PREFIX = ".."  # "..3n2e" walks the same route one step at a time, halting 
 CLIENT_PREFIX = "/"  # "/alias", "/trigger", ... ; unknown /verbs pass through to the MUD
 MAX_ALIAS_DEPTH = 20  # guard against an alias/trigger that re-fires itself forever
 _PLUGIN_TICK_SECONDS = 0.25  # OnPluginTick cadence (MUSHclient ticks faster; see _arm_plugin_ticks)
+_PROMPT_IDLE_FLUSH_SECONDS = 0.25  # emit a newline-less prompt if the server sends no more data
+# Interactive /alias and /trigger register under their own source so the soundpack builder's
+# reload (which clears user_rules.SOURCE) can't silently delete them.
+INTERACTIVE_SOURCE = "user-interactive"
 
 _REVIEW_VERBS = frozenset(
     {"prev_line", "next_line", "prev_word", "next_word", "prev_char", "next_char", "top", "bottom"}
 )
 
 
-def _default_schedule(delay: float, callback: Callable[[], None]) -> None:
+def _default_schedule(delay: float, callback: Callable[[], None]) -> object | None:
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
-        return
-    loop.call_later(delay, callback)
+        return None
+    return loop.call_later(delay, callback)
 
 
 class _PostSoundBackend(SoundBackend):
@@ -150,8 +154,8 @@ class AppSink(EngineSink):
             )
         self._sound.music(file, channel)
 
-    def schedule(self, delay: float, callback: Callable[[], None]) -> None:
-        self._schedule(delay, callback)
+    def schedule(self, delay: float, callback: Callable[[], None]) -> object | None:
+        return self._schedule(delay, callback)
 
 
 class EngineApp:
@@ -228,6 +232,7 @@ class EngineApp:
         self._server_latin1 = False  # latched by _decode_server_bytes on invalid UTF-8
         self._decode_pending = b""  # incomplete UTF-8 tail held across telnet chunks
         self._msdp_routed = 0  # subnegotiation count, for throttling the diag trace
+        self._prompt_gen = 0  # bumps per data chunk so a stale idle prompt-flush no-ops
 
     # --- soundpacks ---
 
@@ -341,6 +346,7 @@ class EngineApp:
     def shutdown(self) -> None:
         """Release session resources on close: leave the hub and stop logging."""
         self._closed = True  # ends the OnPluginTick chain
+        self.engine.cancel_timers()  # cancel pending pack timers so none fire post-close
         self._persist_pack_vars()
         if self.hub is not None and self.name:
             self.hub.unregister(self.name)
@@ -360,13 +366,33 @@ class EngineApp:
         return Path(root).parent / "userpacks" / sanitize_component(self.name)
 
     def reload_user_rules(self) -> None:
-        """(Re)register the world's dialog-built rules; safe to call live after a save."""
+        """(Re)register the world's dialog-built rules; safe to call live after a save.
+
+        Validates the new rules against a throwaway engine BEFORE removing the live ones, so a
+        rule with a bad advanced-regex can't clear every user rule and leave the world silent
+        with an invalid rules.json still on disk. On a validation failure the working set is kept
+        and the error is spoken/traced instead of swallowed by the reload's threadsafe callback.
+        """
         pack_dir = self.user_rules_dir()
         if pack_dir is None:
             return
+        rules = user_rules.load_rules(pack_dir)
+        try:
+            user_rules.register_rules(
+                ScriptApi(AutomationEngine(), source=user_rules.SOURCE, base_dir=str(pack_dir)),
+                rules,
+            )
+        except Exception as error:  # noqa: BLE001 - a bad rule must not destroy the working set
+            if self._diag is not None:
+                self._diag.event(
+                    "user_rules.reload_failed", error=f"{type(error).__name__}: {error}"
+                )
+            self.voice.speak(f"Rule not applied: {error}", channel="system", interrupt=False)
+            return
         self.engine.remove_source(user_rules.SOURCE)
-        api = ScriptApi(self.engine, source=user_rules.SOURCE, base_dir=str(pack_dir))
-        user_rules.register_rules(api, user_rules.load_rules(pack_dir))
+        user_rules.register_rules(
+            ScriptApi(self.engine, source=user_rules.SOURCE, base_dir=str(pack_dir)), rules
+        )
 
     # --- pack-variable persistence (MUSHclient SaveState equivalent) ---
 
@@ -499,6 +525,18 @@ class EngineApp:
         while "\n" in self._pending:
             raw, self._pending = self._pending.split("\n", 1)
             self._emit_line(raw.rstrip("\r"))
+        if self._pending:
+            # A prompt with no trailing newline and no GA/EOR (some MUDs) would otherwise sit in
+            # _pending unspoken forever, deadlocking auto-login. Flush it if no more bytes arrive
+            # shortly; a newer chunk bumps the generation so this scheduled flush no-ops. GA/EOR
+            # still flush immediately via _flush_prompt, making this only a backstop.
+            self._prompt_gen += 1
+            gen = self._prompt_gen
+            self._schedule(_PROMPT_IDLE_FLUSH_SECONDS, lambda: self._idle_flush_prompt(gen))
+
+    def _idle_flush_prompt(self, gen: int) -> None:
+        if gen == self._prompt_gen and self._pending:
+            self._flush_prompt()
 
     def _flush_prompt(self) -> None:
         if self._pending:
@@ -656,6 +694,7 @@ class EngineApp:
         steps = expand_speedwalk(text[len(SAFE_PREFIX) :])
         if not steps:
             return False
+        self._cancel_walk()  # a new walk supersedes the old; don't leave both sets of timers firing
 
         def send_and_record(direction: str) -> None:
             self._send(direction)
@@ -667,6 +706,10 @@ class EngineApp:
         self._walk.start()
         return True
 
+    def _cancel_walk(self) -> None:
+        if self._walk is not None and self._walk.active:
+            self._walk.cancel()
+
     def _speedwalk(self, text: str) -> bool:
         """Expand and send a "." speedwalk run (e.g. ".3n2e"); False if not one."""
         if not text.startswith(SPEEDWALK_PREFIX):
@@ -674,6 +717,7 @@ class EngineApp:
         steps = expand_speedwalk(text[len(SPEEDWALK_PREFIX) :])
         if not steps:
             return False
+        self._cancel_walk()  # an immediate speedwalk supersedes a step-by-step one in progress
         for direction in steps:
             self._send(direction)
             self.nav.record(direction)
@@ -718,12 +762,13 @@ class EngineApp:
             self.engine.remove_alias(pattern)  # replace any existing alias for this text
             self.engine.add_alias(
                 f"^{re.escape(pattern)}$", callback,
-                regex=True, name=pattern, source="user", keep_evaluating=False,
+                regex=True, name=pattern, source=INTERACTIVE_SOURCE, keep_evaluating=False,
             )
         else:
             self.engine.remove_trigger(pattern)
             self.engine.add_trigger(  # (?i): match the MUD's output regardless of case
-                f"(?i){re.escape(pattern)}", callback, regex=True, name=pattern, source="user"
+                f"(?i){re.escape(pattern)}", callback, regex=True, name=pattern,
+                source=INTERACTIVE_SOURCE,
             )
         self._speak_system(f"{kind} {pattern} added")
 
@@ -852,6 +897,9 @@ class EngineApp:
             self.sound.flush()
         elif message.startswith("reconnected"):
             self.engine.connected = True
+            # A fresh socket means fresh login prompts; the old AutoLogin is marked done, so
+            # re-arm it or a reconnect strands the user at the login screen.
+            self.begin_login(self.name)
         self._speak_system(message)
 
     def _log(self, text: str) -> None:

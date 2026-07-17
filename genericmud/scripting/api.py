@@ -171,12 +171,17 @@ class ScriptApi:
         if self._active_timers >= _MAX_ACTIVE_TIMERS:
             return  # refuse: too many pending timers would starve the event loop (UI freeze)
         self._active_timers += 1
+        handle_box: list = []
 
         def wrapped() -> None:
             self._active_timers -= 1
+            if handle_box:
+                self._engine.discard_timer(handle_box[0])
             callback()
 
-        self._engine.sink.schedule(max(delay, _MIN_TIMER_DELAY), wrapped)
+        # Track the handle on the engine so session teardown cancels any still-pending timer
+        # (a fired one is discarded above), rather than letting it run after the tab closes.
+        handle_box.append(self._engine.schedule_timer(max(delay, _MIN_TIMER_DELAY), wrapped))
 
     def set_channel(
         self,
@@ -232,6 +237,11 @@ class ScriptApi:
     def base_dir(self) -> str | None:
         """The pack's root dir, for dialects that resolve their own paths (e.g. GetInfo)."""
         return self._base_dir
+
+    @property
+    def source(self) -> str:
+        """The registration source (pack id) that rules from this api are tagged with."""
+        return self._source
 
     def _resolve(self, file: str) -> tuple[str, bool]:
         original = file

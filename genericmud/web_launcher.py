@@ -32,31 +32,40 @@ def run(args) -> None:
     # A per-run secret the page must echo back before the WS bridge accepts it, so a random web
     # page the user visits can't hijack the localhost bridge and drive the MUD (CSWSH).
     token = secrets.token_urlsafe(32)
+    boot_error: list[Exception] = []  # a boot failure recorded here aborts the UI (no dead window)
 
     async def boot() -> None:
-        voice = VoiceRouter(make_voice_backend())
-        holder: dict[str, EngineApp] = {}
-        bridge = WsBridge(lambda message: holder["app"].on_ws_message(message), token=token)
-        connection = MudConnection()
-        app = EngineApp(
-            voice,
-            send=connection.send_line,
-            send_raw=connection.send_packet,
-            post=bridge.post,
-            schedule=loop.call_later,
-            keymap=load_keymap("vipmud"),
-            diag=make_diagnostic_log(),
-        )
-        holder["app"] = app
-        connection._on_event = app.on_telnet_event
-        await bridge.start(port=DEFAULT_PORT)
-        if args.host:
-            try:
-                await connection.connect(args.host, args.port, tls=args.tls)
-                bridge.post(protocol.connected(f"{args.host}:{args.port}"))
-            except OSError as error:
-                print(f"connect failed: {error}", file=sys.stderr)
-        ready.set()
+        try:
+            voice = VoiceRouter(make_voice_backend())
+            holder: dict[str, EngineApp] = {}
+            bridge = WsBridge(lambda message: holder["app"].on_ws_message(message), token=token)
+            connection = MudConnection()
+            app = EngineApp(
+                voice,
+                send=connection.send_line,
+                send_raw=connection.send_packet,
+                post=bridge.post,
+                schedule=loop.call_later,
+                keymap=load_keymap("vipmud"),
+                diag=make_diagnostic_log(),
+            )
+            holder["app"] = app
+            connection._on_event = app.on_telnet_event
+            # Without this, a disconnect (connection._status) goes nowhere and the browser/screen
+            # reader never learns the session died -- the native launcher already wires it.
+            connection.on_status = app.on_connection_status
+            await bridge.start(port=DEFAULT_PORT)
+            if args.host:
+                try:
+                    await connection.connect(args.host, args.port, tls=args.tls)
+                    bridge.post(protocol.connected(f"{args.host}:{args.port}"))
+                except OSError as error:
+                    bridge.post(protocol.echo(f"* Connect failed: {error}"))
+        except Exception as error:  # noqa: BLE001 - surface a boot failure instead of a dead UI
+            boot_error.append(error)
+            print(f"genericMud failed to start: {error}", file=sys.stderr)
+        finally:
+            ready.set()  # always release the launcher, success or failure
 
     def run_loop() -> None:
         asyncio.set_event_loop(loop)
@@ -65,6 +74,11 @@ def run(args) -> None:
 
     threading.Thread(target=run_loop, daemon=True).start()
     ready.wait(timeout=10)
+    if boot_error:
+        # The engine never came up (e.g. the WS port is taken); don't open a window whose input
+        # and self-voice are permanently dead.
+        print(f"genericMud could not start: {boot_error[0]}", file=sys.stderr)
+        return
 
     frontend_dir = resource_root() / "frontend"
     if not (frontend_dir / "index.html").is_file():
