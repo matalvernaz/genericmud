@@ -35,3 +35,7 @@ class ChannelRouter:
 
     def policy(self, channel: str) -> ChannelPolicy:
         return self._policies.get(channel, ChannelPolicy())
+
+    def names(self) -> list[str]:
+        """Channels with an explicit policy (channel browsing lists these too)."""
+        return list(self._policies)

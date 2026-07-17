@@ -36,20 +36,38 @@ Run it from a terminal so you can pass the world: `genericMud.exe host 4000`.
 
 ## Known gaps (this is an early test build)
 
-- **Native UI is build-blind** — first run may surface wx/threading issues;
+- **Native UI is build-blind** — a run may surface wx/threading issues;
   tell me what NVDA does and I'll fix.
-- **Sound effects:** not wired in the native UI yet. The `--web` UI plays MSP
-  sounds via `--sounds <dir>`; native audio is the next step.
-- **Script packs:** VIPMud `.set` packs load but advanced commands
-  (`#if`/`#math`/`#alarm`) don't run yet; flagship MUSHclient packs don't import.
+- **Script packs:** VIPMud `.set` packs run (`#if`, `#alarm`, sounds); `#math`,
+  `#wait`, and the `%function()` library don't yet. MUSHclient packs load
+  behind a per-pack trust prompt.
 
 ## Keys (native UI)
 
 - **Tab / Shift+Tab** move between the output box and the command box. In the
   output box, read with NVDA as usual (arrows, say-line, say-all); start typing
   and you jump straight to the command box.
-- **Enter** sends; **Up/Down** = command history.
+- **Enter** sends; **Up/Down** = command history. **Ctrl+Enter** toggles
+  autoretype: Enter on an empty line resends your last command.
+- **Ctrl+Space / Ctrl+Shift+Space** complete the word you're typing from words
+  seen in recent output, cycling forward/backward.
+- **Numpad** walks (8/2/4/6 + diagonals, 5 or 0 look, `.` scan, `-` up, `+`
+  down). Turn it off under View if NVDA's desktop layout needs the numpad.
 - **Ctrl+N** connect (with saved worlds); **Ctrl+W** close the current MUD tab;
-  each MUD is its own tab (**Ctrl+PageUp/PageDown** to switch).
-- **Ctrl+1..9** recall recent messages; **Alt+arrows** review by line/word/char.
-- **F11** / **Esc** stop speech.
+  each MUD is its own tab (**Ctrl+Tab / Ctrl+Shift+Tab** to switch).
+- **Ctrl+1..9** recall recent messages; **Alt+arrows** review by line/word/char;
+  **Alt+Shift+Enter** spells the current line character by character.
+- **Ctrl+Alt+Left/Right** cycle your chat channels; **Ctrl+Alt+Up/Down** scroll
+  within one; **Ctrl+Alt+1..9** recall that channel's recent messages.
+- **Ctrl+F** follow mode (speech interrupts when you move rooms, not on every
+  line); **Ctrl+I** interrupt mode (every line barges in instead of queueing).
+- **F11** / **Esc** stop speech; **Shift+F11** stops all sounds.
+- **View menu:** Background silence (stay quiet while you're in another window —
+  triggers and sounds keep running) and Numpad compass. Both stick across runs.
+
+## Sharing a world
+
+**File > Export This World...** saves the current world — connection details,
+builder triggers/aliases/hotkeys/channels, and every copied sound — as one zip.
+A friend uses **File > Import a World...** and it appears in their Connect
+dialog, sounds and all.

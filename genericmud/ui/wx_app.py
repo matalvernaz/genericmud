@@ -25,6 +25,7 @@ import threading
 import traceback
 import webbrowser
 import zipfile
+from collections.abc import Callable
 from pathlib import Path
 
 import wx
@@ -32,7 +33,9 @@ import wx
 from genericmud.app import EngineApp
 from genericmud.automation.engine import AutomationEngine
 from genericmud.bridge import protocol
+from genericmud.completion import CompletionCycler
 from genericmud.config.keymap import load_keymap
+from genericmud.config.ui_prefs import UiPrefs, load_ui_prefs, save_ui_prefs
 from genericmud.config.update_prefs import is_snoozed, load_prefs, save_prefs, snooze_timestamp
 from genericmud.config.worlds import World, config_dir, load_worlds, save_worlds
 from genericmud.packs import (
@@ -55,6 +58,7 @@ from genericmud.packs import (
 )
 from genericmud.packs.manifest import CODE_EXEC_DIALECTS
 from genericmud.packs.user_rules import (
+    MATCH_CHOICES,
     UserAlias,
     UserChannel,
     UserKey,
@@ -65,6 +69,7 @@ from genericmud.packs.user_rules import (
     save_rules,
 )
 from genericmud.packs.store import extract_pack
+from genericmud.packs.world_share import export_world, import_world
 from genericmud.session.crashlog import install_loop_exception_handler
 from genericmud.session.credentials import PlaintextCredentialStore
 from genericmud.session.diaglog import DiagnosticLog, make_diagnostic_log
@@ -145,6 +150,19 @@ _OUTPUT_CAP_LINES = 5000  # keep the native control bounded so NVDA/UIA stays re
 _FLUSH_INTERVAL_MS = 50  # batch output appends during floods
 _PACK_SOUND_SUFFIXES = frozenset({".wav", ".ogg", ".mp3", ".flac"})  # bundled-audio detection
 
+# Numpad compass (VIPMud/MUDBall convention): digits walk, 5/0 look, . scans,
+# minus/plus go up/down. Single-letter directions so the breadcrumb trail records them.
+# NVDA desktop-layout users keep the numpad for object review -- the View menu
+# toggle turns this off for them.
+_NUMPAD_COMPASS = {
+    wx.WXK_NUMPAD8: "n", wx.WXK_NUMPAD2: "s", wx.WXK_NUMPAD4: "w", wx.WXK_NUMPAD6: "e",
+    wx.WXK_NUMPAD7: "nw", wx.WXK_NUMPAD9: "ne", wx.WXK_NUMPAD1: "sw", wx.WXK_NUMPAD3: "se",
+    wx.WXK_NUMPAD5: "look", wx.WXK_NUMPAD0: "look",
+    wx.WXK_NUMPAD_DECIMAL: "scan", wx.WXK_NUMPAD_SUBTRACT: "u", wx.WXK_NUMPAD_ADD: "d",
+}
+_COMPLETE_FORWARD = "ctrl+space"  # cycle a completion of the current input word
+_COMPLETE_BACKWARD = "ctrl+shift+space"
+
 
 class SessionPanel(wx.Panel):
     """One MUD: read-only output + command input, wired to its own engine."""
@@ -159,6 +177,8 @@ class SessionPanel(wx.Panel):
         credentials: PlaintextCredentialStore | None = None,
         hub: SessionHub | None = None,
         diag: DiagnosticLog | None = None,
+        prefs: UiPrefs | None = None,
+        on_pref: Callable[[str, bool], None] | None = None,
     ):
         super().__init__(parent)
         self._loop = loop
@@ -168,6 +188,8 @@ class SessionPanel(wx.Panel):
         self._credentials = credentials
         self._hub = hub
         self._diag = diag
+        self._prefs = prefs or UiPrefs()  # shared with the frame; read live per keypress
+        self._on_pref = on_pref
         self.app: EngineApp | None = None
         self._connection: MudConnection | None = None
         self._voice: VoiceRouter | None = None
@@ -177,6 +199,9 @@ class SessionPanel(wx.Panel):
         self._pending: list[str] = []
         self._flush_scheduled = False
         self._sound_warned = False  # speak the first sound problem; echo the rest
+        self._completion = CompletionCycler()
+        self._completion_start = 0  # where the word being completed begins in the input
+        self._completion_tail = ""  # text after the caret when the completion run began
 
         # NVDA reads a control's name from a wx.StaticText created immediately
         # before it plus SetName() (the proven ffn-dl pattern). Both are required.
@@ -242,6 +267,12 @@ class SessionPanel(wx.Panel):
             hub=self._hub,
             diag=self._diag,
         )
+        # Seed the persisted speech toggles; changes flow back out through pref_sink.
+        self.app.follow_mode = self._prefs.follow_mode
+        self.app.interrupt_mode = self._prefs.interrupt_mode
+        self.app.autoretype = self._prefs.autoretype
+        if self._on_pref is not None:
+            self.app.pref_sink = self._on_pref
         self._connection._on_event = self.app.on_telnet_event
         self._connection.auto_reconnect = True
         self._connection.on_status = self.app.on_connection_status
@@ -326,15 +357,62 @@ class SessionPanel(wx.Panel):
 
     def _on_input_key(self, event: wx.KeyEvent) -> None:
         code = event.GetKeyCode()
+        combo = _key_combo(event)
+        if combo in (_COMPLETE_FORWARD, _COMPLETE_BACKWARD):
+            self._cycle_completion(backward=(combo == _COMPLETE_BACKWARD))
+            return
+        self._completion.reset()  # any other key ends a completion run
         plain = not (event.ControlDown() or event.AltDown() or event.ShiftDown())
         if plain and code in (wx.WXK_UP, wx.WXK_DOWN):
             self._recall_history(-1 if code == wx.WXK_UP else 1)
             return
-        combo = _key_combo(event)
+        if plain and self._prefs.numpad_compass and code in _NUMPAD_COMPASS:
+            self._send_command(_NUMPAD_COMPASS[code])
+            return
         if combo and combo not in _PASSTHROUGH_COMBOS and self.app is not None:
             self._loop.call_soon_threadsafe(self.app.on_ws_message, {"type": "key", "key": combo})
             return
         event.Skip()  # passthrough/unbound combos -> default handling (Alt+F4 -> EVT_CLOSE)
+
+    def _send_command(self, command: str) -> None:
+        """Send one command through the engine's input path (aliases + breadcrumbs apply)."""
+        if self.app is not None:
+            self._loop.call_soon_threadsafe(
+                self.app.on_ws_message, {"type": "input", "text": command}
+            )
+
+    def _cycle_completion(self, backward: bool) -> None:
+        """Complete the word at the caret from words seen in recent output, cycling.
+
+        The first press starts a run from the current prefix; repeated presses swap
+        in the next/previous candidate. Any other key ends the run.
+        """
+        if self.app is None:
+            return
+        if not self._completion.active:
+            text = self.input.GetValue()
+            caret = self.input.GetInsertionPoint()
+            head = text[:caret]
+            start = max(head.rfind(" "), head.rfind(";")) + 1
+            prefix = head[start:caret]
+            if not prefix:
+                self._loop.call_soon_threadsafe(self._speak_system, "nothing to complete")
+                return
+            candidates = self.app.word_index.complete(prefix)
+            if not candidates:
+                self._loop.call_soon_threadsafe(self._speak_system, f"no match for {prefix}")
+                return
+            self._completion.begin(prefix, candidates)
+            self._completion_start = start
+            self._completion_tail = text[caret:]
+        word = self._completion.prev() if backward else self._completion.next()
+        if word is None:
+            return
+        prefix_text = self.input.GetValue()[: self._completion_start]
+        self.input.SetValue(prefix_text + word + self._completion_tail)
+        self.input.SetInsertionPoint(self._completion_start + len(word))
+        # SetValue is silent to NVDA (same as history recall); speak the chosen word.
+        self._loop.call_soon_threadsafe(self._speak_system, word)
 
     def _on_output_char(self, event: wx.KeyEvent) -> None:
         unicode_key = event.GetUnicodeKey()
@@ -1111,13 +1189,21 @@ class TriggerEditorDialog(_RuleEditorBase):
         self._pack_dir = pack_dir
         outer = wx.BoxSizer(wx.VERTICAL)
         grid = self._grid()
-        self._pattern = self._text(
-            grid, "&Match text (* = anything, ? = one character):", trigger.pattern
+        self._pattern = self._text(grid, "&Match text:", trigger.pattern)
+        # Order must mirror MATCH_CHOICES: ("contains", "wildcard", "exact", "regex").
+        self._match = wx.RadioBox(
+            self, label="Ho&w to match",
+            choices=[
+                "The line contains this text",
+                "Wildcard (* = anything, ? = one character)",
+                "The whole line, exactly",
+                "Regular expression (advanced)",
+            ],
+            majorDimension=1, style=wx.RA_SPECIFY_COLS,
         )
-        self._regex = wx.CheckBox(self, label="Match is a &regular expression (advanced)")
-        self._regex.SetValue(trigger.regex)
+        self._match.SetSelection(MATCH_CHOICES.index(trigger.match_kind()))
         grid.Add(wx.StaticText(self, label=""))
-        grid.Add(self._regex)
+        grid.Add(self._match, 1, wx.EXPAND)
         self._sound = self._text(grid, "&Sound file (optional):", trigger.sound)
         browse = wx.Button(self, label="&Browse for sound...")
         browse.Bind(wx.EVT_BUTTON, self._on_browse)
@@ -1131,6 +1217,12 @@ class TriggerEditorDialog(_RuleEditorBase):
         grid.Add(self._loop)
         self._speak = self._text(grid, "Spea&k this text (%1 = first wildcard):", trigger.speak)
         self._send = self._text(grid, "S&end this command to the MUD:", trigger.send)
+        self._interrupt = wx.CheckBox(
+            self, label="&Interrupt current speech the moment this fires"
+        )
+        self._interrupt.SetValue(trigger.interrupt)
+        grid.Add(wx.StaticText(self, label=""))
+        grid.Add(self._interrupt)
         self._gag = wx.RadioBox(
             self, label="&What happens to the matched line",
             choices=["Read and show it normally", "Silence it but keep it in the window",
@@ -1161,9 +1253,10 @@ class TriggerEditorDialog(_RuleEditorBase):
         dialog.Destroy()
 
     def result(self) -> UserTrigger:
+        match = MATCH_CHOICES[self._match.GetSelection()]
         return UserTrigger(
             pattern=self._pattern.GetValue().strip(),
-            regex=self._regex.GetValue(),
+            regex=(match == "regex"),  # kept in sync for files older builds read
             sound=self._sound.GetValue().strip(),
             volume=self._volume.GetValue(),
             pan=self._pan.GetValue(),
@@ -1173,6 +1266,8 @@ class TriggerEditorDialog(_RuleEditorBase):
             gag=("none", "speech", "line")[self._gag.GetSelection()],
             channel=self._channel.GetValue().strip(),
             stop_channel=self._stop_channel.GetValue().strip(),
+            match=match,
+            interrupt=self._interrupt.GetValue(),
         )
 
 
@@ -1274,10 +1369,13 @@ def _rule_summary(kind: str, rule) -> str:
             f"sound {Path(rule.sound).name}" if rule.sound else "",
             f"speak {rule.speak}" if rule.speak else "",
             f"send {rule.send}" if rule.send else "",
+            "interrupts speech" if rule.interrupt else "",
             {"speech": "silence line", "line": "remove line"}.get(rule.gag, ""),
             f"channel {rule.channel}" if rule.channel else "",
         ) if part]
-        return f"Trigger: {rule.pattern}: {'; '.join(actions) or 'no action'}"
+        how = rule.match_kind()
+        label = f"{rule.pattern}" if how == "wildcard" else f"{rule.pattern} ({how})"
+        return f"Trigger: {label}: {'; '.join(actions) or 'no action'}"
     if kind == "alias":
         return f"Alias: {rule.pattern} sends {rule.send}"
     if kind == "key":
@@ -1561,6 +1659,14 @@ class GenericMudFrame(wx.Frame):
         packs_item = file_menu.Append(wx.ID_ANY, "&Manage Soundpacks...\tCtrl+P")
         setup_item = file_menu.Append(wx.ID_ANY, "Set &Up a Soundpack...")
         browse_item = file_menu.Append(wx.ID_ANY, "&Browse Soundpacks Online...")
+        export_item = file_menu.Append(
+            wx.ID_ANY, "&Export This World...",
+            "Save this world's triggers, sounds, and connection details as one zip to share",
+        )
+        import_item = file_menu.Append(
+            wx.ID_ANY, "&Import a World...",
+            "Load a world zip a friend sent you; it appears in the Connect dialog",
+        )
         updates_item = file_menu.Append(wx.ID_ANY, "Check for &Updates...")
         file_menu.AppendSeparator()
         quit_item = file_menu.Append(wx.ID_EXIT, "E&xit\tCtrl+Q")
@@ -1570,10 +1676,23 @@ class GenericMudFrame(wx.Frame):
         builder_item = rules_menu.Append(wx.ID_ANY, "Soundpack &builder...\tCtrl+B")
         menubar.Append(rules_menu, "&Rules")
 
+        self._prefs = load_ui_prefs()
+        self._app_focused = True  # tracked via EVT_ACTIVATE for background silence
+
         view_menu = wx.Menu()
         self._self_voice_item = view_menu.AppendCheckItem(wx.ID_ANY, "Self-&voice\tCtrl+M")
         self._self_voice_item.Check(True)
         self._self_voice = True
+        self._bg_silence_item = view_menu.AppendCheckItem(
+            wx.ID_ANY, "&Background silence",
+            "Stay quiet while another window has focus; triggers and sounds keep running",
+        )
+        self._bg_silence_item.Check(self._prefs.background_silence)
+        self._numpad_item = view_menu.AppendCheckItem(
+            wx.ID_ANY, "&Numpad compass walking",
+            "Numpad walks: 8/2/4/6 and diagonals, 5 or 0 look, period scans, minus up, plus down",
+        )
+        self._numpad_item.Check(self._prefs.numpad_compass)
         menubar.Append(view_menu, "&View")
 
         self.SetMenuBar(menubar)
@@ -1583,14 +1702,19 @@ class GenericMudFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, self._on_manage_packs, packs_item)
         self.Bind(wx.EVT_MENU, self._on_setup_pack, setup_item)
         self.Bind(wx.EVT_MENU, self._on_browse_online, browse_item)
+        self.Bind(wx.EVT_MENU, self._on_export_world, export_item)
+        self.Bind(wx.EVT_MENU, self._on_import_world, import_item)
         self.Bind(wx.EVT_MENU, self._on_rules_builder, builder_item)
         self.Bind(wx.EVT_MENU, lambda _e: self.check_for_updates(manual=True), updates_item)
         self.Bind(wx.EVT_MENU, lambda _e: self.Close(), quit_item)
         self.Bind(wx.EVT_MENU, self._on_toggle_self_voice, self._self_voice_item)
+        self.Bind(wx.EVT_MENU, self._on_toggle_bg_silence, self._bg_silence_item)
+        self.Bind(wx.EVT_MENU, self._on_toggle_numpad, self._numpad_item)
 
         self.book = wx.Simplebook(self)  # no tab strip -> nothing in the keyboard Tab order
         self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)  # Ctrl+Tab cycles sessions
         self.Bind(wx.EVT_CLOSE, self._on_frame_close)  # confirm + disconnect before exit
+        self.Bind(wx.EVT_ACTIVATE, self._on_app_activate)  # background-silence focus tracking
 
         self._update_progress_dialog: wx.ProgressDialog | None = None
         self._update_cancelled = threading.Event()
@@ -1617,10 +1741,39 @@ class GenericMudFrame(wx.Frame):
         panel = SessionPanel(
             self.book, self._loop, self._keymap, world,
             self._packs, self._credentials, self._hub, self._diag,
+            prefs=self._prefs, on_pref=self._on_engine_pref,
         )
         self.book.AddPage(panel, world.name, select=True)
         panel.input.SetFocus()
         self._update_active()
+
+    def _on_engine_pref(self, attr: str, value: bool) -> None:  # loop thread
+        """A keymap toggle changed a speech pref; persist it (prefs mutate on the wx thread)."""
+        wx.CallAfter(self._save_pref, attr, value)
+
+    def _save_pref(self, attr: str, value: bool) -> None:
+        setattr(self._prefs, attr, value)
+        save_ui_prefs(self._prefs)
+
+    def _on_app_activate(self, event: wx.ActivateEvent) -> None:
+        self._app_focused = event.GetActive()
+        if self._prefs.background_silence:
+            self._update_active()
+        event.Skip()
+
+    def _on_toggle_bg_silence(self, _event: wx.CommandEvent) -> None:
+        self._save_pref("background_silence", self._bg_silence_item.IsChecked())
+        self._update_active()
+        self.announce(
+            "Background silence on. genericMud stays quiet while you're in another window."
+            if self._prefs.background_silence else "Background silence off."
+        )
+
+    def _on_toggle_numpad(self, _event: wx.CommandEvent) -> None:
+        self._save_pref("numpad_compass", self._numpad_item.IsChecked())
+        self.announce(
+            "Numpad compass on." if self._prefs.numpad_compass else "Numpad compass off."
+        )
 
     def _on_connect(self, _event: wx.CommandEvent) -> None:
         dialog = ConnectDialog(self, load_worlds())
@@ -1641,6 +1794,48 @@ class GenericMudFrame(wx.Frame):
             self._update_active()
             if self.book.GetPageCount():  # no tab strip to fall back on; place focus
                 self.book.GetPage(self.book.GetSelection()).input.SetFocus()
+
+    def _on_export_world(self, _event: wx.CommandEvent) -> None:
+        index = self.book.GetSelection()
+        if index == wx.NOT_FOUND or not self.book.GetPageCount():
+            self.announce("Open a session for the world you want to export first.")
+            return
+        panel = self.book.GetPage(index)
+        dialog = wx.FileDialog(
+            self, "Export this world as a zip",
+            defaultFile=f"{slugify(panel.world.name)}.zip",
+            wildcard="World zips (*.zip)|*.zip",
+            style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT,
+        )
+        if dialog.ShowModal() == wx.ID_OK:
+            pack_dir = panel.app.user_rules_dir() if panel.app is not None else None
+            try:
+                count = export_world(panel.world, pack_dir, Path(dialog.GetPath()))
+            except OSError as error:
+                self.announce(f"Export failed: {error}")
+            else:
+                self.announce(
+                    f"Exported {panel.world.name}: {count} "
+                    f"file{'s' if count != 1 else ''}. Send the zip to a friend."
+                )
+        dialog.Destroy()
+
+    def _on_import_world(self, _event: wx.CommandEvent) -> None:
+        dialog = wx.FileDialog(
+            self, "Import a shared world zip",
+            wildcard="World zips (*.zip)|*.zip|All files (*.*)|*.*",
+            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST,
+        )
+        if dialog.ShowModal() == wx.ID_OK:
+            try:
+                world = import_world(Path(dialog.GetPath()), config_dir() / "userpacks")
+            except (OSError, ValueError, PackError) as error:
+                self.announce(f"Import failed: {error}")
+            else:
+                worlds = [w for w in load_worlds() if w.name != world.name] + [world]
+                save_worlds(worlds)
+                self.announce(f"Imported {world.name}. It's in the Connect dialog now.")
+        dialog.Destroy()
 
     def _on_disconnect(self, _event: wx.CommandEvent) -> None:
         index = self.book.GetSelection()
@@ -1970,8 +2165,11 @@ class GenericMudFrame(wx.Frame):
 
     def _update_active(self) -> None:
         selected = self.book.GetSelection()
+        # Background silence treats the whole app losing focus like a background tab:
+        # self-voice mutes but triggers and sounds keep running.
+        audible = self._app_focused or not self._prefs.background_silence
         for i in range(self.book.GetPageCount()):
-            self.book.GetPage(i).set_active(i == selected and self._self_voice)
+            self.book.GetPage(i).set_active(i == selected and self._self_voice and audible)
 
 
 def run(args, recovery=None) -> None:

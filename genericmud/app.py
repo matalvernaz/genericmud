@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING
 from genericmud.automation.channels import ChannelPolicy
 from genericmud.automation.engine import AutomationEngine, Callback, EngineSink, MatchContext
 from genericmud.bridge import protocol
+from genericmud.completion import OutputWordIndex
 from genericmud.config.worlds import config_dir
 from genericmud.model.buffer import Buffer, Line
 from genericmud.navigation import Navigator, SafeWalk, expand_speedwalk
@@ -29,6 +30,7 @@ from genericmud.protocol import telnet as T
 from genericmud.protocol.msp import parse_msp_line
 from genericmud.protocol.oob import OobMessage, ServerStatus, from_subnegotiation
 from genericmud.render.ansi import parse_ansi
+from genericmud.review.channels import ChannelReview
 from genericmud.review.cursor import ReviewCursor
 from genericmud.scripting.api import ScriptApi
 from genericmud.safepath import is_unsafe, sanitize_component
@@ -55,8 +57,20 @@ _PROMPT_IDLE_FLUSH_SECONDS = 0.25  # emit a newline-less prompt if the server se
 INTERACTIVE_SOURCE = "user-interactive"
 
 _REVIEW_VERBS = frozenset(
-    {"prev_line", "next_line", "prev_word", "next_word", "prev_char", "next_char", "top", "bottom"}
+    {
+        "prev_line", "next_line", "prev_word", "next_word", "prev_char", "next_char",
+        "top", "bottom", "spell_line",
+    }
 )
+_CHANNEL_REVIEW_VERBS = frozenset(
+    {"prev", "next", "older", "newer", "prev_word", "next_word"}
+)
+# Toggles reachable from the keymap: attribute -> what the toggle announces.
+_TOGGLE_ACTIONS = {
+    "follow_mode": "follow mode",
+    "interrupt_mode": "interrupt mode",
+    "autoretype": "autoretype",
+}
 
 
 def _default_schedule(delay: float, callback: Callable[[], None]) -> object | None:
@@ -206,6 +220,15 @@ class EngineApp:
         self.engine.session_name = name
         self.review = ReviewCursor(self.buffer)
         self.channels = self.engine.channels  # router lives on the engine (scriptable)
+        self.chan_review = ChannelReview(self.buffer, known=self.channels.names)
+        self.word_index = OutputWordIndex()  # feeds input autocomplete in the UI
+        # Speech-ergonomics toggles (MUDBall parity); the UI seeds them from saved
+        # prefs and pref_sink writes a change back so they survive a restart.
+        self.follow_mode = False  # interrupt speech on room movement only
+        self.interrupt_mode = False  # every incoming line interrupts instead of queueing
+        self.autoretype = False  # Enter on an empty input resends the last command
+        self.pref_sink: Callable[[str, bool], None] | None = None
+        self._last_input = ""  # what autoretype resends
         # Alerts barge in; everything else stays on the governed 'main' channel by default.
         self.channels.set_policy("tell", ChannelPolicy(interrupt=True))
         self.channels.set_policy("system", ChannelPolicy(interrupt=True))
@@ -576,10 +599,11 @@ class EngineApp:
             self.voice.speak(
                 line.plain_text,
                 channel=(policy.voice or line.channel),
-                interrupt=policy.interrupt,
+                interrupt=policy.interrupt or self.interrupt_mode,
             )
         if policy.display and not (line.gagged and not line.display_when_gagged):
             self.buffer.append(line)
+            self.word_index.add_line(line.plain_text)
             self._post(
                 protocol.line(
                     line.plain_text,
@@ -629,8 +653,19 @@ class EngineApp:
     def _update_room(self, room: dict) -> None:
         changed = room != self.nav.room
         self.nav.update_room(room)
+        if changed:
+            self._on_player_moved()  # follow mode: the new room barges over the old one
         if changed and self._walk is not None and self._walk.active:
             self._walk.on_room_change()  # confirmed move -> advance the safe-walk
+
+    def _on_player_moved(self) -> None:
+        """Movement signal (a direction sent, or GMCP room change) for follow mode.
+
+        Cuts the current utterance so the next room reads immediately; ordinary
+        lines keep queueing. Both signals may fire for one move — stop is idempotent.
+        """
+        if self.follow_mode:
+            self.voice.interrupt()
 
     # --- inbound from the renderer (WS messages) ---
 
@@ -638,6 +673,12 @@ class EngineApp:
         kind = message.get("type")
         if kind == protocol.INPUT:
             text = message.get("text", "")
+            if text.strip():
+                self._last_input = text
+            elif self.autoretype and self._last_input:
+                # A blank line normally goes to the MUD as-is (pagers use it); with
+                # autoretype on, an empty Enter repeats the last typed input instead.
+                text = self._last_input
             # A client command ("/alias x = a;b") must not be split on the separator.
             commands = [text] if text.startswith(CLIENT_PREFIX) else self._split_commands(text)
             for command in commands:
@@ -676,7 +717,8 @@ class EngineApp:
             return
         for line in self.engine.process_input(text):
             self._send(line)
-            self.nav.record(line)  # build the breadcrumb trail from manual walking
+            if self.nav.record(line):  # build the breadcrumb trail from manual walking
+                self._on_player_moved()
 
     def _dispatch_remote(self, text: str) -> None:
         """Deliver a command sent from ANOTHER session (mud.send_to / mud.broadcast).
@@ -698,7 +740,8 @@ class EngineApp:
 
         def send_and_record(direction: str) -> None:
             self._send(direction)
-            self.nav.record(direction)
+            if self.nav.record(direction):
+                self._on_player_moved()
 
         self._walk = SafeWalk(
             steps, send=send_and_record, schedule=self._schedule, announce=self._speak_system
@@ -718,6 +761,7 @@ class EngineApp:
         if not steps:
             return False
         self._cancel_walk()  # an immediate speedwalk supersedes a step-by-step one in progress
+        self._on_player_moved()  # one interrupt for the whole burst, not one per step
         for direction in steps:
             self._send(direction)
             self.nav.record(direction)
@@ -833,6 +877,12 @@ class EngineApp:
             self._speak_review(getattr(self.review, argument)())
         elif namespace == "voice" and argument == "flush":
             self.voice.flush()
+        elif namespace == "voice" and argument in _TOGGLE_ACTIONS:
+            self._toggle(argument)
+        elif namespace == "input" and argument == "autoretype":
+            self._toggle("autoretype")
+        elif namespace == "chan":
+            self._handle_channel_review(argument)
         elif namespace == "sound" and argument == "flush":
             self.sound.flush()  # panic key: cut all playing audio (Shift+F11)
         elif namespace == "nav":
@@ -876,6 +926,27 @@ class EngineApp:
                 self._speak_system("walk stopped")
             else:
                 self._speak_system("not walking")
+
+    def _toggle(self, attr: str) -> None:
+        """Flip a speech-ergonomics toggle, announce it, and persist via pref_sink."""
+        value = not getattr(self, attr)
+        setattr(self, attr, value)
+        if self.pref_sink is not None:
+            self.pref_sink(attr, value)
+        self._speak_system(f"{_TOGGLE_ACTIONS[attr]} {'on' if value else 'off'}")
+
+    def _handle_channel_review(self, action: str) -> None:
+        # "chan:prev|next|older|newer|prev_word|next_word" or "chan:recall:N".
+        verb, _, count = action.partition(":")
+        if verb == "recall":
+            self._speak_review(self.chan_review.recent(int(count)) or "no message")
+        elif verb in _CHANNEL_REVIEW_VERBS:
+            self._speak_review(getattr(self.chan_review, self._chan_method(verb))() or "no message")
+
+    @staticmethod
+    def _chan_method(verb: str) -> str:
+        # prev/next cycle channels; the rest are same-named ChannelReview methods.
+        return {"prev": "prev_channel", "next": "next_channel"}.get(verb, verb)
 
     def _speak_review(self, text: str) -> None:
         self.voice.speak(text, channel=REVIEW_CHANNEL, interrupt=True)

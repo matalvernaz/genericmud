@@ -116,6 +116,15 @@ class ReviewCursor:
     def copy_word(self) -> str:
         return self.current_word()
 
+    def spell_line(self) -> str:
+        """The current line spelled character by character (screen-reader review aid).
+
+        Characters are comma-separated so the synth pauses between them; a space
+        is named outright because most synths would skip it silently.
+        """
+        text = self._line_text()
+        return ", ".join("space" if ch == " " else ch for ch in text)
+
     def _line_text(self) -> str:
         if len(self._buffer) == 0:
             return ""

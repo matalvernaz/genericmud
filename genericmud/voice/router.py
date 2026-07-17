@@ -52,6 +52,14 @@ class VoiceRouter:
         self._safe(self._backend.stop)
         self._suppressed = 0
 
+    def interrupt(self) -> None:
+        """Stop current speech but keep the suppressed-line count.
+
+        Follow mode barges in on room movement; the "N more lines" notice still
+        owes the user those unheard lines, so only the utterance is cut.
+        """
+        self._safe(self._backend.stop)
+
     def _safe(self, action: Callable[..., None], *args: str) -> None:
         """Call a backend method, swallowing any fault.
 

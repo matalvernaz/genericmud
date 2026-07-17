@@ -130,3 +130,56 @@ def test_decode_latches_latin1_for_legacy_muds():
     assert app.buffer.lines()[-1].plain_text == "café"
     app.on_telnet_event(DataReceived(b"ma\xf1ana\r\n"))  # stays latched
     assert app.buffer.lines()[-1].plain_text == "mañana"
+
+
+def test_contains_match_is_literal_text_anywhere_in_the_line(tmp_path):
+    rules = UserRules(triggers=[UserTrigger(
+        pattern="tells you", match="contains", speak="a tell",
+    )])
+    sink, engine = _register(rules, tmp_path)
+    engine.process_line(Line("Bob tells you hi"))
+    assert ("a tell", "main", False) in sink.spoken
+    # Regex metacharacters in the text stay literal under "contains".
+    rules = UserRules(triggers=[UserTrigger(pattern="[HP]", match="contains", speak="hp")])
+    sink, engine = _register(rules, tmp_path)
+    engine.process_line(Line("[HP] 42/42"))
+    assert ("hp", "main", False) in sink.spoken
+
+
+def test_exact_match_needs_the_whole_line(tmp_path):
+    rules = UserRules(triggers=[UserTrigger(
+        pattern="You are hungry.", match="exact", speak="eat",
+    )])
+    sink, engine = _register(rules, tmp_path)
+    engine.process_line(Line("You are hungry. You are thirsty."))
+    assert sink.spoken == []
+    engine.process_line(Line("You are hungry."))
+    assert ("eat", "main", False) in sink.spoken
+
+
+def test_legacy_rules_without_match_field_keep_their_regex_flag_meaning(tmp_path):
+    loaded = UserRules.from_json(
+        '{"version": 1, "triggers": ['
+        '{"pattern": "* growls", "regex": false},'
+        '{"pattern": "^\\\\d+ gold$", "regex": true}]}'
+    )
+    assert loaded.triggers[0].match_kind() == "wildcard"
+    assert loaded.triggers[1].match_kind() == "regex"
+
+
+def test_interrupting_trigger_stops_speech_and_barges_its_own_line_in(tmp_path):
+    rules = UserRules(triggers=[UserTrigger(
+        pattern="says your name", match="contains", speak="listen!", interrupt=True,
+    )])
+    sink, engine = _register(rules, tmp_path)
+    engine.process_line(Line("Bob says your name"))
+    assert sink.speech_stops == 1
+    assert ("listen!", "main", True) in sink.spoken  # its own speech barges in too
+
+
+def test_interrupt_alone_is_a_real_action(tmp_path):
+    # MUDBall's "interrupt whatever's speaking" checkbox works with no other action.
+    rules = UserRules(triggers=[UserTrigger(pattern="DING", match="contains", interrupt=True)])
+    sink, engine = _register(rules, tmp_path)
+    engine.process_line(Line("DING you level"))
+    assert sink.speech_stops == 1

@@ -28,6 +28,36 @@
 "shift+f11" = "sound:flush"
 "shift+f1" = "soundpack:toggle"
 
+# Speech ergonomics (announced toggles, persisted across restarts).
+# Follow mode: speech interrupts when YOU move rooms, not on every line.
+# Interrupt mode: every incoming line barges in instead of queueing.
+# Autoretype: Enter on an empty input resends your last command.
+"ctrl+f" = "voice:follow_mode"
+"ctrl+i" = "voice:interrupt_mode"
+"ctrl+enter" = "input:autoretype"
+
+# Spell the current review line (or the newest line) character by character.
+"alt+shift+enter" = "review:spell_line"
+
+# Channel browsing: cycle the channels your triggers route chat to, scroll
+# within one, and recall its recent messages -- a parallel layer to the Alt
+# review keys, on Ctrl+Alt.
+"ctrl+alt+left" = "chan:prev"
+"ctrl+alt+right" = "chan:next"
+"ctrl+alt+up" = "chan:older"
+"ctrl+alt+down" = "chan:newer"
+"ctrl+alt+shift+left" = "chan:prev_word"
+"ctrl+alt+shift+right" = "chan:next_word"
+"ctrl+alt+1" = "chan:recall:1"
+"ctrl+alt+2" = "chan:recall:2"
+"ctrl+alt+3" = "chan:recall:3"
+"ctrl+alt+4" = "chan:recall:4"
+"ctrl+alt+5" = "chan:recall:5"
+"ctrl+alt+6" = "chan:recall:6"
+"ctrl+alt+7" = "chan:recall:7"
+"ctrl+alt+8" = "chan:recall:8"
+"ctrl+alt+9" = "chan:recall:9"
+
 # Per-channel recall: "recall:<channel>:N" speaks the N-th newest line routed to
 # that channel. Channels are created by triggers (mud.trigger(p, nil, {channel=...}))
 # or mud.set_channel; these bind once the active soundpack defines them.

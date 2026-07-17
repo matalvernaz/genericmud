@@ -31,12 +31,15 @@ SOUNDS_DIRNAME = "sounds"  # picked sound files are copied here (keeps the pack 
 
 _CAPTURE_RE = re.compile(r"%(\d)")
 _GAG_CHOICES = ("none", "speech", "line")
+# How a trigger pattern matches a line. "contains" and "exact" are newbie-facing
+# sugar over regex (escaped literal, searched / anchored); "wildcard" is * and ?.
+MATCH_CHOICES = ("contains", "wildcard", "exact", "regex")
 
 
 @dataclass
 class UserTrigger:
     pattern: str = ""
-    regex: bool = False  # False: * and ? wildcards (VIPMud/MUSHclient style)
+    regex: bool = False  # kept in sync with match for files older builds read
     sound: str = ""  # pack-relative path ("sounds/x.ogg"); "" = no cue
     volume: int = 100  # 0..100
     pan: int = 0  # -100 (left) .. 100 (right)
@@ -46,6 +49,13 @@ class UserTrigger:
     gag: str = "none"  # "none" | "speech" (silent but shown) | "line" (removed)
     channel: str = ""  # route the line to this channel ("" = leave on main)
     stop_channel: str = ""  # stop this user cue channel when fired ("" = none)
+    match: str = ""  # one of MATCH_CHOICES; "" = legacy file (the regex flag decides)
+    interrupt: bool = False  # cut current speech the moment this fires
+
+    def match_kind(self) -> str:
+        if self.match in MATCH_CHOICES:
+            return self.match
+        return "regex" if self.regex else "wildcard"
 
 
 @dataclass
@@ -176,11 +186,28 @@ def register_rules(api: ScriptApi, rules: UserRules) -> None:
             _register_key(api, key)
 
 
+def _trigger_pattern(t: UserTrigger) -> tuple[str, bool]:
+    """The (pattern, regex) pair to register for the trigger's match kind.
+
+    Triggers match with ``search``, so an escaped literal IS "contains" and an
+    anchored escaped literal IS "exact"; "wildcard" keeps the engine's * and ?
+    translation with its capture groups.
+    """
+    kind = t.match_kind()
+    if kind == "contains":
+        return re.escape(t.pattern), True
+    if kind == "exact":
+        return f"^{re.escape(t.pattern)}$", True
+    return t.pattern, kind == "regex"
+
+
 def _register_trigger(api: ScriptApi, t: UserTrigger) -> None:
     gag = t.gag if t.gag in _GAG_CHOICES else "none"
-    has_actions = bool(t.sound or t.speak or t.send or t.stop_channel)
+    has_actions = bool(t.sound or t.speak or t.send or t.stop_channel or t.interrupt)
 
     def fire(ctx: MatchContext) -> None:
+        if t.interrupt:
+            api.stop_speech()
         if t.stop_channel:
             api.stop(f"user-{t.stop_channel}")
         if t.sound:
@@ -192,14 +219,19 @@ def _register_trigger(api: ScriptApi, t: UserTrigger) -> None:
                 loop=t.loop,
             )
         if t.speak:
-            api.speak(_substitute(t.speak, ctx.wildcards), channel=t.channel or "main")
+            api.speak(
+                _substitute(t.speak, ctx.wildcards),
+                channel=t.channel or "main",
+                interrupt=t.interrupt,
+            )
         if t.send:
             api.send(_substitute(t.send, ctx.wildcards))
 
+    pattern, regex = _trigger_pattern(t)
     api.add_trigger(
-        t.pattern,
+        pattern,
         fire if has_actions else None,
-        regex=t.regex,
+        regex=regex,
         gag=(gag == "line"),
         gag_but_display=(gag == "speech"),
         channel=t.channel or None,

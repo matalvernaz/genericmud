@@ -59,3 +59,17 @@ def test_muted_passthrough_speaks_nothing():
     router.set_muted(True)
     router.speak("nope")
     assert backend.spoken == []
+
+
+def test_interrupt_stops_speech_but_keeps_the_suppressed_backlog():
+    backend = RecordingBackend()
+    clock = [0.0]
+    router = VoiceRouter(backend, rate=2, clock=lambda: clock[0])
+    router.speak("one")
+    router.speak("two")
+    router.speak("dropped")  # over budget: suppressed
+    router.interrupt()  # follow mode barging in on movement
+    assert backend.stops == 1
+    clock[0] = 10.0
+    router.speak("after")
+    assert "1 more lines" in backend.spoken  # the backlog notice survived the interrupt

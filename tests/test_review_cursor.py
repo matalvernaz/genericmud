@@ -73,3 +73,13 @@ def test_empty_buffer_is_safe():
     assert cursor.enter() == ""
     assert cursor.next_line() == ""
     assert cursor.recall(1) == ""
+
+
+def test_spell_line_names_spaces_and_separates_characters():
+    cursor = ReviewCursor(_buffer("ok go"))
+    cursor.enter()
+    assert cursor.spell_line() == "o, k, space, g, o"
+
+
+def test_spell_line_on_an_empty_buffer_is_safe():
+    assert ReviewCursor(Buffer()).spell_line() == ""

@@ -5,8 +5,9 @@ VIPMud. Built for screen-reader users (NVDA > VoiceOver > Orca), with self-voici
 through the user's own synth, modern protocols (GMCP/MSDP/MXP) VIPMud lacks, and a
 clean native soundpack format.
 
-Status: **v0.1 in progress.** Design and rationale live in
-`~/.claude/plans/can-you-please-help-declarative-badger.md`.
+Status: see `genericmud/__init__.py` for the current version. The native wx UI,
+pygame audio, the three soundpack dialects (native Lua, VIPMud `.set`,
+MUSHclient), the no-code soundpack builder, and world sharing are all live.
 
 ## Architecture
 
