@@ -339,3 +339,12 @@ class AutomationEngine:
             return False
         callback(MatchContext(Line(""), [], {}, self))
         return True
+
+    def has_key(self, key: str) -> bool:
+        """Whether a macro is bound to this combo.
+
+        The UI asks this BEFORE swallowing a keypress: an unbound combo must fall
+        through to the platform (menu access keys, accelerators) instead of dying
+        in the macro path. Read cross-thread; dict membership is safe under the GIL.
+        """
+        return key.lower() in self._keys

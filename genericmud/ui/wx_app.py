@@ -30,6 +30,7 @@ from pathlib import Path
 
 import wx
 
+from genericmud import __version__, help_text
 from genericmud.app import EngineApp
 from genericmud.automation.engine import AutomationEngine
 from genericmud.bridge import protocol
@@ -369,7 +370,16 @@ class SessionPanel(wx.Panel):
         if plain and self._prefs.numpad_compass and code in _NUMPAD_COMPASS:
             self._send_command(_NUMPAD_COMPASS[code])
             return
-        if combo and combo not in _PASSTHROUGH_COMBOS and self.app is not None:
+        if (
+            combo
+            and combo not in _PASSTHROUGH_COMBOS
+            and self.app is not None
+            and (combo in self._keymap or self.app.engine.has_key(combo))
+        ):
+            # Only a combo that's actually bound (keymap action or pack macro) is
+            # consumed. Everything else falls through to wx -- swallowing unbound
+            # combos here is what killed Alt+F menu access keys and the File-menu
+            # Ctrl accelerators for keyboard-only users.
             self._loop.call_soon_threadsafe(self.app.on_ws_message, {"type": "key", "key": combo})
             return
         event.Skip()  # passthrough/unbound combos -> default handling (Alt+F4 -> EVT_CLOSE)
@@ -1519,6 +1529,35 @@ class RulesBuilderDialog(wx.Dialog):
         self._save_and_reload()
 
 
+class HelpDialog(wx.Dialog):
+    """One help page: a read-only text box NVDA reads line by line, plus Close.
+
+    The same accessibility shape as the release-notes dialog: label precedes the
+    control, SetName gives it a spoken name, and focus starts at the TOP of the
+    text (a fresh TextCtrl caret sits at the end, which reads as an empty line).
+    """
+
+    def __init__(self, parent: wx.Window, title: str, text: str) -> None:
+        super().__init__(
+            parent, title=title, size=(640, 480),
+            style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER,
+        )
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        sizer.Add(wx.StaticText(self, label=f"&{title}:"), 0, wx.LEFT | wx.TOP, 8)
+        body = wx.TextCtrl(
+            self, value=text,
+            style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_DONTWRAP,
+        )
+        body.SetName(title)
+        body.SetInsertionPoint(0)
+        sizer.Add(body, 1, wx.EXPAND | wx.ALL, 8)
+        close = wx.Button(self, wx.ID_CANCEL, "Cl&ose")
+        close.SetDefault()
+        sizer.Add(close, 0, wx.ALL | wx.ALIGN_RIGHT, 8)
+        self.SetSizer(sizer)
+        body.SetFocus()
+
+
 _ID_UPDATE_NOW = wx.ID_HIGHEST + 101
 _ID_RELEASE_PAGE = wx.ID_HIGHEST + 102
 _ID_SNOOZE = wx.ID_HIGHEST + 103
@@ -1667,7 +1706,6 @@ class GenericMudFrame(wx.Frame):
             wx.ID_ANY, "&Import a World...",
             "Load a world zip a friend sent you; it appears in the Connect dialog",
         )
-        updates_item = file_menu.Append(wx.ID_ANY, "Check for &Updates...")
         file_menu.AppendSeparator()
         quit_item = file_menu.Append(wx.ID_EXIT, "E&xit\tCtrl+Q")
         menubar.Append(file_menu, "&File")
@@ -1695,7 +1733,25 @@ class GenericMudFrame(wx.Frame):
         self._numpad_item.Check(self._prefs.numpad_compass)
         menubar.Append(view_menu, "&View")
 
+        help_menu = wx.Menu()
+        started_item = help_menu.Append(wx.ID_ANY, "&Getting Started...")
+        shortcuts_item = help_menu.Append(wx.ID_ANY, "&Keyboard Shortcuts...")
+        updates_item = help_menu.Append(wx.ID_ANY, "Check for &Updates...")
+        about_item = help_menu.Append(wx.ID_ABOUT, "&About genericMud...")
+        menubar.Append(help_menu, "&Help")
+
         self.SetMenuBar(menubar)
+        self.Bind(
+            wx.EVT_MENU,
+            lambda _e: self._show_help("Getting started", help_text.GETTING_STARTED),
+            started_item,
+        )
+        self.Bind(
+            wx.EVT_MENU,
+            lambda _e: self._show_help("Keyboard shortcuts", help_text.KEYBOARD_SHORTCUTS),
+            shortcuts_item,
+        )
+        self.Bind(wx.EVT_MENU, self._on_about, about_item)
         self.Bind(wx.EVT_MENU, self._on_connect, connect_item)
         self.Bind(wx.EVT_MENU, self._on_disconnect, disconnect_item)
         self.Bind(wx.EVT_MENU, self._on_close_tab, close_item)
@@ -1897,6 +1953,20 @@ class GenericMudFrame(wx.Frame):
     def announce(self, text: str) -> None:
         """Speak a UI status update through the screen reader (the app's self-voice)."""
         self._announcer.speak(text)
+
+    def _show_help(self, title: str, text: str) -> None:
+        dialog = HelpDialog(self, title, text)
+        dialog.ShowModal()
+        dialog.Destroy()
+
+    def _on_about(self, _event: wx.CommandEvent) -> None:
+        self._show_help(
+            "About genericMud",
+            f"genericMud {__version__}\n\n"
+            "An accessible, self-voicing MUD client.\n"
+            "https://github.com/matalvernaz/genericmud\n\n"
+            "New releases install themselves: Help menu, Check for Updates.",
+        )
 
     # --- self-update ---
 

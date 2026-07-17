@@ -132,3 +132,12 @@ def test_alias_match_timeout_disables_and_traces():
     engine.process_input("some input")
     assert engine._aliases[0].enabled is False
     assert "alias.timeout_disabled" in [s for s, _ in engine.diag.events]
+
+
+def test_has_key_reports_bound_macros_only():
+    # The UI consults this before consuming a keypress: unbound combos must fall
+    # through to the platform (menu access keys), bound ones must reach the macro.
+    engine = AutomationEngine()
+    engine.add_key("Alt+G", lambda _ctx: None)
+    assert engine.has_key("alt+g")  # case-insensitive, as press_key is
+    assert not engine.has_key("alt+f")

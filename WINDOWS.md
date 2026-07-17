@@ -1,73 +1,47 @@
-# Running genericMud on Windows
+# genericMud on Windows
 
-A prebuilt `.exe` can't be produced on the Linux dev host (PyInstaller doesn't
-cross-compile, and the native deps are Windows-only). Build/run it on Windows.
+Most people don't need this file: grab `genericMud-windows.zip` from the
+[Releases page](https://github.com/matalvernaz/genericmud/releases), unzip,
+run `genericMud.exe`. Worlds, soundpacks, and logs live in `genericmud-data`
+beside the exe. How to actually use the client — connecting, keys, soundpacks
+— is in `README.md` and in the app under the **Help** menu.
 
-## Fastest: test from source (recommended first)
+This file is for running from source or building the exe yourself.
+
+## Run from source
 
 Double-click **`run.bat`**, or from a terminal:
 
 ```bat
-run.bat                              :: native UI, no auto-connect (File > Connect / Ctrl+N)
+run.bat                              :: open the window (Ctrl+N to connect)
 run.bat mud.example.com 4000         :: auto-connect a tab
 run.bat mud.example.com 4000 --tls
-run.bat mud.example.com 4000 --web   :: old web UI instead of native
+run.bat mud.example.com 4000 --web   :: the alternate web UI
 ```
 
-It creates a venv, installs deps, and launches the window. First run takes a
-minute (downloads wheels: wxPython, lupa, pywin32, ...).
+It creates a venv, installs dependencies, and launches. The first run takes a
+minute while wheels download (wxPython, lupa, pywin32...).
 
-Requirements:
-- **Python 3.12+** (`py` launcher or `python` on PATH).
-- The native UI needs nothing extra. The WebView2 Runtime only matters for `--web`.
+You need **Python 3.12 or newer** (the `py` launcher or `python` on PATH).
+Nothing else — the WebView2 runtime only matters for `--web`.
 
-## Make a standalone .exe
+## Build a standalone exe
 
-Double-click **`build_windows.bat`** (or run it). Output: `dist\genericMud.exe`.
-Run it from a terminal so you can pass the world: `genericMud.exe host 4000`.
+Double-click **`build_windows.bat`**. The result lands in
+`dist\genericMud\genericMud.exe`. (Official zips are built the same way by
+the GitHub Actions workflow on every release tag.)
 
 ## Voice
 
-- Streaming output is spoken through **your running screen reader** — NVDA speaks it
-  in your own voice and settings (via accessible_output2; no DLL to place). It falls
-  back to SAPI5 only if no screen reader is running.
-- **Ctrl+M** toggles self-voice off, so you can read the output with NVDA directly
-  (Tab to the output box, arrow / say-line) instead.
+Output speaks through **your running screen reader** — NVDA or JAWS, in your
+own voice and settings — and falls back to SAPI5 when neither is running.
+**Ctrl+M** turns self-voice off if you'd rather read the output box with
+NVDA directly (Tab to it, then arrow / say-line as usual).
 
-## Known gaps (this is an early test build)
+## Known gaps
 
-- **Native UI is build-blind** — a run may surface wx/threading issues;
-  tell me what NVDA does and I'll fix.
-- **Script packs:** VIPMud `.set` packs run (`#if`, `#alarm`, sounds); `#math`,
-  `#wait`, and the `%function()` library don't yet. MUSHclient packs load
-  behind a per-pack trust prompt.
-
-## Keys (native UI)
-
-- **Tab / Shift+Tab** move between the output box and the command box. In the
-  output box, read with NVDA as usual (arrows, say-line, say-all); start typing
-  and you jump straight to the command box.
-- **Enter** sends; **Up/Down** = command history. **Ctrl+Enter** toggles
-  autoretype: Enter on an empty line resends your last command.
-- **Ctrl+Space / Ctrl+Shift+Space** complete the word you're typing from words
-  seen in recent output, cycling forward/backward.
-- **Numpad** walks (8/2/4/6 + diagonals, 5 or 0 look, `.` scan, `-` up, `+`
-  down). Turn it off under View if NVDA's desktop layout needs the numpad.
-- **Ctrl+N** connect (with saved worlds); **Ctrl+W** close the current MUD tab;
-  each MUD is its own tab (**Ctrl+Tab / Ctrl+Shift+Tab** to switch).
-- **Ctrl+1..9** recall recent messages; **Alt+arrows** review by line/word/char;
-  **Alt+Shift+Enter** spells the current line character by character.
-- **Ctrl+Alt+Left/Right** cycle your chat channels; **Ctrl+Alt+Up/Down** scroll
-  within one; **Ctrl+Alt+1..9** recall that channel's recent messages.
-- **Ctrl+F** follow mode (speech interrupts when you move rooms, not on every
-  line); **Ctrl+I** interrupt mode (every line barges in instead of queueing).
-- **F11** / **Esc** stop speech; **Shift+F11** stops all sounds.
-- **View menu:** Background silence (stay quiet while you're in another window —
-  triggers and sounds keep running) and Numpad compass. Both stick across runs.
-
-## Sharing a world
-
-**File > Export This World...** saves the current world — connection details,
-builder triggers/aliases/hotkeys/channels, and every copied sound — as one zip.
-A friend uses **File > Import a World...** and it appears in their Connect
-dialog, sounds and all.
+- The wx UI is written blind and can't be exercised on the Linux dev host —
+  if NVDA does something odd, say what you heard and it gets fixed.
+- VIPMud `.set` packs run (`#if`, `#alarm`, gags, sounds); `#math`, `#wait`,
+  and the `%function()` library don't yet. MUSHclient packs load behind a
+  per-pack trust prompt.
