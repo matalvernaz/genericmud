@@ -19,11 +19,13 @@ run.bat mud.example.com 4000 --tls
 run.bat mud.example.com 4000 --web   :: the alternate web UI
 ```
 
-It creates a venv, installs dependencies, and launches. The first run takes a
-minute while wheels download (wxPython, lupa, pywin32...).
+It creates the environment, installs dependencies, and launches. The first run
+takes a minute while wheels download (wxPython, lupa, prismatoid, pywin32...).
 
-You need **Python 3.12 or newer** (the `py` launcher or `python` on PATH).
-Nothing else — the WebView2 runtime only matters for `--web`.
+You need **[uv](https://docs.astral.sh/uv/)** — `winget install --id=astral-sh.uv -e`.
+uv downloads Python 3.12 itself, so no separate Python install is required, and
+it installs the exact versions pinned in `uv.lock`. Nothing else — the WebView2
+runtime only matters for `--web`.
 
 ## Build a standalone exe
 
@@ -34,8 +36,10 @@ PyInstaller layout and GUI subsystem.
 
 ## Voice
 
-Output speaks through **your running screen reader** — NVDA or JAWS, in your
-own voice and settings — and falls back to SAPI5 when neither is running.
+Output speaks through **your running screen reader** — NVDA, JAWS, ZDSR,
+System Access and others, in your own voice and settings, via
+[prism](https://github.com/ethindp/prism) — and falls back to the Windows
+voice (OneCore/SAPI5) when none is running.
 **Ctrl+M** turns self-voice off if you'd rather read the output box with
 NVDA directly (Tab to it, then arrow / say-line as usual).
 

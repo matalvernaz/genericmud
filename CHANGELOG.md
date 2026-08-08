@@ -7,6 +7,20 @@ fails the build on purpose.
 
 Entries start at 0.7.1. Earlier releases were tagged before this file existed.
 
+## Unreleased
+
+**Self-voice speaks through your screen reader on Mac and Linux too**
+
+* Speech now goes through prism, which talks to whichever screen reader you use.
+  On Windows that adds ZDSR, PC-Talker, System Access, ZoomText and Narrator to
+  the NVDA and JAWS support that was already there. On Mac, output speaks in
+  your VoiceOver voice, and on Linux in your Orca voice, instead of a separate
+  system voice that ignored your speech settings.
+* When no screen reader is running, the client still speaks: the Windows voice,
+  the built-in Mac speech, or speech-dispatcher on Linux, same as before.
+* Lines reach a braille display wherever your screen reader supports it, which
+  now includes Mac and Linux; those two used to be speech only.
+
 ## 0.10.0 — 2026-08-07
 
 **genericMud maps as you explore**

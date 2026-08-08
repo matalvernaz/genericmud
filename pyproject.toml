@@ -36,7 +36,10 @@ gui = [
 ]
 # self-voicing backends; platform-specific wheels resolve per-OS
 voice = [
-  "accessible_output2>=0.16; platform_system == 'Windows' or platform_system == 'Darwin'",
+  # prism speaks through the running screen reader on all three platforms (NVDA/JAWS on
+  # Windows, VoiceOver on macOS, Orca on Linux) and falls back to the system TTS itself.
+  # Wheels cover win_amd64/arm64, macOS 11+, manylinux_2_34 and musllinux_1_2.
+  "prismatoid>=0.17.3",
   "pywin32>=306; platform_system == 'Windows'",  # SAPI5 fallback voice
 ]
 # native soundpack audio playback (the SoundBus pygame backend; --web doesn't need it)
@@ -47,11 +50,28 @@ audio = [
 package = [
   "pyinstaller>=6",
 ]
+
+# The test/lint toolchain is a dependency group, not an extra: `uv sync` installs it by
+# default for contributors, and it never ships as part of a `pip install genericmud[...]`.
+[dependency-groups]
 dev = [
   "pytest>=8",
   "pytest-asyncio>=0.23",
   "ruff>=0.5",
 ]
+
+# wxPython publishes no Linux wheel to PyPI, so a plain resolve there falls to a 20-40 minute
+# (often failing) source build. Point Linux at the wxPython project's own prebuilt GTK3 index
+# instead -- a flat find-links-style listing, hence `format = "flat"`. `explicit = true` keeps
+# every other package on PyPI, and pinning the ubuntu-22.04 tree is why CI runs on 22.04.
+[[tool.uv.index]]
+name = "wxpython-linux-gtk3"
+url = "https://extras.wxpython.org/wxPython4/extras/linux/gtk3/ubuntu-22.04/"
+format = "flat"
+explicit = true
+
+[tool.uv.sources]
+wxpython = [{ index = "wxpython-linux-gtk3", marker = "sys_platform == 'linux'" }]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

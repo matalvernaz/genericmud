@@ -19,16 +19,18 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      # uv provisions the interpreter itself (.python-version pins 3.12), so there's no
+      # setup-python step; the cache keys off uv.lock, which pins every resolved version.
+      - uses: astral-sh/setup-uv@v9
         with:
-          python-version: '3.12'
+          enable-cache: true
       - uses: actions/setup-node@v6
         with:
           node-version: '22'
       - name: Install
-        run: pip install ".[gui,voice,audio,package,dev]"
+        run: uv sync --all-extras --locked
       - name: Test Python
-        run: python -m pytest -q
+        run: uv run pytest -q
       - name: Test web input
         run: |
           node --test tests/test_frontend_input.mjs tests/test_frontend_ws.mjs
@@ -43,7 +45,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
-          python tools/extract_changelog.py CHANGELOG.md "${{ github.ref_name }}" release_notes.md
+          uv run python tools/extract_changelog.py CHANGELOG.md "${{ github.ref_name }}" release_notes.md
           cat release_notes.md
 
       # Build ZipExtractor.exe from ravibpatel/AutoUpdater.NET (MIT) -- the self-update
@@ -73,12 +75,12 @@ jobs:
       # compare against releases (and it fixes the diagnostic banner's "version=unknown").
       - name: Build
         run: >
-          pyinstaller --onedir --name genericMud --windowed
+          uv run pyinstaller --onedir --name genericMud --windowed
           --copy-metadata genericmud
           --add-data "frontend;frontend"
           --add-data "genericmud/config/keymaps;genericmud/config/keymaps"
           --collect-all webview
-          --collect-all accessible_output2
+          --collect-all prism
           --collect-all pygame
           --collect-all lupa --hidden-import websockets
           --hidden-import win32com.client --hidden-import pythoncom
