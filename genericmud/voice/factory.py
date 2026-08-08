@@ -1,9 +1,12 @@
 """Pick the best available self-voice backend for the platform.
 
-Windows: accessible_output2 (routes to the running screen reader — NVDA speaks in the
-user's own voice/settings) > SAPI5. macOS: the built-in ``say``. Linux: speech-dispatcher
-(``spd-say``, the same engine Orca drives). Console print is the last resort everywhere.
-Constructed on the thread that uses it (SAPI is COM, apartment-bound).
+Prism first on every platform: it routes to whatever screen reader is running — NVDA,
+JAWS, Orca, VoiceOver — so output speaks in the user's own voice and settings, and it
+lands on the system TTS (SAPI/OneCore, AVSpeech, speech-dispatcher) when none is. The
+per-platform fallbacks below only matter when prism is missing or its wheel doesn't
+support the host: SAPI5 on Windows, the built-in ``say`` on macOS, speech-dispatcher's
+``spd-say`` on Linux. Console print is the last resort everywhere. Constructed on the
+thread that uses it (SAPI is COM, apartment-bound).
 """
 
 from __future__ import annotations
@@ -30,12 +33,12 @@ class PrintBackend(VoiceBackend):
 
 
 def make_voice_backend() -> VoiceBackend:
-    # accessible_output2 routes to the running screen reader (NVDA → the user's own
-    # voice) and bundles the controller DLLs, so it's preferred over raw SAPI.
+    # Prism routes to the running screen reader (NVDA/JAWS/Orca/VoiceOver → the user's own
+    # voice) and bundles the controller DLLs, so it's preferred over the raw system TTS.
     try:
-        from genericmud.voice.backends.ao2 import Ao2Backend
+        from genericmud.voice.backends.prism_tts import PrismBackend
 
-        return Ao2Backend()
+        return PrismBackend()
     except Exception:
         pass
     if sys.platform == "win32":

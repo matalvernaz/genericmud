@@ -16,14 +16,16 @@ concurrency:
 
 jobs:
   linux:
-    # Pinned to 22.04 so the runner matches the prebuilt wxPython wheel index below;
-    # on a newer runner pip would fall back to a slow (often failing) source build.
+    # Pinned to 22.04 to match the prebuilt wxPython wheel index configured in pyproject.toml
+    # ([[tool.uv.index]] wxpython-linux-gtk3); those wheels link against 22.04's GTK stack.
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      # uv provisions the interpreter itself (.python-version pins 3.12), so there's no
+      # setup-python step; the cache keys off uv.lock, which pins every resolved version.
+      - uses: astral-sh/setup-uv@v9
         with:
-          python-version: '3.12'
+          enable-cache: true
       - uses: actions/setup-node@v6
         with:
           node-version: '22'
@@ -38,18 +40,14 @@ jobs:
             libgstreamer1.0-0 libgstreamer-plugins-base1.0-0 \
             speech-dispatcher libspeechd2
 
-      # wxPython has no PyPI Linux wheel, so pip would build it from source (20-40 min, often
-      # hangs). Take the prebuilt ubuntu-22.04 cp312 wheel explicitly and pin the version so a
-      # newer PyPI sdist can't win; --only-binary fails fast instead of falling to source.
+      # wxPython has no PyPI Linux wheel; pyproject points Linux at the project's prebuilt
+      # ubuntu-22.04 GTK3 index, so the wheel comes straight out of uv.lock -- no find-links
+      # step here, and no 20-40 minute source build.
       - name: Install
-        run: |
-          pip install --only-binary wxPython \
-            -f https://extras.wxpython.org/wxPython4/extras/linux/gtk3/ubuntu-22.04 \
-            wxPython==4.2.2
-          pip install ".[gui,voice,audio,package,dev]"
+        run: uv sync --all-extras --locked
 
       - name: Test Python
-        run: xvfb-run -a python -m pytest -q
+        run: xvfb-run -a uv run pytest -q
       - name: Test web input
         run: |
           node --test tests/test_frontend_input.mjs tests/test_frontend_ws.mjs
@@ -58,13 +56,13 @@ jobs:
       - name: Extract release notes from CHANGELOG
         if: startsWith(github.ref, 'refs/tags/')
         run: |
-          python tools/extract_changelog.py CHANGELOG.md "${{ github.ref_name }}" release_notes.md
+          uv run python tools/extract_changelog.py CHANGELOG.md "${{ github.ref_name }}" release_notes.md
           cat release_notes.md
 
       # Produces dist/genericMud/ (portable onedir). --windowed = no console; Orca reads the
       # GTK controls and self-voice speaks through speech-dispatcher.
       - name: Build
-        run: xvfb-run -a python tools/build_app.py
+        run: xvfb-run -a uv run python tools/build_app.py
 
       - name: Package
         run: |

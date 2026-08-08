@@ -33,6 +33,15 @@ def test_windows_only_hidden_imports_stay_off_mac_and_linux():
         assert "pythoncom" not in args
 
 
+@pytest.mark.parametrize("platform", ["win32", "darwin", "linux"])
+def test_every_platform_freezes_the_prism_speech_library(platform):
+    # prism speaks through a native library the wheel ships (prism.dll / libprism) plus a
+    # cffi extension. Drop the collect and the app still builds -- it just can't talk, which
+    # for a self-voicing client is a silent brick. Guard the flag on all three platforms.
+    args = pyinstaller_args(platform)
+    assert args[args.index("prism") - 1] == "--collect-all"
+
+
 def test_macos_build_sets_a_bundle_identifier():
     args = pyinstaller_args("darwin")
     assert "--osx-bundle-identifier" in args

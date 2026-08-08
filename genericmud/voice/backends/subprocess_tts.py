@@ -1,6 +1,6 @@
 """Self-voice via a platform TTS command: macOS ``say`` and Linux speech-dispatcher.
 
-The Windows backends (accessible_output2 / SAPI) queue utterances internally and clear on
+The screen-reader backends (prism / SAPI) queue utterances internally and clear on
 interrupt; the router relies on that (``speak`` enqueues and returns, ``stop`` barges in).
 This backend reproduces the same contract on macOS and Linux with a background worker that
 runs one TTS subprocess at a time, so streamed MUD lines don't talk over each other, and a

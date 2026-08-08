@@ -44,21 +44,20 @@ def pyinstaller_args(platform: str) -> list[str]:
     ]
     # pywebview backs the optional --web UI; present on every platform's [gui] extra.
     args += ["--collect-all", "webview"]
+    # prism is the self-voice backend on all three platforms. Collect-all because the speech
+    # comes out of a native library the wheel ships alongside the Python modules (prism.dll /
+    # libprism, plus the _prism_cffi extension) -- a module-only scan would freeze an app that
+    # imports prism and then cannot speak.
+    args += ["--collect-all", "prism"]
     if platform == "win32":
-        # accessible_output2 bundles the screen-reader controller DLLs; SAPI needs win32com.
-        args += [
-            "--collect-all", "accessible_output2",
+        args += [  # the SAPI fallback backend talks COM
             "--hidden-import", "win32com.client",
             "--hidden-import", "pythoncom",
         ]
     elif platform == "darwin":
-        # ao2 is declared for macOS too (it can route to VoiceOver); the `say` backend is
-        # the deterministic fallback. A stable bundle id keeps preferences/TCC attribution.
-        args += [
-            "--collect-all", "accessible_output2",
-            "--osx-bundle-identifier", "space.thealvernaz.genericmud",
-        ]
-    # Linux self-voice is speech-dispatcher's `spd-say` (a runtime command, not a bundled
+        # A stable bundle id keeps preferences/TCC attribution across releases.
+        args += ["--osx-bundle-identifier", "space.thealvernaz.genericmud"]
+    # The Linux fallback is speech-dispatcher's `spd-say` (a runtime command, not a bundled
     # module), so there's nothing extra to collect there.
     args.append(ENTRY)
     return args

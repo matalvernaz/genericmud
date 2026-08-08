@@ -36,15 +36,17 @@ Self-voice reads through NVDA or JAWS if one is running, or the Windows voice
 otherwise.
 
 **Mac:** unzip `genericMud-macos.zip` and drag `genericMud.app` to Applications.
-Self-voice uses the built-in macOS speech; VoiceOver reads the window as usual.
-Saved data lives in `~/Library/Application Support/genericMud`.
+Self-voice speaks through VoiceOver when it's running and the built-in macOS
+speech otherwise. Saved data lives in `~/Library/Application Support/genericMud`.
 
 **Linux:** untar `genericMud-linux.tar.gz` and run `genericMud` from the folder.
-Self-voice needs `speech-dispatcher` installed (the same speech engine Orca
-uses — `sudo apt install speech-dispatcher`), and Orca reads the window.
+Self-voice speaks through Orca when it's running, and otherwise needs
+`speech-dispatcher` installed (the same speech engine Orca uses —
+`sudo apt install speech-dispatcher`).
 
-**From source** (any platform): `pip install -e '.[gui,voice,audio]'` then run
-`genericmud`, or see the "For developers" section below.
+**From source** (any platform): install [uv](https://docs.astral.sh/uv/), then
+`uv run --extra gui --extra voice --extra audio genericmud` — it fetches Python
+and the locked dependencies on first run. See "For developers" below.
 
 ## Connecting to a MUD
 
@@ -401,10 +403,14 @@ above.
 
 ## For developers
 
+[uv](https://docs.astral.sh/uv/) manages the environment — it installs Python
+3.12 itself (`.python-version`) and every dependency version is pinned in the
+committed `uv.lock`, so CI and your machine resolve identically.
+
 ```sh
-python3 -m venv .venv
-.venv/bin/pip install -e '.[dev]'
-.venv/bin/pytest -q
+uv sync --all-extras   # or plain `uv sync` for the engine + test tools only
+uv run pytest -q
+uv run ruff check .
 ```
 
 Native Python asyncio engine (transport, telnet/MCCP/GMCP/MSDP/MSSP/MSP, ANSI,
@@ -413,13 +419,18 @@ router) with a wxPython native UI, pygame audio, and an alternate web UI
 (`--web`) over a localhost WebSocket. The engine is headless-testable; the whole
 suite runs without a display, socket, or screen reader. Runtime deps: `lupa`
 (Lua) and `regex` (ReDoS-safe matching). Extras: `.[gui]` webview shell,
-`.[voice]` native voice backends, `.[audio]` pygame.
+`.[voice]` native voice backends, `.[audio]` pygame; the test/lint tools are the
+`dev` dependency group, which `uv sync` installs by default.
 
-The same wxPython UI runs on all three platforms. Self-voice picks a backend per
-platform: the screen reader (via accessible_output2) or SAPI on Windows, `say` on
-macOS, `speech-dispatcher` on Linux. Build a frozen app for the current platform
-with `python tools/build_app.py` — `.exe` onedir on Windows, `genericMud.app` on
-macOS, an onedir tarball on Linux. CI builds all three on tags
-(`build-windows.yml`, `build-macos.yml`, `build-linux.yml`).
+The same wxPython UI runs on all three platforms. Self-voice goes through
+[prism](https://github.com/ethindp/prism) (`prismatoid` on PyPI), one API over
+every screen reader and system TTS: it speaks in the user's own NVDA, JAWS,
+VoiceOver or Orca voice when one is running, and drops to SAPI/OneCore, AVSpeech
+or speech-dispatcher when none is. If prism itself is unavailable the client
+falls back to SAPI on Windows, `say` on macOS, and `spd-say` on Linux. Build a
+frozen app for the current platform with `uv run python tools/build_app.py` —
+`.exe` onedir on Windows, `genericMud.app` on macOS, an onedir tarball on Linux.
+CI builds all three on tags (`build-windows.yml`, `build-macos.yml`,
+`build-linux.yml`).
 
 Windows packaging and running from source: `WINDOWS.md`.
