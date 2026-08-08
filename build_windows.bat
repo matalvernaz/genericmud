@@ -10,16 +10,12 @@ where uv >nul 2>nul || (
   exit /b 1
 )
 uv sync --no-dev --extra gui --extra voice --extra audio --extra package || exit /b 1
-uv run --no-dev pyinstaller --onedir --name genericMud --windowed ^
-  --copy-metadata genericmud ^
-  --add-data "frontend;frontend" ^
-  --add-data "genericmud\config\keymaps;genericmud\config\keymaps" ^
-  --collect-all webview ^
-  --collect-all prism ^
-  --collect-all pygame ^
-  --collect-all lupa --hidden-import websockets ^
-  --hidden-import win32com.client --hidden-import pythoncom ^
-  run_genericmud.py
+REM Build from genericMud.spec, never from run_genericmud.py + flags: passing the
+REM script makes PyInstaller regenerate (overwrite) the spec, which silently drops
+REM the hand-written bits collect_all can't express -- notably prism's
+REM _native\_prism_cffi.pyd, without which `import prism` raises in the frozen app
+REM and voice/factory.py falls back to SAPI instead of speaking through NVDA.
+uv run --no-dev pyinstaller --noconfirm genericMud.spec || exit /b 1
 echo.
 echo Built: dist\genericMud\genericMud.exe
 endlocal
