@@ -177,7 +177,13 @@ class TelnetParser:
                     events.append(Subnegotiation(option, bytes(self._sb_buffer)))
                     self._sb_buffer.clear()
                     self._state = _S_TEXT
-                    if option in (OPT_MCCP2, OPT_MCCP3) and not self.mccp.active:
+                    # MCCP2 only: v3 compresses the *client's* output, so the client is the
+                    # one that sends SB 87. Inflating on a server's SB 87 -- which we never
+                    # invited, since 87 isn't in _ACCEPT_REMOTE -- feeds plaintext to zlib,
+                    # and the resulting MCCPError kills the session with auto-reconnect
+                    # deliberately suppressed. A buggy or hostile server should not be able
+                    # to end someone's session that way.
+                    if option == OPT_MCCP2 and not self.mccp.active:
                         # Everything after SE in this chunk is compressed.
                         self.mccp.activate()
                         tail = data[i + 1 :]

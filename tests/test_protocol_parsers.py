@@ -87,6 +87,23 @@ def test_msp_sound_and_music_extracted():
     assert cues[1].kind == "music" and cues[1].file == "theme.mid" and cues[1].repeats == -1
 
 
+def test_msp_midline_can_be_refused_leaving_the_text_intact():
+    # The abuse the spec's default-off is aimed at: a server relays player text verbatim, so a
+    # tag inside a tell both fires a sound and deletes the sender's words from what a blind
+    # player hears. Off by request only -- see parse_msp_line on why it isn't the default.
+    line = "Bob tells you '!!SOUND(evil.wav) meet me at the gate'"
+    clean, cues = parse_msp_line(line, allow_midline=False)
+    assert clean == line, "a refused tag must stay in what the user hears"
+    assert cues == []
+
+
+def test_msp_leading_trigger_fires_even_when_midline_is_refused():
+    # A cue at the head of its own line is the spec-blessed shape and must keep working.
+    clean, cues = parse_msp_line("!!SOUND(thunder.wav) A storm breaks.", allow_midline=False)
+    assert clean == " A storm breaks."
+    assert [cue.file for cue in cues] == ["thunder.wav"]
+
+
 def test_msp_off_is_a_stop_request_not_a_filename():
     _clean, cues = parse_msp_line("!!MUSIC(Off) !!SOUND(off)")
     assert [cue.is_stop for cue in cues] == [True, True]

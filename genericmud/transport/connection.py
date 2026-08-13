@@ -238,6 +238,14 @@ class MudConnection:
             self._remote_enabled.discard(opt)
         elif cmd == T.DONT:
             self._local_enabled.discard(opt)
+            if opt == T.OPT_TTYPE:
+                # A copyover is announced with DONT TTYPE, and the spec has the client reset
+                # its TTYPE state, not just drop the option. Without this the first SEND after
+                # the hotboot answers with the capability bitvector, which the server files as
+                # our client *name* -- so the screen-reader bit is never parsed and any server
+                # that strips ASCII art and progress bars for us stops doing it, silently, for
+                # the rest of the session. Same hazard connect() already guards for reconnects.
+                self._ttype_cycle = 0
 
     def _handle_subnegotiation(self, sub: Subnegotiation) -> None:
         # The server asks for our terminal type; answer the next step of the MTTS cycle.

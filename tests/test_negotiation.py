@@ -79,6 +79,35 @@ def test_ttype_answers_the_mtts_cycle():
     assert replies[3] == replies[2]
 
 
+def test_dont_ttype_resets_the_cycle_so_a_hotboot_still_hears_screen_reader():
+    # A copyover is announced with DONT TTYPE. If the cycle isn't reset, the first SEND after
+    # the hotboot answers with the bitvector, the server records that as our client NAME, and
+    # the screen-reader bit is never parsed -- so servers that strip ASCII art and progress
+    # bars for us quietly stop, for the rest of the session, on the same TCP connection.
+    conn = MudConnection()
+    writer = _FakeWriter()
+    conn._writer = writer
+    for _ in range(4):  # exhaust the cycle, as a full pre-copyover handshake would
+        conn._dispatch(Subnegotiation(T.OPT_TTYPE, bytes([1])))
+
+    conn._dispatch(Negotiation(T.DONT, T.OPT_TTYPE))
+    conn._dispatch(Negotiation(T.DO, T.OPT_TTYPE))
+    writer.sent.clear()
+    conn._dispatch(Subnegotiation(T.OPT_TTYPE, bytes([1])))
+
+    assert b"GENERICMUD" in bytes(writer.sent)
+    assert f"MTTS {MTTS_BITS}".encode() not in bytes(writer.sent)
+
+
+def test_server_sb_mccp3_does_not_start_inflating_plaintext():
+    # MCCP3 compresses the client's output, so the client sends SB 87; we never offer it.
+    # Acting on a server's unsolicited SB 87 feeds plaintext to zlib, and the MCCPError that
+    # follows ends the session with auto-reconnect deliberately suppressed.
+    parser = T.TelnetParser()
+    parser.receive(bytes([T.IAC, T.SB, T.OPT_MCCP3, T.IAC, T.SE]))
+    assert not parser.mccp.active
+
+
 def test_mtts_declares_a_screen_reader():
     # The bit MUDs read to suppress ASCII art, maps and progress bars. This client is
     # always driving a screen reader, so it is never conditional.
