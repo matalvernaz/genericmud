@@ -23,7 +23,7 @@ jobs:
       - uses: actions/checkout@v7
       # uv provisions the interpreter itself (.python-version pins 3.12), so there's no
       # setup-python step; the cache keys off uv.lock, which pins every resolved version.
-      - uses: astral-sh/setup-uv@v9
+      - uses: astral-sh/setup-uv@v10.0.0
         with:
           enable-cache: true
       - uses: actions/setup-node@v6
