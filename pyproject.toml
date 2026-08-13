@@ -39,7 +39,9 @@ voice = [
   # prism speaks through the running screen reader on all three platforms (NVDA/JAWS on
   # Windows, VoiceOver on macOS, Orca on Linux) and falls back to the system TTS itself.
   # Wheels cover win_amd64/arm64, macOS 11+, manylinux_2_34 and musllinux_1_2.
-  "prismatoid>=0.17.3",
+  # Compatible-release pinned, not a floor: prism is 0.17.x with ~40 releases in seven months
+  # and publishes no ABI or SemVer policy, and self-voice is the whole app. Bump deliberately.
+  "prismatoid~=0.17.3",
   "pywin32>=306; platform_system == 'Windows'",  # SAPI5 fallback voice
 ]
 # native soundpack audio playback (the SoundBus pygame backend; --web doesn't need it)
@@ -63,15 +65,22 @@ dev = [
 # wxPython publishes no Linux wheel to PyPI, so a plain resolve there falls to a 20-40 minute
 # (often failing) source build. Point Linux at the wxPython project's own prebuilt GTK3 index
 # instead -- a flat find-links-style listing, hence `format = "flat"`. `explicit = true` keeps
-# every other package on PyPI, and pinning the ubuntu-22.04 tree is why CI runs on 22.04.
+# every other package on PyPI, and pinning the ubuntu-24.04 tree is why CI runs on 24.04.
+# 22.04 runners begin deprecation 2026-09-17; both trees carry the same wxPython, so moving
+# the index and the runner together is version-neutral. The wheels link the release's GTK
+# stack, so they must never be moved apart.
 [[tool.uv.index]]
 name = "wxpython-linux-gtk3"
-url = "https://extras.wxpython.org/wxPython4/extras/linux/gtk3/ubuntu-22.04/"
+url = "https://extras.wxpython.org/wxPython4/extras/linux/gtk3/ubuntu-24.04/"
 format = "flat"
 explicit = true
 
+# Only x86_64 -- the index publishes nothing else, and pinning all of Linux at it dead-ends
+# any other architecture on `uv sync --extra gui` with no PyPI fallback to source-build from.
 [tool.uv.sources]
-wxpython = [{ index = "wxpython-linux-gtk3", marker = "sys_platform == 'linux'" }]
+wxpython = [
+  { index = "wxpython-linux-gtk3", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" }
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -16,9 +16,10 @@ concurrency:
 
 jobs:
   linux:
-    # Pinned to 22.04 to match the prebuilt wxPython wheel index configured in pyproject.toml
-    # ([[tool.uv.index]] wxpython-linux-gtk3); those wheels link against 22.04's GTK stack.
-    runs-on: ubuntu-22.04
+    # Pinned to 24.04 to match the prebuilt wxPython wheel index configured in pyproject.toml
+    # ([[tool.uv.index]] wxpython-linux-gtk3); those wheels link against 24.04's GTK stack, so
+    # this pin and that index move together or not at all.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       # uv provisions the interpreter itself (.python-version pins 3.12), so there's no
@@ -41,7 +42,7 @@ jobs:
             speech-dispatcher libspeechd2
 
       # wxPython has no PyPI Linux wheel; pyproject points Linux at the project's prebuilt
-      # ubuntu-22.04 GTK3 index, so the wheel comes straight out of uv.lock -- no find-links
+      # ubuntu-24.04 GTK3 index, so the wheel comes straight out of uv.lock -- no find-links
       # step here, and no 20-40 minute source build.
       - name: Install
         run: uv sync --all-extras --locked
