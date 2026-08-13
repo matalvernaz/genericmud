@@ -1,0 +1,62 @@
+name: tests
+
+# The three build-* workflows only run on pushes to main and on tags, so before this existed
+# nothing checked a pull request or a topic branch at all -- a contributor's PR showed "no
+# checks reported" and a red suite was only discovered once it had landed on main.
+#
+# Tests only, never the release steps: `pull_request` gives a fork's run a read-only token and
+# no secrets, which is what makes it safe to run on someone else's code. Don't switch this to
+# `pull_request_target`.
+on:
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    # Matches the prebuilt wxPython wheel index in pyproject.toml, same as build-linux.yml.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v10.0.0
+        with:
+          enable-cache: true
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      # wxPython and pygame need these present merely to import, which the suite does.
+      - name: System libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-3-0 libgtk-3-dev libnotify4 libsdl2-2.0-0 \
+            libgstreamer1.0-0 libgstreamer-plugins-base1.0-0 \
+            speech-dispatcher libspeechd2
+
+      - name: Install
+        run: uv sync --all-extras --locked
+
+      # ruff is configured in pyproject.toml and, until now, was never run anywhere but by hand.
+      # `ruff check` only: the tree is not `ruff format` clean, so adding that would fail every
+      # run until someone reformats 63 files deliberately.
+      - name: Lint
+        run: uv run ruff check .
+
+      # xvfb because importing wx needs a display even though no test opens a window.
+      - name: Test Python
+        run: xvfb-run -a uv run pytest -q
+
+      - name: Test web input
+        run: |
+          node --test tests/test_frontend_input.mjs tests/test_frontend_ws.mjs
+          node --check frontend/src/app.js
