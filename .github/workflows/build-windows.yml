@@ -59,7 +59,15 @@ jobs:
         shell: pwsh
         run: |
           $tag = 'v1.9.2'
+          # A tag is mutable. The exe built here ships inside the release zip and self_update.py
+          # spawns it with the `runas` verb when the install dir isn't writable, so an upstream
+          # re-point would be elevated code on every user's machine. Fail loudly instead.
+          $expected = '7fef4e11bcdf3b8163be791d6c8cd61588e87a41'
           git clone --depth 1 --branch $tag https://github.com/ravibpatel/AutoUpdater.NET.git zipextractor_src
+          $actual = (git -C zipextractor_src rev-parse HEAD).Trim()
+          if ($actual -ne $expected) {
+            throw "AutoUpdater.NET $tag moved: expected $expected, got $actual"
+          }
           $csproj = 'zipextractor_src/ZipExtractor/ZipExtractor.csproj'
           $text = Get-Content $csproj -Raw
           $text = $text.Replace('<TargetFramework>net45</TargetFramework>', '<TargetFramework>net48</TargetFramework>')

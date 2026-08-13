@@ -33,6 +33,10 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
+# upx=False deliberately: UPX compression is a known antivirus false-positive amplifier,
+# and PyInstaller only uses it when upx happens to be on PATH -- so leaving it on made a
+# dev box's exe differ from CI's in the one dimension a blind user cannot debug. Nothing
+# here needs the couple of MB.
 pyz = PYZ(a.pure)
 
 exe = EXE(
@@ -44,7 +48,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -57,7 +61,7 @@ coll = COLLECT(
     a.binaries,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     name='genericMud',
 )

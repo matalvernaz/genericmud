@@ -408,7 +408,7 @@ above.
 committed `uv.lock`, so CI and your machine resolve identically.
 
 ```sh
-uv sync --all-extras   # or plain `uv sync` for the engine + test tools only
+uv sync --all-extras   # the suite needs `gui` for websockets, so not plain `uv sync`
 uv run pytest -q
 uv run ruff check .
 ```

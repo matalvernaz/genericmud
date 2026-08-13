@@ -14,6 +14,8 @@ venv/
 build/
 dist/
 *.spec
+# genericMud.spec is tracked on purpose -- build_windows.bat freezes from it.
+!genericMud.spec
 
 # OS
 .DS_Store
