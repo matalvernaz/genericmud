@@ -22,6 +22,14 @@ from genericmud.voice.governor import TokenBucket
 DEFAULT_RATE = 20  # sustained self-voiced lines/sec on the governed channel
 DEFAULT_BURST = 200  # lines absorbed from a single arrival: a couple of screenfuls
 MAIN_CHANNEL = "main"
+REVIEW_CHANNEL = "review"  # answers to a review gesture: Alt+Up/Down, Ctrl+1-9, Alt+T/C
+SYSTEM_CHANNEL = "system"  # the client talking about itself, not the MUD
+# Ctrl+M exists so the MUD transcript stops and the user can read the output box with their
+# screen reader's own commands. It must not silence the client's reply to a keypress: the
+# spoken line IS the entire result of pressing Alt+Up, and the review path has no visual
+# fallback (app._speak_review posts protocol.review, which the wx UI does not render), so
+# muting it leaves keys that appear to do nothing whatsoever.
+_ALWAYS_SPEAK = frozenset({REVIEW_CHANNEL, SYSTEM_CHANNEL})
 
 
 def _backlog_notice(count: int) -> str:
@@ -46,7 +54,7 @@ class VoiceRouter:
         self._muted = False
 
     def speak(self, text: str, channel: str = MAIN_CHANNEL, interrupt: bool = False) -> None:
-        if self._muted:
+        if self._muted and channel not in _ALWAYS_SPEAK:
             return
         if channel == self._governed and not self._bucket.take():
             self._suppressed += 1

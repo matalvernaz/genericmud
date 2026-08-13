@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 
 from genericmud.voice.factory import PrintBackend
-from genericmud.voice.router import VoiceRouter
+from genericmud.voice.router import REVIEW_CHANNEL, SYSTEM_CHANNEL, VoiceRouter
 from tests.helpers import RecordingBackend
 
 
@@ -78,6 +78,28 @@ def test_muted_passthrough_speaks_nothing():
     router.set_muted(True)
     router.speak("nope")
     assert backend.spoken == []
+
+
+def test_muted_still_answers_a_review_gesture():
+    # Ctrl+M is meant to hand the transcript to the screen reader, not to disable the review
+    # keys. Review speech is the whole response to Alt+Up, and app._speak_review's
+    # protocol.review message is not rendered by the wx UI, so muting it left Alt+Up,
+    # Ctrl+1-9 and Alt+T/C doing nothing at all -- no speech and no text.
+    backend = RecordingBackend()
+    router = VoiceRouter(backend, clock=lambda: 0.0)
+    router.set_muted(True)
+    router.speak("you are standing in a field", channel=REVIEW_CHANNEL)
+    assert backend.spoken == ["you are standing in a field"]
+
+
+def test_muted_still_speaks_the_client_talking_about_itself():
+    # Connection state, rule errors and command feedback. These echo to the output box too,
+    # but a user in passthrough mode should not have to go looking for them.
+    backend = RecordingBackend()
+    router = VoiceRouter(backend, clock=lambda: 0.0)
+    router.set_muted(True)
+    router.speak("Disconnected", channel=SYSTEM_CHANNEL)
+    assert backend.spoken == ["Disconnected"]
 
 
 def test_interrupt_stops_speech_but_keeps_the_suppressed_backlog():

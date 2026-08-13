@@ -43,12 +43,11 @@ from genericmud.session.hub import SessionHub
 from genericmud.session.log import SessionLogger
 from genericmud.session.login import AutoLogin
 from genericmud.sound.bus import DEFAULT_CATEGORY, MUSIC_CATEGORY, SoundBackend, SoundBus
-from genericmud.voice.router import VoiceRouter
+from genericmud.voice.router import REVIEW_CHANNEL, SYSTEM_CHANNEL, VoiceRouter
 
 if TYPE_CHECKING:
     from genericmud.session.diaglog import DiagnosticLog
 
-REVIEW_CHANNEL = "review"
 SPEEDWALK_PREFIX = "."  # ".3n2e" expands to n,n,n,e,e (leading char disambiguates)
 SAFE_PREFIX = ".."  # "..3n2e" walks the same route one step at a time, halting if blocked
 CLIENT_PREFIX = "/"  # "/alias", "/trigger", ... ; unknown /verbs pass through to the MUD
@@ -350,7 +349,7 @@ class EngineApp:
                 )
             self.voice.speak(
                 "Soundpack startup hooks failed; sounds may be off.",
-                channel="system", interrupt=False,
+                channel=SYSTEM_CHANNEL, interrupt=False,
             )
         self.begin_login(world)
         return result
@@ -478,7 +477,7 @@ class EngineApp:
                 self._diag.event(
                     "user_rules.reload_failed", error=f"{type(error).__name__}: {error}"
                 )
-            self.voice.speak(f"Rule not applied: {error}", channel="system", interrupt=False)
+            self.voice.speak(f"Rule not applied: {error}", channel=SYSTEM_CHANNEL, interrupt=False)
             return
         self.engine.remove_source(user_rules.SOURCE)
         user_rules.register_rules(
@@ -501,7 +500,7 @@ class EngineApp:
                 )
             self.voice.speak(
                 f"Scripts not applied: {type(error).__name__}: {error}",
-                channel="system", interrupt=False,
+                channel=SYSTEM_CHANNEL, interrupt=False,
             )
             return False
 
@@ -517,7 +516,7 @@ class EngineApp:
             count = len(loaded)
             self.voice.speak(
                 f"{count} automation script{'s' if count != 1 else ''} loaded.",
-                channel="system", interrupt=False,
+                channel=SYSTEM_CHANNEL, interrupt=False,
             )
         return True
 
@@ -624,7 +623,7 @@ class EngineApp:
         if not parts:
             return
         summary = "; ".join(parts)
-        self.voice.speak(summary, channel="system", interrupt=False)
+        self.voice.speak(summary, channel=SYSTEM_CHANNEL, interrupt=False)
         self._post(protocol.echo(f"* {summary}"))
 
     # --- inbound from the MUD (telnet events) ---
@@ -838,7 +837,7 @@ class EngineApp:
         if self._diag is not None:
             self._diag.event("gmcp.goodbye", reason=text)
         self._suppress_reconnect()
-        self.voice.speak(spoken, channel="system", interrupt=True)
+        self.voice.speak(spoken, channel=SYSTEM_CHANNEL, interrupt=True)
         self._post(protocol.echo(f"* {spoken}"))
 
     def _wrong_direction(self, direction: object) -> None:
@@ -951,7 +950,7 @@ class EngineApp:
         self._post(protocol.echo(f"* {summary}"))
         if not self._client_error_spoken:  # speak the first; the rest stay in the output
             self._client_error_spoken = True
-            self.voice.speak(summary, channel="system", interrupt=False)
+            self.voice.speak(summary, channel=SYSTEM_CHANNEL, interrupt=False)
 
     def _split_commands(self, text: str) -> list[str]:
         """Split stacked input on the separator ("n;n;look"); empty separator = off."""
@@ -1288,7 +1287,7 @@ class EngineApp:
         self._post(protocol.review(text))
 
     def _speak_system(self, text: str) -> None:
-        self.voice.speak(text, channel="system", interrupt=True)
+        self.voice.speak(text, channel=SYSTEM_CHANNEL, interrupt=True)
         self._post(protocol.echo(f"* {text}"))
 
     def on_connection_status(self, message: str) -> None:
@@ -1320,14 +1319,14 @@ class EngineApp:
             # A fresh socket means fresh login prompts; the old AutoLogin is marked done, so
             # re-arm it or a reconnect strands the user at the login screen.
             self.begin_login(self.name)
-        self.voice.speak(spoken, channel="system", interrupt=True)
+        self.voice.speak(spoken, channel=SYSTEM_CHANNEL, interrupt=True)
         self._post(protocol.echo(f"* {message}"))  # raw detail stays reviewable in the output
 
     def _log(self, text: str) -> None:
         if self.logger is not None and self.logger.active and not self.logger.log(text):
             # The write failed and logging auto-stopped; say so once rather than let the
             # fault abort the line (which would silence and drop everything after it).
-            self.voice.speak("Session logging stopped: write failed.", channel="system",
+            self.voice.speak("Session logging stopped: write failed.", channel=SYSTEM_CHANNEL,
                              interrupt=True)
             self._post(protocol.echo("* Session logging stopped: write failed."))
 
