@@ -81,6 +81,7 @@ jobs:
           --add-data "genericmud/config/keymaps;genericmud/config/keymaps"
           --collect-all webview
           --collect-all prism
+          --additional-hooks-dir hooks
           --collect-all pygame
           --collect-all lupa --hidden-import websockets
           --hidden-import win32com.client --hidden-import pythoncom

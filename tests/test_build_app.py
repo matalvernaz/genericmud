@@ -42,6 +42,14 @@ def test_every_platform_freezes_the_prism_speech_library(platform):
     assert args[args.index("prism") - 1] == "--collect-all"
 
 
+@pytest.mark.parametrize("platform", ["win32", "darwin", "linux"])
+def test_every_platform_registers_the_prism_hook(platform):
+    # --collect-all misses the cffi bridge in prism/_native/ on every platform, so without the
+    # hook the frozen app raises on `import prism` and falls back to the system voice silently.
+    args = pyinstaller_args(platform)
+    assert args[args.index("hooks") - 1] == "--additional-hooks-dir"
+
+
 def test_macos_build_sets_a_bundle_identifier():
     args = pyinstaller_args("darwin")
     assert "--osx-bundle-identifier" in args

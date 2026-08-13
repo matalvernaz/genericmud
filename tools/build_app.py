@@ -46,9 +46,11 @@ def pyinstaller_args(platform: str) -> list[str]:
     args += ["--collect-all", "webview"]
     # prism is the self-voice backend on all three platforms. Collect-all because the speech
     # comes out of a native library the wheel ships alongside the Python modules (prism.dll /
-    # libprism, plus the _prism_cffi extension) -- a module-only scan would freeze an app that
-    # imports prism and then cannot speak.
+    # libprism) -- a module-only scan would freeze an app that imports prism and then cannot
+    # speak. It still misses the cffi bridge in prism/_native/, which hooks/hook-prism.py
+    # collects; without that the frozen app cannot import prism at all.
     args += ["--collect-all", "prism"]
+    args += ["--additional-hooks-dir", "hooks"]
     if platform == "win32":
         args += [  # the SAPI fallback backend talks COM
             "--hidden-import", "win32com.client",
