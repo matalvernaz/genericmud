@@ -86,10 +86,52 @@ class _FakePrismBackend:
         self.stops += 1
 
 
-def _install_fake_prism(monkeypatch, backend: _FakePrismBackend) -> None:
+class _FakePrismContext:
+    """Stands in for prism.Context, holding the availability hook the backend registers.
+
+    ``create_best`` hands out each queued backend in turn and repeats the last one, so a test
+    can script what a rebuild finds. A queued ``Exception`` is raised instead of returned.
+
+    ``acquire_best`` deliberately models prism's weak-pointer cache: once an instance has been
+    handed out it comes back on every later call, with no availability check (see
+    FrozenRegistry::acquire_best). Re-acquiring that way returns the reader that just died, so
+    a backend written against it keeps a dead handle -- and these tests must fail, not pass.
+    """
+
+    def __init__(self, backends, *, on_availability=None, poll_interval_ms: int = 0) -> None:
+        self._backends = list(backends)
+        self.on_availability = on_availability
+        self.poll_interval_ms = poll_interval_ms
+        self.creations = 0
+        self._cached = None
+
+    def create_best(self):
+        picked = self._backends[min(self.creations, len(self._backends) - 1)]
+        self.creations += 1
+        if isinstance(picked, Exception):
+            raise picked
+        self._cached = picked
+        return picked
+
+    def acquire_best(self):
+        if self._cached is not None:
+            return self._cached
+        return self.create_best()
+
+
+def _install_fake_prism(monkeypatch, *backends) -> list[_FakePrismContext]:
+    """Install a fake ``prism`` module; the returned list receives each Context created."""
+    contexts: list[_FakePrismContext] = []
+
+    def _context(**kwargs):
+        ctx = _FakePrismContext(backends, **kwargs)
+        contexts.append(ctx)
+        return ctx
+
     module = types.ModuleType("prism")
-    module.Context = lambda: types.SimpleNamespace(acquire_best=lambda: backend)
+    module.Context = _context
     monkeypatch.setitem(sys.modules, "prism", module)
+    return contexts
 
 
 def test_prism_speaks_through_output_so_braille_displays_get_the_line(monkeypatch):
@@ -131,6 +173,48 @@ def test_prism_construction_fails_over_when_the_reader_cannot_speak(monkeypatch)
     )
     with pytest.raises(RuntimeError):
         PrismBackend()
+
+
+def test_prism_takes_a_fresh_reader_after_the_screen_reader_restarts(monkeypatch):
+    # NVDA crashing and relaunching, or being restarted with NVDA+Q, is routine. prism hands
+    # out a handle fixed at acquire time, so without following availability the client keeps
+    # talking to the dead one for the rest of the session and _safe() hides every failure.
+    crashed, relaunched = _FakePrismBackend(), _FakePrismBackend()
+    contexts = _install_fake_prism(monkeypatch, crashed, relaunched)
+    backend = PrismBackend()
+    backend.speak("before the crash")
+    contexts[0].on_availability(0, "NVDA", True)
+    backend.speak("after the relaunch")
+    assert crashed.calls == [("output", "before the crash")]
+    assert relaunched.calls == [("output", "after the relaunch")]
+
+
+def test_prism_registers_an_availability_hook_and_polls(monkeypatch):
+    # Without both of these the re-acquire above can never fire on a real backend.
+    contexts = _install_fake_prism(monkeypatch, _FakePrismBackend())
+    PrismBackend()
+    assert contexts[0].on_availability is not None
+    assert contexts[0].poll_interval_ms > 0
+
+
+def test_prism_keeps_the_working_reader_when_reacquiring_fails(monkeypatch):
+    # A failed re-acquire must cost the event, never the voice. Going mute because the new pick
+    # refused is worse than staying on a reader that may well still be alive.
+    reader = _FakePrismBackend()
+    contexts = _install_fake_prism(monkeypatch, reader, RuntimeError("nothing available"))
+    backend = PrismBackend()
+    contexts[0].on_availability(0, "NVDA", False)
+    backend.speak("still audible")
+    assert reader.calls == [("output", "still audible")]
+
+
+def test_prism_reacquire_is_not_attempted_until_availability_changes(monkeypatch):
+    # Re-acquiring per utterance would spin up a native handle for every MUD line.
+    contexts = _install_fake_prism(monkeypatch, _FakePrismBackend())
+    backend = PrismBackend()
+    backend.speak("one")
+    backend.speak("two")
+    assert contexts[0].creations == 1
 
 
 def test_factory_prefers_prism_over_the_platform_command(monkeypatch):
