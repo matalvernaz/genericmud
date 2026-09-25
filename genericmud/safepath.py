@@ -18,6 +18,9 @@ from pathlib import Path
 
 _DRIVE_RE = re.compile(r"^[A-Za-z]:")
 _WORLD_PUNCTUATION = "._-"  # the only non-letters a world's file name keeps as they are
+# Zero-width non-joiner and joiner: invisible, but they change how Persian, Sinhala and
+# Indic words are written, so two names that differ only by one are different names.
+_WORLD_JOINERS = "\u200c\u200d"
 
 
 def is_unsafe(name: str) -> bool:
@@ -140,12 +143,17 @@ def world_component(name: str, fallback: str = "session") -> str:
 
 
 def _keeps_in_world_name(char: str) -> bool:
-    """A letter or digit in any script, a combining mark, or one of ``._-``.
+    """A letter or digit in any script, a combining mark, a joiner, or one of ``._-``.
 
     Marks matter: Devanagari, Bengali, Tamil and Thai vowel signs are marks, not letters,
     and NFC doesn't compose them away, so dropping them filed "का" as "क".
     """
-    return char.isalnum() or char in _WORLD_PUNCTUATION or unicodedata.category(char)[0] == "M"
+    return (
+        char.isalnum()
+        or char in _WORLD_PUNCTUATION
+        or char in _WORLD_JOINERS
+        or unicodedata.category(char)[0] == "M"
+    )
 
 
 def legacy_world_component(name: str) -> str:

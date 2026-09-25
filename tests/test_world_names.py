@@ -125,3 +125,12 @@ def test_a_world_keeps_one_folder_for_the_whole_session(tmp_path):
     first = app.user_rules_dir()
     (tmp_path / "userpacks" / "Caf_del_Mar").mkdir(parents=True)
     assert app.user_rules_dir() == first
+
+
+def test_joiners_that_change_a_word_are_kept():
+    # U+200C/U+200D (non-joiner/joiner) change how Persian, Sinhala and Indic words are
+    # written, so dropping them could file two different names together.
+    assert world_component("می‌خواهم") == "می‌خواهم"
+    assert world_component("ක්‍ෂ") == "ක්‍ෂ"
+    assert world_component("a‍b") != world_component("a_b")
+    assert world_component("a‎b") == "a_b"  # a direction mark carries no meaning here
