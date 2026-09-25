@@ -1944,8 +1944,8 @@ class AutomationManagerDialog(wx.Dialog):
         ),
         (
             "key", "Hotkeys — when I press a key",
-            "A hotkey sends commands, speaks text, or plays a sound when you press a "
-            "chosen key combination.",
+            "A hotkey sends commands, speaks text or a value the MUD sent, or plays a "
+            "sound when you press a chosen key combination.",
         ),
         (
             "channel", "Channels — how matching lines are handled",

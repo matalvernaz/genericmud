@@ -24,6 +24,7 @@ from pathlib import Path
 from genericmud.automation.engine import MatchContext
 from genericmud.config.atomic import atomic_write_text
 from genericmud.scripting.api import ScriptApi
+from genericmud.voice.router import REVIEW_CHANNEL
 
 SOURCE = "user"  # registration source: remove_source(SOURCE) clears rules for reload
 RULES_FILENAME = "rules.json"
@@ -45,7 +46,7 @@ class UserTrigger:
     volume: int = 100  # 0..100
     pan: int = 0  # -100 (left) .. 100 (right)
     loop: bool = False
-    speak: str = ""  # spoken text; %1..%9 substitute captures
+    speak: str = ""  # spoken text; %1 or ${1}, ${script:x}, ${mud:x}
     send: str = ""  # commands, one per line; %1 or ${1}, ${script:x}, ${mud:x}
     gag: str = "none"  # "none" | "speech" (silent but shown) | "line" (removed)
     channel: str = ""  # route the line to this channel ("" = leave on main)
@@ -65,7 +66,7 @@ class UserAlias:
     pattern: str = ""  # what the user types; * ? wildcards unless regex
     regex: bool = False
     send: str = ""  # replacement commands, one per line; capture/variable templates allowed
-    speak: str = ""  # optional confirmation speech
+    speak: str = ""  # optional speech, same templates; can read a value with no commands
     enabled: bool = True
 
 
@@ -73,7 +74,7 @@ class UserAlias:
 class UserKey:
     key: str = ""  # keymap combo, e.g. "ctrl+h", "alt+shift+f2"
     send: str = ""
-    speak: str = ""
+    speak: str = ""  # e.g. "${mud:Char.Vitals.hp} health": a key that reads a value
     sound: str = ""  # pack-relative one-shot cue
     enabled: bool = True
 
@@ -174,17 +175,35 @@ def _commands(text: str) -> tuple[str, ...]:
     return commands
 
 
-def _expand_commands(
-    api: ScriptApi, commands: tuple[str, ...], ctx: MatchContext | None = None
-) -> list[str]:
-    """Expand a command stack completely without sending any part of it."""
+def _capture_values(ctx: MatchContext | None) -> dict[str, object]:
+    """``${1}``.. and named groups from a match, for template expansion."""
     wildcards = ctx.wildcards if ctx is not None else [""]
-    values = {
+    values: dict[str, object] = {
         str(index): value
         for index, value in enumerate(wildcards[1:], start=1)
     }
     if ctx is not None:
         values.update(ctx.named)
+    return values
+
+
+def _speech(api: ScriptApi, text: str, ctx: MatchContext | None = None) -> str:
+    """A rule's speech with its variables filled in.
+
+    Same order as commands, and for the same reason: ``${...}`` first, then the legacy
+    ``%1`` captures, so MUD text that happens to contain ``${...}`` is read out literally
+    instead of becoming a template.
+    """
+    wildcards = ctx.wildcards if ctx is not None else [""]
+    return _substitute(api.expand_speech(text, _capture_values(ctx)), wildcards)
+
+
+def _expand_commands(
+    api: ScriptApi, commands: tuple[str, ...], ctx: MatchContext | None = None
+) -> list[str]:
+    """Expand a command stack completely without sending any part of it."""
+    wildcards = ctx.wildcards if ctx is not None else [""]
+    values = _capture_values(ctx)
     expanded = []
     for command in commands:
         # Expand ${...} before legacy %1 replacement. Captured MUD text containing
@@ -282,7 +301,7 @@ def _register_trigger(api: ScriptApi, t: UserTrigger) -> None:
             )
         if t.speak:
             api.speak(
-                _substitute(t.speak, ctx.wildcards),
+                _speech(api, t.speak, ctx),
                 channel=t.channel or "main",
                 interrupt=t.interrupt,
             )
@@ -300,13 +319,20 @@ def _register_trigger(api: ScriptApi, t: UserTrigger) -> None:
     )
 
 
+# An alias's or hotkey's speech answers something the player just did, like a review key
+# does, so it goes on the review channel: straight away, not queued behind a screenful of
+# MUD output, not coalesced by the main channel's flood governor, and still spoken with
+# self-voice off (Ctrl+M), when the player is reading the output box themselves.
+_REPLY_CHANNEL = REVIEW_CHANNEL
+
+
 def _register_alias(api: ScriptApi, a: UserAlias) -> None:
     _, send_commands = _command_action(api, a.send)
 
     def fire(ctx: MatchContext) -> None:
         sent = send_commands(ctx)
         if a.speak and sent:
-            api.speak(_substitute(a.speak, ctx.wildcards))
+            api.speak(_speech(api, a.speak, ctx), channel=_REPLY_CHANNEL, interrupt=True)
 
     api.add_alias(a.pattern, fire, regex=a.regex, source=SOURCE)
 
@@ -318,7 +344,7 @@ def _register_key(api: ScriptApi, k: UserKey) -> None:
         if k.sound:
             api.play(k.sound, channel="user-key")
         if k.speak:
-            api.speak(k.speak)
+            api.speak(_speech(api, k.speak), channel=_REPLY_CHANNEL, interrupt=True)
         send_commands()
 
     api.add_key(k.key, fire)

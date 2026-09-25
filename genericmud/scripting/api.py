@@ -9,7 +9,6 @@ dialect authored a rule.
 
 from __future__ import annotations
 
-import json
 import os
 import re
 from collections.abc import Callable
@@ -17,6 +16,7 @@ from pathlib import Path
 
 from genericmud.automation.channels import ChannelPolicy
 from genericmud.automation.engine import AutomationEngine, Callback
+from genericmud.automation.variables import format_value
 from genericmud.safepath import is_absolute, is_traversal, is_unc, within
 
 # Channels that carry the primary spoken output + app alerts. A pack must not be able to set
@@ -84,6 +84,28 @@ class ScriptApi:
         ``${script:name}`` and ``${mud:name}`` select a namespace explicitly. Missing values
         raise instead of sending a potentially destructive half-expanded command.
         """
+        expanded = self._expand(text, values, missing=None)
+        if any(char in expanded for char in ("\r", "\n", "\x00")):
+            raise ValueError("expanded command contains a line break or NUL")
+        return expanded
+
+    def expand_speech(self, text: str, values: dict[str, object] | None = None) -> str:
+        """Resolve ``${...}`` in text to be spoken, the same way as :meth:`expand_command`.
+
+        Speech can't do harm half-expanded, and silence is the worst answer to a keypress
+        asking for your health, so a missing value is said ("no value for
+        Char.Vitals.hp") instead of stopping everything. That also names the variable, so
+        a mistyped one is heard rather than guessed at.
+        """
+        return self._expand(text, values, missing=lambda name: f"no value for {name}")
+
+    def _expand(
+        self,
+        text: str,
+        values: dict[str, object] | None,
+        *,
+        missing: Callable[[str], str] | None,
+    ) -> str:
         local_values = {str(key): value for key, value in (values or {}).items()}
         script_values = self._engine.all_vars()
 
@@ -110,17 +132,12 @@ class ScriptApi:
                     if not found:
                         value = _MISSING
             if value is _MISSING:
-                raise ValueError(f"unknown command variable: {token}")
-            if isinstance(value, (dict, list, tuple)):
-                return json.dumps(value, separators=(",", ":"), ensure_ascii=False)
-            if isinstance(value, bool):
-                return str(value).lower()
-            return "" if value is None else str(value)
+                if missing is None:
+                    raise ValueError(f"unknown command variable: {token}")
+                return missing(name if separator and scope in ("script", "mud") else token)
+            return format_value(value)
 
-        expanded = _COMMAND_VARIABLE_RE.sub(replace, str(text))
-        if any(char in expanded for char in ("\r", "\n", "\x00")):
-            raise ValueError("expanded command contains a line break or NUL")
-        return expanded
+        return _COMMAND_VARIABLE_RE.sub(replace, str(text))
 
     def send_command(self, text: str, values: dict[str, object] | None = None) -> None:
         """Expand and send one command directly to the MUD."""

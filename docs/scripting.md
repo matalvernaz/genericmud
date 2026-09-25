@@ -350,6 +350,14 @@ order:
 Use `${script:name}` or `${mud:name}` when you want to be clear about the source
 or when two sources use the same name.
 
+### Speak a value without writing code
+
+Speech fields take the same variables as command fields. A hotkey with no
+commands and the speech `${mud:Char.Vitals.hp} health, ${mud:Char.Vitals.mp} mana`
+reads both out when you press it. Nothing is sent to the MUD. Where a command
+with a missing value is not sent at all, speech says "no value for" and the
+variable's name instead, so a key you press always answers.
+
 ## Make a decision
 
 Lua uses `if`, `elseif`, and `else` for decisions:

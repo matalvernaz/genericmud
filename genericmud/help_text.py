@@ -95,6 +95,11 @@ ${mud:HEALTH} reads live data sent by the MUD. genericMud fills in every command
 before it sends the first one. If a value is missing, none are sent and genericMud
 speaks the problem once.
 
+Speech fields accept the same variables. A hotkey whose speech is
+${mud:Char.Vitals.hp} health reads your health when you press it, without sending
+anything. A missing value is spoken as "no value for" and its name. Hotkey and
+alias speech is spoken at once, like a review key, even with self-voice off.
+
 Choose Duplicate to start from a copy. Disable keeps an item saved without
 letting it run. Ctrl+1 through Ctrl+5 change categories, Ctrl+N creates an item,
 Enter edits, and Delete deletes after confirmation. F2 renames a script.
