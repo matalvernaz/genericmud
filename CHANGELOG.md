@@ -7,6 +7,52 @@ fails the build on purpose.
 
 Entries start at 0.7.1. Earlier releases were tagged before this file existed.
 
+## 0.12.0 — 2026-09-25
+
+**MUDs that don't send UTF-8 read correctly**
+
+* Each world has an Encoding setting, in the New World dialog and when you edit a
+  saved world (Ctrl+O, choose it, Edit). Leave it on Automatic unless letters
+  come out garbled. A Russian MUD usually needs Windows-1251 or KOI8-R and a
+  Chinese one GBK or Big5, and there are Central European, Greek, Turkish,
+  Baltic, Japanese and Korean choices too. Requested in #5.
+* What you type goes out in the same encoding, so commands in Cyrillic reach the
+  MUD intact, the letter я included.
+* Room names and other information the MUD sends alongside the text use the
+  world's encoding too, so Alt+W and the map read correctly.
+* On Automatic, a MUD that sends Western European text instead of UTF-8 now gets
+  your typing that way as well. Accented letters you typed, such as ñ or é, used
+  to arrive as two garbled characters.
+* A UTF-8 MUD that sometimes sends a stray byte can be set to UTF-8, so one bad
+  line no longer makes the rest of the session read as Western European.
+
+**Hear what the MUD knows, without writing code**
+
+* Automation, MUD variables (Ctrl+Shift+V) lists every value this world has sent,
+  such as your health or the room you're in, and the values soundpacks and
+  scripts have saved. Type to filter, press Enter to copy the reference that
+  reads a value, and F5 to refresh. Requested in #4.
+* The speech of a trigger, alias or hotkey can include those values. A hotkey
+  whose speech is ${mud:Char.Vitals.hp} health reads your health out when you
+  press it, and the editors' Insert a variable buttons put a value in for you.
+* Hotkey speech is spoken straight away, cutting off whatever was being read, and
+  still speaks with self-voice off, like the review keys.
+
+**Fixes**
+
+* Worlds named in Cyrillic, Chinese or another non-Latin alphabet each keep their
+  own triggers, hotkeys, scripts and map. They used to share one set, so
+  automation made for one MUD also ran on the others. The first time this version
+  starts, it moves each world's files into its own folder. Where several worlds
+  used to share one, each gets its own copy, and the shared original is kept
+  under a name ending in ~pre-migration.
+* Ctrl+Space completes words with accents or in other alphabets, instead of
+  skipping them or cutting them off at the first accent.
+* Moves you type in full, such as north or southwest, now go on the breadcrumb
+  trail, so Alt+R brings you back along them.
+* Starting genericMud from a command line takes --encoding, and --sounds now works
+  in the normal window too.
+
 ## 0.11.0 — 2026-08-13
 
 **Self-voice speaks through your screen reader on Mac and Linux too**
