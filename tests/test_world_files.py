@@ -50,7 +50,7 @@ def test_a_folder_several_worlds_shared_is_copied_to_each(tmp_path):
     # keeps them, and from here on they stop sharing.
     _old_world(tmp_path, "session", rules='{"version": 1, "keys": []}')
     migrate_world_files(tmp_path, ["Былины", "Адамант"])
-    for name in ("Былины", "Адамант", "session"):
+    for name in ("Былины", "Адамант", "session~pre-migration"):
         assert _files(tmp_path, name) == [True, True, True], name
     assert (tmp_path / "userpacks" / "Адамант" / "rules.json").read_text(
         encoding="utf-8") == '{"version": 1, "keys": []}'
@@ -101,5 +101,74 @@ def test_a_session_never_adopts_a_folder_two_worlds_claim(tmp_path, names):
         map_dir=tmp_path / "maps",
         name=names[0],
         other_worlds=lambda: names,
+    )
+    assert app.user_rules_dir() == tmp_path / "userpacks" / "Café"
+
+
+def test_a_folder_that_differs_only_in_case_belongs_to_its_world(tmp_path, monkeypatch):
+    # On NTFS and APFS "Caf" and "CAF" are one folder. A world literally called CAF owns
+    # it, so Café must not take it, whatever case each was typed in.
+    _old_world(tmp_path, "CAF")
+    real_exists = Path.exists
+
+    def case_blind_exists(path):  # model the case-insensitive disk the user is on
+        parent = path.parent
+        if real_exists(parent) and any(
+            entry.name.casefold() == path.name.casefold() for entry in parent.iterdir()
+        ):
+            return True
+        return real_exists(path)
+
+    monkeypatch.setattr(Path, "exists", case_blind_exists)
+    assert migrate_world_files(tmp_path, ["Café", "CAF"]) == []
+    assert _files(tmp_path, "CAF") == [True, True, True]
+
+
+def test_an_interrupted_copy_leaves_no_half_folder_behind_and_is_retried(tmp_path, monkeypatch):
+    import shutil
+
+    _old_world(tmp_path, "session")
+    real_copytree = shutil.copytree
+    failed: list[Path] = []
+
+    def copytree_that_dies(source, target, *args, **kwargs):
+        if not failed:
+            failed.append(Path(target))
+            Path(target).mkdir(parents=True)
+            (Path(target) / "rules.json").write_text("half", encoding="utf-8")
+            raise OSError("disk full")
+        return real_copytree(source, target, *args, **kwargs)
+
+    monkeypatch.setattr(shutil, "copytree", copytree_that_dies)
+    migrate_world_files(tmp_path, ["Былины", "Адамант"])
+    leftovers = [entry.name for entry in (tmp_path / "userpacks").iterdir()]
+    assert not [name for name in leftovers if name.startswith(".")]  # no temp folder left
+    migrate_world_files(tmp_path, ["Былины", "Адамант"])  # next launch finishes the job
+    for name in ("Былины", "Адамант"):
+        assert (tmp_path / "userpacks" / name / "rules.json").read_text(
+            encoding="utf-8") == '{"version": 1}', name
+
+
+def test_a_shared_folder_is_retired_once_every_world_has_its_copy(tmp_path):
+    # Otherwise a world created next month, with a name that also used to be filed as
+    # "session", would be handed rules it never had.
+    _old_world(tmp_path, "session")
+    migrate_world_files(tmp_path, ["Былины", "Адамант"])
+    assert _files(tmp_path, "session") == [False, False, False]
+    migrate_world_files(tmp_path, ["Былины", "Адамант", "Сфера"])
+    assert _files(tmp_path, "Сфера") == [False, False, False]
+    kept = sorted(entry.name for entry in (tmp_path / "userpacks").iterdir())
+    assert any("pre-migration" in name for name in kept)  # nothing deleted, just set aside
+
+
+def test_a_session_treats_a_case_variant_world_as_the_owner(tmp_path):
+    # On Windows "Caf" (Café's old folder) and "CAF" (a world called CAF) are one folder.
+    _old_world(tmp_path, "Caf")
+    app = EngineApp(
+        VoiceRouter(RecordingBackend(), clock=lambda: 0.0),
+        packs=PackStore(tmp_path / "soundpacks"),
+        map_dir=tmp_path / "maps",
+        name="Café",
+        other_worlds=lambda: ["Café", "CAF"],
     )
     assert app.user_rules_dir() == tmp_path / "userpacks" / "Café"

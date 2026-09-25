@@ -499,11 +499,14 @@ class EngineApp:
         if self._other_worlds is None:
             return False
         own = self.name.casefold()
-        return any(
-            name.casefold() != own
-            and component in (world_component(name), legacy_world_component(name))
-            for name in self._other_worlds()
-        )
+        folded = component.casefold()  # on NTFS and APFS "Caf" and "CAF" are one folder
+        for name in self._other_worlds():
+            if name.casefold() == own:
+                continue
+            claims = {world_component(name).casefold(), legacy_world_component(name).casefold()}
+            if folded in claims:
+                return True
+        return False
 
     def reload_user_rules(self) -> None:
         """(Re)register the world's field-based automation; safe to call live after a save.
