@@ -1858,6 +1858,12 @@ class _KeyCaptureCtrl(wx.TextCtrl):
         # swallow everything else: this field records combos, it doesn't edit text
 
 
+def _focus_if_alive(window: wx.Window) -> None:
+    """Focus ``window`` from a deferred call, unless it was destroyed in the meantime."""
+    if window:  # a destroyed wx window is falsy
+        window.SetFocus()
+
+
 class _RuleEditorBase(wx.Dialog):
     """Shared layout helpers for automation dialogs (NVDA: label precedes control)."""
 
@@ -1931,7 +1937,11 @@ class _RuleEditorBase(wx.Dialog):
             picker.Destroy()
         if chosen is not None:
             target.WriteText(chosen.reference)  # at the caret, like typing it
-        target.SetFocus()  # back where the reference went, so it's read out
+        # Back where the reference went, so it's read out -- after the picker's own
+        # teardown. Ending a modal hands focus back to the control that opened it (this
+        # button), and a SetFocus made before that has run can lose the race, leaving the
+        # screen reader on the button with no word about what was inserted.
+        wx.CallAfter(_focus_if_alive, target)
 
     def _slider(
         self, grid: wx.FlexGridSizer, label: str, value: int, low: int, high: int

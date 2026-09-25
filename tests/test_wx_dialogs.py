@@ -246,3 +246,32 @@ def test_inserting_a_variable_puts_its_reference_at_the_caret(frame, tmp_path, m
         assert editor.result().speak == "HP ${mud:Char.Vitals.hp}"
     finally:
         editor.Destroy()
+
+
+def test_focus_returns_to_the_field_only_after_the_picker_has_closed(frame, tmp_path,
+                                                                        monkeypatch):
+    from genericmud.packs.user_rules import UserKey
+    from genericmud.ui import wx_app
+
+    deferred: list = []
+    monkeypatch.setattr(wx_app.VariablesDialog, "ShowModal", lambda _picker: wx.ID_CANCEL)
+    monkeypatch.setattr(wx_app.wx, "CallAfter", lambda func, *args: deferred.append((func, args)))
+    editor = wx_app.KeyEditorDialog(frame, tmp_path, UserKey(), variables=_rows)
+    try:
+        focused: list = []
+        monkeypatch.setattr(editor._speak, "SetFocus", lambda: focused.append(True))
+        editor._insert_variable(editor._speak)
+        assert focused == []  # not while the picker is still being torn down
+        func, args = deferred[-1]
+        func(*args)
+        assert focused == [True]
+    finally:
+        editor.Destroy()
+
+
+def test_deferred_focus_on_a_closed_window_is_harmless(frame):
+    from genericmud.ui.wx_app import _focus_if_alive
+
+    field = wx.TextCtrl(frame)
+    field.Destroy()
+    _focus_if_alive(field)  # the editor closed before the deferred call ran
