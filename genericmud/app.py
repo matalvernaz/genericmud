@@ -489,12 +489,19 @@ class EngineApp:
         return legacy
 
     def _owned_by_another_world(self, component: str) -> bool:
-        """Whether a saved world other than this one is filed under ``component`` now."""
+        """Whether another saved world has a claim on the old folder ``component``.
+
+        It does if it is filed under that name now, or if an older build filed it there
+        too ("Café" and "Cafè" were both "Caf"). Deciding between claimants needs every
+        world at once, which config/world_files.py does at launch by copying the folder
+        to each; a session on its own leaves an ambiguous folder alone.
+        """
         if self._other_worlds is None:
             return False
         own = self.name.casefold()
         return any(
-            name.casefold() != own and world_component(name) == component
+            name.casefold() != own
+            and component in (world_component(name), legacy_world_component(name))
             for name in self._other_worlds()
         )
 

@@ -41,6 +41,7 @@ from genericmud.completion import CompletionCycler
 from genericmud.config.keymap import load_keymap
 from genericmud.config.ui_prefs import UiPrefs, load_ui_prefs, save_ui_prefs
 from genericmud.config.update_prefs import is_snoozed, load_prefs, save_prefs, snooze_timestamp
+from genericmud.config.world_files import migrate_world_files
 from genericmud.config.worlds import (
     DEFAULT_PORT,
     World,
@@ -2957,6 +2958,11 @@ class GenericMudFrame(wx.Frame):
         self._hub = SessionHub()  # shared across all open sessions for cross-character play
         self._announcer = make_voice_backend()  # speaks UI status for screen-reader users
         self._diag = make_diagnostic_log()  # one sound-path trace file for the whole process
+        # Before any session opens: move each saved world's files off the ASCII-only name an
+        # older build filed them under, so its rules and map are where it looks for them.
+        for change in migrate_world_files(config_dir(), [world.name for world in load_worlds()]):
+            if self._diag is not None:
+                self._diag.event("worlds.migrate", change=change)
 
         menubar = wx.MenuBar()
         # File is world-level actions. Installed third-party packs stay under Soundpacks;
