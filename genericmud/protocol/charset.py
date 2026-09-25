@@ -64,6 +64,7 @@ _BY_CODEC_NAME.update(
 # invisible control characters a screen reader garbles ("it\x92s"), and a trigger written
 # with the intended punctuation never matches. The five bytes Windows-1252 leaves
 # undefined stay as they are.
+_AUTO_FALLBACK = "cp1252"
 CP1252_C1_TABLE = {
     byte: char
     for byte in range(0x80, 0xA0)
@@ -101,7 +102,9 @@ class ServerTextCodec:
 
     Explicit encodings use Python's incremental decoders, which hold a multibyte
     character split across telnet chunks until the rest arrives, and replace bytes that
-    aren't valid in the encoding rather than failing. ``auto`` keeps its latch.
+    aren't valid in the encoding rather than failing. ``auto`` keeps its latch, and once
+    latched it sends Windows-1252 too: a MUD that proved not to speak UTF-8 reads a typed
+    "señor" sent as UTF-8 as two garbage characters where the ñ belongs.
     """
 
     def __init__(self, encoding: str = AUTO, *, on_latch: Callable[[int], None] | None = None):
@@ -139,7 +142,10 @@ class ServerTextCodec:
 
     def encode(self, text: str) -> bytes:
         """Encode a typed command; a character the encoding lacks is sent as "?"."""
-        codec = self.encoding if self.encoding != AUTO else "utf-8"
+        if self.encoding != AUTO:
+            codec = self.encoding
+        else:
+            codec = _AUTO_FALLBACK if self.latched else "utf-8"
         return text.encode(codec, errors="replace")
 
     def _decode_auto(self, data: bytes) -> str:

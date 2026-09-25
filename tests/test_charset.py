@@ -284,3 +284,14 @@ def test_encoding_arg_is_an_argparse_type():
     with pytest.raises(argparse.ArgumentTypeError):
         _encoding_arg("klingon")
     assert _encoding_arg("auto") == AUTO
+
+
+def test_auto_sends_utf8_until_the_mud_proves_legacy_then_windows_1252():
+    # A Latin-1 MUD reads a typed "señor" sent as UTF-8 as "seÃ±or": once the latch has
+    # shown the MUD isn't UTF-8, commands have to go out the way its output comes in.
+    codec = ServerTextCodec(AUTO)
+    assert codec.encode("señor") == "señor".encode()
+    codec.decode(b"caf\xe9\r\n")  # a Latin-1 MUD: the latch
+    assert codec.encode("señor") == "señor".encode("cp1252")
+    codec.reset()  # reconnected: UTF-8 again until proven otherwise
+    assert codec.encode("señor") == "señor".encode()
