@@ -17,7 +17,7 @@ import unicodedata
 from pathlib import Path
 
 _DRIVE_RE = re.compile(r"^[A-Za-z]:")
-_WORLD_UNSAFE_RE = re.compile(r"[^\w.-]+")  # \w is Unicode: letters and digits in any script
+_WORLD_PUNCTUATION = "._-"  # the only non-letters a world's file name keeps as they are
 
 
 def is_unsafe(name: str) -> bool:
@@ -123,12 +123,29 @@ def world_component(name: str, fallback: str = "session") -> str:
     two worlds must never land on one name. :func:`sanitize_component` keeps ASCII only,
     which filed every all-Cyrillic or all-CJK name under the same fallback: every such
     world shared one set of triggers and one room map. This keeps letters and digits in
-    any script (normalised to NFC, so one spelling is one folder) and still collapses
-    separators, dots at the edges and everything else that could leave the directory.
+    any script, with the combining marks many scripts write their vowels with (normalised
+    to NFC, so one spelling is one folder), and still collapses separators, dots at the
+    edges and everything else that could leave the directory.
     """
-    normalized = unicodedata.normalize("NFC", name)
-    safe = _WORLD_UNSAFE_RE.sub("_", normalized).strip("._")
-    return safe or fallback
+    out: list[str] = []
+    replacing = False  # inside a run of dropped characters, which becomes one "_"
+    for char in unicodedata.normalize("NFC", name):
+        if _keeps_in_world_name(char):
+            out.append(char)
+            replacing = False
+        elif not replacing:
+            out.append("_")
+            replacing = True
+    return "".join(out).strip("._") or fallback
+
+
+def _keeps_in_world_name(char: str) -> bool:
+    """A letter or digit in any script, a combining mark, or one of ``._-``.
+
+    Marks matter: Devanagari, Bengali, Tamil and Thai vowel signs are marks, not letters,
+    and NFC doesn't compose them away, so dropping them filed "का" as "क".
+    """
+    return char.isalnum() or char in _WORLD_PUNCTUATION or unicodedata.category(char)[0] == "M"
 
 
 def legacy_world_component(name: str) -> str:

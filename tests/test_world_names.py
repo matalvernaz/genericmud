@@ -84,3 +84,21 @@ def test_import_does_not_take_over_a_folder_an_older_build_filed(tmp_path):
     export_world(World("Café del Mar", "h", 1), None, source)
     world = import_world(source, tmp_path / "userpacks")
     assert world.name == "Café del Mar 2"
+
+
+def test_names_whose_letters_take_combining_marks_stay_distinct():
+    # Devanagari, Bengali, Tamil and Thai write vowels as combining marks that NFC leaves
+    # separate, and \w doesn't count marks as word characters: "का" became "क".
+    assert world_component("का") != world_component("क")
+    assert world_component("কলকাতা") == "কলকাতা"
+    assert world_component("தமிழ்") == "தமிழ்"
+    assert world_component("ภาษาไทย") == "ภาษาไทย"
+    assert world_component("áb") == "áb"  # NFC still composes what it can
+
+
+def test_ascii_names_file_exactly_where_the_old_scheme_did():
+    from genericmud.safepath import sanitize_component
+
+    for name in ("Aardwolf", "My MUD", "a_!b", "x!!!y", "..hidden", "a/b\\c", "_x_", "a  b",
+                 "con", "tab\there", "semi;colon", "dots...mid", "-dash-"):
+        assert world_component(name) == sanitize_component(name), name
