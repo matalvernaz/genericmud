@@ -14,7 +14,10 @@ import threading
 
 MIN_WORD_LENGTH = 3  # shorter words are cheaper to type than to cycle to
 MAX_WORDS = 500  # names/items from the recent past; older words age out
-_WORD_RE = re.compile(r"[A-Za-z][A-Za-z'-]+")
+# A word is a letter in any alphabet followed by letters, apostrophes or hyphens.
+# [^\W\d_] is "a Unicode letter": ASCII-only matching completed nothing on a Cyrillic
+# MUD and cut accented words short ("Café" became "Caf").
+_WORD_RE = re.compile(r"[^\W\d_](?:[^\W\d_]|['-])+")
 
 
 class OutputWordIndex:

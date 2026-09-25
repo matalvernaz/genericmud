@@ -64,3 +64,17 @@ def test_cycler_reset_ends_the_run():
     cycler.reset()
     assert not cycler.active
     assert cycler.next() is None
+
+
+def test_words_in_any_alphabet_complete_whole():
+    # Only ASCII letters counted as a word, so a Russian MUD's output (readable now that a
+    # world can be set to KOI8-R) completed nothing, and an accented name was cut short:
+    # "Café" went into the index as "Caf", and Ctrl+Space typed a word the MUD never said.
+    index = OutputWordIndex()
+    index.add_line("Вы видите стражника и Алебарду у двери.")
+    index.add_line("Monsieur Müller's Café is open.")
+    assert index.complete("стр") == ["стражника"]
+    assert index.complete("але") == ["Алебарду"]
+    assert index.complete("caf") == ["Café"]
+    assert index.complete("mül") == ["Müller's"]
+    assert index.complete("12") == []  # digits still don't start a word
