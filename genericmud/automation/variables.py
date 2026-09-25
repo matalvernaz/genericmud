@@ -52,6 +52,37 @@ def _shorten(text: str, limit: int) -> str:
     return text if len(text) <= limit else f"{text[: limit - 3]}..."
 
 
+_ENCODER = json.JSONEncoder(separators=(",", ":"), ensure_ascii=False)  # as format_value
+
+
+def _display_value(value: object) -> str:
+    """:func:`format_value`, but only as much of it as the dialog can show.
+
+    A server can send one table or list big enough that serialising all of it, on the
+    loop thread every session shares, is itself the problem, even though it's one row.
+    The encoder is read chunk by chunk and stops just past MAX_VALUE_CHARS; anything
+    longer ends up shortened for display anyway.
+    """
+    if isinstance(value, (dict, list, tuple)):
+        parts: list[str] = []
+        size = 0
+        for chunk in _ENCODER.iterencode(value):
+            parts.append(chunk)
+            size += len(chunk)
+            if size > MAX_VALUE_CHARS:
+                break
+        text = "".join(parts)
+    else:
+        text = format_value(value)
+    return text if len(text) <= MAX_VALUE_CHARS else text[: MAX_VALUE_CHARS + 1]
+
+
+def _referenceable(name: str) -> bool:
+    """Whether ``${scope:name}`` reads ``name`` back: a reference ends at the first brace
+    and its name is trimmed, so a brace or edge space in a name has no reference."""
+    return bool(name) and name == name.strip() and "{" not in name and "}" not in name
+
+
 @dataclass(frozen=True)
 class VariableEntry:
     """One readable variable: where it came from and what it holds right now."""
@@ -90,14 +121,19 @@ def _source_by_key(mud_vars: dict[str, object]) -> dict[str, str]:
     stays a bare key, and its own copy (``msdp.gmcp.hack``) names its real source.
     """
     by_folded = {str(key).casefold(): str(key) for key in mud_vars}
-    sources: dict[str, str] = {}
-    for key in mud_vars:
+    candidates: dict[str, list[tuple[str, bool]]] = {}
+    for key, value in mud_vars.items():
         source, separator, bare = str(key).partition(".")
         if separator and source in _MUD_SOURCES and bare:
             original = by_folded.get(bare.casefold())
             if original is not None:
-                sources.setdefault(original, source)
-    return sources
+                # The engine stores one object under both names, so the copy that IS the
+                # bare value belongs to whichever protocol wrote it last.
+                candidates.setdefault(original, []).append((source, mud_vars[original] is value))
+    return {
+        original: next((source for source, current in found if current), found[0][0])
+        for original, found in candidates.items()
+    }
 
 
 class _Walk:
@@ -113,8 +149,8 @@ class _Walk:
         return len(self.rows) >= self.budget
 
     def add(self, path: str, value: object, source: str) -> None:
-        if not self.full:
-            self.rows.append(VariableEntry(path, format_value(value), source))
+        if not self.full and _referenceable(path):
+            self.rows.append(VariableEntry(path, _display_value(value), source))
 
     def flatten(
         self, path: str, value: object, source: str, key_parts: int, depth: int = 0
@@ -123,16 +159,21 @@ class _Walk:
             return
         if self._answered_by_a_longer_key(path, key_parts):
             return  # resolve_mud_var would read another package's value for this name
-        if (
-            isinstance(value, dict) and value and depth < MAX_DEPTH
-            and not any("." in str(key) for key in value)
-        ):
-            for key, child in value.items():
-                self.flatten(f"{path}.{key}", child, source, key_parts, depth + 1)
-                if self.full:
-                    return
+        if not (isinstance(value, dict) and value and depth < MAX_DEPTH):
+            self.add(path, value, source)
             return
-        self.add(path, value, source)
+        whole_listed = False
+        for key, child in value.items():
+            if "." in str(key):
+                # A dotted path can't reach this key, so the one reference that still reads
+                # it is the table's own; list the table once, and its other keys as usual.
+                if not whole_listed:
+                    self.add(path, value, source)
+                    whole_listed = True
+                continue
+            self.flatten(f"{path}.{key}", child, source, key_parts, depth + 1)
+            if self.full:
+                return
 
     def _answered_by_a_longer_key(self, path: str, key_parts: int) -> bool:
         """``resolve_mud_var`` tries the longest bare key that prefixes a name first."""

@@ -286,3 +286,43 @@ def test_a_wide_table_is_not_walked_past_the_row_limit():
     entries, truncated = list_variables({"Wide": wide, "gmcp.Wide": wide}, {}, limit=10)
     assert truncated and len(entries) == 10
     assert visited < 50
+
+
+def test_names_a_reference_cannot_spell_are_left_out():
+    # ${...} ends at the first brace and trims the name, so these can't be read back.
+    from genericmud.automation.variables import list_variables
+
+    entries, _ = list_variables(_stored((MSDP, "BAD}", "1"), (MSDP, "GOOD", "2")),
+                                {"a{b": "3", " padded ": "4", "fine": "5"})
+    assert _names(entries) == ["GOOD", "fine"]
+
+
+def test_one_huge_value_costs_a_bounded_amount_of_work():
+    from genericmud.automation.variables import MAX_VALUE_CHARS, list_variables
+
+    huge = list(range(200_000))
+    entries, _ = list_variables(_stored((GMCP, "Char.Items", {"list": huge})), {})
+    assert len(entries) == 1
+    assert len(entries[0].value) <= MAX_VALUE_CHARS + 3  # a prefix, not the whole payload
+
+
+def test_the_row_names_the_protocol_that_sent_the_current_value():
+    # GMCP sent HEALTH first, then MSDP overwrote the bare value; the row reads MSDP's.
+    from genericmud.automation.engine import AutomationEngine
+    from genericmud.automation.variables import list_variables
+
+    engine = AutomationEngine(RecordingSink())
+    for source, value in ((GMCP, "1"), (MSDP, "2")):
+        engine.set_mud_var("HEALTH", value)
+        engine.set_mud_var(f"{source}.HEALTH", value)
+    entries, _ = list_variables(engine.all_mud_vars(), {})
+    assert [(entry.value, entry.source) for entry in entries] == [("2", MSDP)]
+
+
+def test_a_dotted_key_keeps_its_siblings_listed_and_is_read_through_the_table():
+    from genericmud.automation.variables import list_variables
+
+    entries, _ = list_variables(_stored((GMCP, "Char.Status", {"current.hp": 7, "name": "Bob"})),
+                                {})
+    by_name = {entry.name: entry.value for entry in entries}
+    assert by_name == {"Char.Status": '{"current.hp":7,"name":"Bob"}', "Char.Status.name": "Bob"}
