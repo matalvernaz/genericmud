@@ -121,8 +121,12 @@ def test_command_line_world_keeps_every_option():
 def _rows():
     from genericmud.automation.variables import list_variables
 
+    vitals = {"hp": 90, "mp": 30}
+    # Stored the way the engine keeps MUD data: bare name plus a source-prefixed copy.
     return list_variables(
-        {"gmcp.Char.Vitals": {"hp": 90, "mp": 30}, "msdp.HEALTH": "500"}, {"target": "orc"}
+        {"Char.Vitals": vitals, "gmcp.Char.Vitals": vitals, "HEALTH": "500",
+         "msdp.HEALTH": "500"},
+        {"target": "orc"},
     )
 
 

@@ -42,16 +42,22 @@ def _names(entries: list[VariableEntry]) -> list[str]:
     return [entry.name for entry in entries]
 
 
+def _stored(*values: tuple[str, str, object]) -> dict[str, object]:
+    """MUD data the way EngineApp._handle_subnegotiation stores it: bare name plus a
+    source-prefixed copy of the same value."""
+    out: dict[str, object] = {}
+    for source, name, value in values:
+        out[name] = value
+        out[f"{source}.{name}"] = value
+    return out
+
+
 # --- the listing ---
 
 
 def test_gmcp_tables_flatten_to_the_paths_references_use():
     entries, truncated = list_variables(
-        {
-            "Char.Vitals": {"hp": 90, "maxhp": 100},
-            "gmcp.Char.Vitals": {"hp": 90, "maxhp": 100},
-        },
-        {},
+        _stored((GMCP, "Char.Vitals", {"hp": 90, "maxhp": 100})), {}
     )
     assert not truncated
     assert _names(entries) == ["Char.Vitals.hp", "Char.Vitals.maxhp"]  # not listed twice
@@ -85,7 +91,7 @@ def test_every_reference_the_list_offers_resolves_to_the_value_shown():
 
 def test_mud_data_comes_first_grouped_by_protocol_then_script_values():
     entries, _ = list_variables(
-        {"mssp.PLAYERS": "3", "msdp.HEALTH": "5", "gmcp.b": 1, "gmcp.A": 2},
+        _stored((MSSP, "PLAYERS", "3"), (MSDP, "HEALTH", "5"), (GMCP, "b", 1), (GMCP, "A", 2)),
         {"zeta": "1", "alpha": "2"},
     )
     assert [(entry.source, entry.name) for entry in entries] == [
@@ -96,8 +102,8 @@ def test_mud_data_comes_first_grouped_by_protocol_then_script_values():
 
 def test_lists_stay_one_row_and_values_format_like_expansion():
     entries, _ = list_variables(
-        {"gmcp.Char.Items": {"list": [{"id": 1}, {"id": 2}], "flag": True, "none": None,
-                             "empty": {}}},
+        _stored((GMCP, "Char.Items", {"list": [{"id": 1}, {"id": 2}], "flag": True,
+                                      "none": None, "empty": {}})),
         {},
     )
     by_name = {entry.name: entry.value for entry in entries}
@@ -111,13 +117,13 @@ def test_lists_stay_one_row_and_values_format_like_expansion():
 
 
 def test_the_server_cannot_grow_the_list_without_bound():
-    flood = {f"gmcp.Spam.{index}": index for index in range(50)}
+    flood = _stored(*((GMCP, f"Spam{index}", index) for index in range(50)))
     entries, truncated = list_variables(flood, {}, limit=10)
     assert len(entries) == 10 and truncated
     deep: dict = {"leaf": 1}
     for _ in range(40):
         deep = {"d": deep}
-    entries, _ = list_variables({"gmcp.Deep": deep}, {})
+    entries, _ = list_variables(_stored((GMCP, "Deep", deep)), {})
     assert len(entries) == 1  # past the depth cap the rest is one JSON row
 
 
@@ -224,3 +230,59 @@ def test_an_alias_fired_in_a_background_tab_stays_quiet(tmp_path):
     app.voice.set_muted(True)  # what SessionPanel._apply_active does for a background tab
     app._dispatch_remote("hp")
     assert backend.spoken == [] and backend.stops == 0
+
+
+def test_awkward_shapes_never_offer_a_reference_that_reads_something_else():
+    # Found in review: dotted concatenation offered rows whose reference resolved to a
+    # different value, or to nothing. Every row must read back exactly what it shows,
+    # and no two rows may share a reference.
+    from genericmud.app import EngineApp
+    from genericmud.config.keymap import load_keymap
+    from genericmud.protocol import msdp
+    from genericmud.protocol.telnet import OPT_GMCP, OPT_MSDP, Subnegotiation
+    from genericmud.voice.router import VoiceRouter
+    from tests.helpers import RecordingBackend
+
+    app = EngineApp(VoiceRouter(RecordingBackend(), clock=lambda: 0.0),
+                    keymap=load_keymap("vipmud"))
+    for payload in (
+        b'Char {"Vitals":{"hp":1},"level":5}',  # "Char.Vitals.hp" would read package Char.Vitals
+        b'Char.Vitals {"hp":2}',
+        b'Char.Status {"current.hp":7,"name":"Bob"}',  # a dot inside a key
+        b'Room.Info {"exits":["n","s"]}',
+    ):
+        app.on_telnet_event(Subnegotiation(OPT_GMCP, payload))
+    msdp_payload = bytes([msdp.MSDP_VAR]) + b"gmcp.hack" + bytes([msdp.MSDP_VAL]) + b"9"
+    app.on_telnet_event(Subnegotiation(OPT_MSDP, msdp_payload))  # a name shaped like a prefix
+
+    entries, _ = app.variable_listing()
+    api = ScriptApi(app.engine)
+    references = [entry.reference for entry in entries]
+    assert len(references) == len(set(references))
+    for entry in entries:
+        assert api.expand_speech(entry.reference) == entry.value, entry
+    by_name = {entry.name: entry for entry in entries}
+    assert by_name["Char.Vitals.hp"].value == "2"
+    assert by_name["Char.level"].value == "5"
+    assert by_name["Char.Status"].value == '{"current.hp":7,"name":"Bob"}'
+    assert by_name["gmcp.hack"].source == "msdp"
+
+
+def test_a_wide_table_is_not_walked_past_the_row_limit():
+    # The limit has to bound the work, not only the result: a server decides how wide a
+    # table is, and the listing runs on the loop thread every session shares.
+    from genericmud.automation.variables import list_variables
+
+    visited = 0
+
+    class Watched(dict):
+        def items(self):
+            nonlocal visited
+            for pair in super().items():
+                visited += 1
+                yield pair
+
+    wide = Watched({f"k{index}": index for index in range(100_000)})
+    entries, truncated = list_variables({"Wide": wide, "gmcp.Wide": wide}, {}, limit=10)
+    assert truncated and len(entries) == 10
+    assert visited < 50

@@ -1,19 +1,21 @@
 """Every variable a world knows about, as rows a screen reader can read (issue #4).
 
 Two kinds feed the list. MUD data is what the server sent over GMCP, MSDP or MSSP;
-the engine keeps each value twice, under its bare name (``Char.Vitals``) for
-``${mud:...}`` lookups and under a source prefix (``gmcp.Char.Vitals``) so the source
-isn't lost. The prefixed copies are the ones read here, which is how each row knows its
-source without the list showing every value twice. Script variables are the values
-packs and automation scripts saved, read with ``${script:...}``.
+the engine keeps each value twice, under its bare name (``Char.Vitals``), which is what
+``${mud:...}`` resolves against, and under a source prefix (``gmcp.Char.Vitals``) so the
+source isn't lost. Rows are built from the bare names, so a row's reference reads what
+the row shows, and the prefixed copy only says which protocol it came from. Script
+variables are the values packs and automation scripts saved, read with ``${script:...}``.
 
 A GMCP package arrives as one nested object. A player wants one number out of it,
 not the object, so tables are flattened to the dotted paths ``resolve_mud_var``
 already understands: ``Char.Vitals`` becomes ``Char.Vitals.hp``, ``Char.Vitals.mp``.
-A list stays one row: indexing into one is script territory, and a long inventory
-list would otherwise swamp everything else.
+Three shapes stay whole instead, because a dotted path couldn't read them back: a list
+(indexing into one is script territory, and a long inventory would swamp the list), a
+table with a dot inside one of its keys, and a path a longer package name would answer
+first (package ``Char``'s ``Vitals.hp`` when package ``Char.Vitals`` also exists).
 
-The server controls how much of this there is, so the listing is capped.
+The server controls how much of this there is, so the walk itself stops at the limit.
 """
 
 from __future__ import annotations
@@ -80,14 +82,65 @@ class VariableEntry:
         )
 
 
-def _flatten(
-    path: str, value: object, source: str, out: list[VariableEntry], depth: int = 0
-) -> None:
-    if isinstance(value, dict) and value and depth < MAX_DEPTH:
-        for key, child in value.items():
-            _flatten(f"{path}.{key}", child, source, out, depth + 1)
-        return
-    out.append(VariableEntry(path, format_value(value), source))
+def _source_by_key(mud_vars: dict[str, object]) -> dict[str, str]:
+    """Each bare key, with the protocol named by the source-prefixed copy stored beside it.
+
+    A prefixed copy is ``<source>.<bare key>`` where that bare key exists too. A bare MSDP
+    variable that merely looks prefixed (``gmcp.hack``) has no ``hack`` beside it, so it
+    stays a bare key, and its own copy (``msdp.gmcp.hack``) names its real source.
+    """
+    by_folded = {str(key).casefold(): str(key) for key in mud_vars}
+    sources: dict[str, str] = {}
+    for key in mud_vars:
+        source, separator, bare = str(key).partition(".")
+        if separator and source in _MUD_SOURCES and bare:
+            original = by_folded.get(bare.casefold())
+            if original is not None:
+                sources.setdefault(original, source)
+    return sources
+
+
+class _Walk:
+    """One flattening pass with a row budget, shared across every value it visits."""
+
+    def __init__(self, budget: int, top_level: set[str]) -> None:
+        self.budget = budget
+        self.top_level = top_level  # casefolded bare keys, for the longest-key rule
+        self.rows: list[VariableEntry] = []
+
+    @property
+    def full(self) -> bool:
+        return len(self.rows) >= self.budget
+
+    def add(self, path: str, value: object, source: str) -> None:
+        if not self.full:
+            self.rows.append(VariableEntry(path, format_value(value), source))
+
+    def flatten(
+        self, path: str, value: object, source: str, key_parts: int, depth: int = 0
+    ) -> None:
+        if self.full:
+            return
+        if self._answered_by_a_longer_key(path, key_parts):
+            return  # resolve_mud_var would read another package's value for this name
+        if (
+            isinstance(value, dict) and value and depth < MAX_DEPTH
+            and not any("." in str(key) for key in value)
+        ):
+            for key, child in value.items():
+                self.flatten(f"{path}.{key}", child, source, key_parts, depth + 1)
+                if self.full:
+                    return
+            return
+        self.add(path, value, source)
+
+    def _answered_by_a_longer_key(self, path: str, key_parts: int) -> bool:
+        """``resolve_mud_var`` tries the longest bare key that prefixes a name first."""
+        parts = path.split(".")
+        return any(
+            ".".join(parts[:boundary]).casefold() in self.top_level
+            for boundary in range(len(parts), key_parts, -1)
+        )
 
 
 def list_variables(
@@ -98,17 +151,20 @@ def list_variables(
 ) -> tuple[list[VariableEntry], bool]:
     """Rows for every variable, MUD data first (GMCP, MSDP, MSSP), then script values.
 
-    Returns the rows and whether ``limit`` cut the list short.
+    Returns the rows and whether ``limit`` cut the list short. The walk stops one row past
+    the limit, so an enormous table costs no more than a list of ``limit`` rows.
     """
-    entries: list[VariableEntry] = []
-    for key, value in mud_vars.items():
-        source, separator, name = str(key).partition(".")
-        if separator and source in _MUD_SOURCES and name:
-            _flatten(name, value, source, entries)
-    entries.extend(
-        VariableEntry(str(name), format_value(value), SCRIPT)
-        for name, value in script_vars.items()
-    )
+    sources = _source_by_key(mud_vars)
+    walk = _Walk(limit + 1, {key.casefold() for key in sources})
+    for key, source in sources.items():
+        walk.flatten(key, mud_vars[key], source, key.count(".") + 1)
+        if walk.full:
+            break
+    for name, value in script_vars.items():
+        if walk.full:
+            break
+        walk.add(str(name), value, SCRIPT)
+    entries = walk.rows
     entries.sort(key=lambda entry: (_SOURCE_ORDER[entry.source], entry.name.casefold()))
     return entries[:limit], len(entries) > limit
 
