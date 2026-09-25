@@ -36,7 +36,7 @@ from genericmud.protocol.oob import OobMessage, ServerStatus, from_subnegotiatio
 from genericmud.render.ansi import parse_ansi
 from genericmud.review.channels import ChannelReview
 from genericmud.review.cursor import ReviewCursor
-from genericmud.safepath import is_unsafe, sanitize_component
+from genericmud.safepath import is_unsafe, legacy_world_component, world_component
 from genericmud.scripting import user_scripts
 from genericmud.scripting.api import ScriptApi
 from genericmud.scripting.mushclient_compat import MushclientPack
@@ -456,7 +456,22 @@ class EngineApp:
         root = getattr(self.packs, "root", None)
         if root is None:
             return None
-        return Path(root).parent / "userpacks" / sanitize_component(self.name)
+        return self._world_path(Path(root).parent / "userpacks")
+
+    def _world_path(self, root: Path, suffix: str = "") -> Path:
+        """This world's file or folder under ``root``, found where older builds filed it.
+
+        Names used to be filed ASCII-only, so "Café" went under "Caf". Where the current
+        name has nothing yet and the old one does, the old one is still this world's: its
+        rules and map carry on after an update instead of seeming to vanish.
+        """
+        current = root / f"{world_component(self.name)}{suffix}"
+        old_name = legacy_world_component(self.name)
+        if old_name and not current.exists():
+            legacy = root / f"{old_name}{suffix}"
+            if legacy != current and legacy.exists():
+                return legacy
+        return current
 
     def reload_user_rules(self) -> None:
         """(Re)register the world's field-based automation; safe to call live after a save.
@@ -531,7 +546,7 @@ class EngineApp:
         """This world's map file, or None for a session with no name to file it under."""
         if not self.name:
             return None
-        return self.map_dir / f"{sanitize_component(self.name)}.json"
+        return self._world_path(self.map_dir, ".json")
 
     def _load_map(self) -> None:
         path = self._map_path()
@@ -553,7 +568,7 @@ class EngineApp:
         root = getattr(self.packs, "root", None)
         if root is None:
             return None
-        return Path(root).parent / "state" / f"{sanitize_component(self.name)}-vars.json"
+        return self._world_path(Path(root).parent / "state", "-vars.json")
 
     def _restore_pack_vars(self) -> None:
         path = self._pack_vars_path()
@@ -1329,7 +1344,7 @@ class EngineApp:
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         # Sanitize the world name -- a pack-derived world could be named "../.." and escape the
         # logs directory when joined onto the path.
-        safe_name = sanitize_component(self.name or "session")
+        safe_name = world_component(self.name or "session")
         path = self.log_dir / f"{safe_name}-{stamp}.log"
         self.logger = SessionLogger(path)
         self.logger.start()

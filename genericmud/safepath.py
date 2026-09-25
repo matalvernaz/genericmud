@@ -13,9 +13,11 @@ from __future__ import annotations
 
 import os
 import re
+import unicodedata
 from pathlib import Path
 
 _DRIVE_RE = re.compile(r"^[A-Za-z]:")
+_WORLD_UNSAFE_RE = re.compile(r"[^\w.-]+")  # \w is Unicode: letters and digits in any script
 
 
 def is_unsafe(name: str) -> bool:
@@ -112,3 +114,24 @@ def sanitize_component(name: str, fallback: str = "session") -> str:
     """
     safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", name).strip("._")
     return safe or fallback
+
+
+def world_component(name: str, fallback: str = "session") -> str:
+    """The file or folder name a world's own data is kept under, in any alphabet.
+
+    Per-world rules, scripts, maps and saved pack variables are filed by world name, so
+    two worlds must never land on one name. :func:`sanitize_component` keeps ASCII only,
+    which filed every all-Cyrillic or all-CJK name under the same fallback: every such
+    world shared one set of triggers and one room map. This keeps letters and digits in
+    any script (normalised to NFC, so one spelling is one folder) and still collapses
+    separators, dots at the edges and everything else that could leave the directory.
+    """
+    normalized = unicodedata.normalize("NFC", name)
+    safe = _WORLD_UNSAFE_RE.sub("_", normalized).strip("._")
+    return safe or fallback
+
+
+def legacy_world_component(name: str) -> str:
+    """The ASCII-only name a world's data was filed under before :func:`world_component`,
+    or "" when nothing ASCII was left (that shared fallback belonged to no one world)."""
+    return sanitize_component(name, fallback="")

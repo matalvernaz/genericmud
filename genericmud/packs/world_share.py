@@ -27,7 +27,7 @@ from genericmud.config.worlds import World, parse_port
 from genericmud.packs.store import extract_pack
 from genericmud.packs.user_rules import RULES_FILENAME, SOUNDS_DIRNAME
 from genericmud.protocol.charset import normalize_encoding
-from genericmud.safepath import sanitize_component
+from genericmud.safepath import legacy_world_component, world_component
 from genericmud.scripting.user_scripts import (
     SCRIPTS_DIRNAME,
     list_scripts,
@@ -132,14 +132,18 @@ def import_world(zip_path: Path, userpacks_root: Path) -> World:
 def _unique_pack_dir(root: Path, name: str) -> tuple[Path, str]:
     """A not-yet-existing userpack dir for ``name``, suffixing the name until unique.
 
-    The dir MUST be ``sanitize_component(world_name)`` — that's how
+    The dir MUST be ``world_component(world_name)`` — that's how
     ``EngineApp.user_rules_dir`` finds a world's rules — so the suffix goes on
-    the world name and the dir is re-derived from it each try.
+    the world name and the dir is re-derived from it each try. A name whose data
+    an older build filed under its ASCII-only form counts as taken too: user_rules_dir
+    still finds that folder, and an import must not take it over.
     """
     candidate_name = name
     for suffix in range(2, _MAX_IMPORT_NAME_TRIES + 2):
-        candidate = root / sanitize_component(candidate_name)
-        if not candidate.exists():
+        candidate = root / world_component(candidate_name)
+        legacy_name = legacy_world_component(candidate_name)
+        legacy_taken = bool(legacy_name) and (root / legacy_name).exists()
+        if not candidate.exists() and not legacy_taken:
             return candidate, candidate_name
         candidate_name = f"{name} {suffix}"
     raise ValueError(f"too many worlds named {name}")
