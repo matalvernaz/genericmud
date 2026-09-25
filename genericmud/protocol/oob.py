@@ -35,17 +35,21 @@ def _utf8(data: bytes) -> str:
 
 
 def from_subnegotiation(
-    option: int, payload: bytes, decode: Callable[[bytes], str] = _utf8
+    option: int,
+    payload: bytes,
+    decode: Callable[[bytes], str] = _utf8,
+    decode_gmcp: Callable[[bytes], str] = _utf8,
 ) -> list[OobMessage] | ServerStatus | None:
     """Normalize a telnet subnegotiation into out-of-band messages.
 
     Returns a list of :class:`OobMessage` for GMCP/MSDP (GMCP yields one,
     MSDP yields one per top-level variable), a :class:`ServerStatus` for MSSP,
-    or ``None`` for options handled elsewhere. ``decode`` turns payload text into
-    ``str`` (see ``ServerTextCodec.decode_payload``).
+    or ``None`` for options handled elsewhere. ``decode`` turns MSDP and MSSP text into
+    ``str`` and ``decode_gmcp`` GMCP's, which differ because only GMCP fixes an encoding
+    (see ``ServerTextCodec.decode_payload`` and ``decode_gmcp``).
     """
     if option == T.OPT_GMCP:
-        message = parse_gmcp(payload, decode)
+        message = parse_gmcp(payload, decode_gmcp)
         return [OobMessage(message.package, message.data, "gmcp")]
     if option == T.OPT_MSDP:
         return [

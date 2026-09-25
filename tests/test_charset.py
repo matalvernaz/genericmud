@@ -331,3 +331,28 @@ def test_auto_reads_a_latin1_mssp_name_instead_of_replacement_characters():
     app.on_telnet_event(Subnegotiation(T.OPT_MSSP, b"\x01NAME\x02Caf\xe9 del Mar"))
     assert app.engine.get_mud_var("NAME") == "Café del Mar"
     assert not app.codec.latched  # a payload never moves the text stream's latch
+
+
+def test_an_explicit_cjk_worlds_msdp_is_read_in_its_encoding_even_when_it_looks_like_utf8():
+    # Found in review: in short strings a GBK, Big5 or Shift JIS pair is often valid UTF-8 by
+    # accident. GBK's 漏 is the bytes C2 A9, which UTF-8 reads as ©. MSDP and MSSP name no
+    # encoding, so a world's explicit setting decides; only GMCP (UTF-8 by spec) guesses.
+    from genericmud.protocol import msdp
+
+    app = _app("gb18030")
+    name = "漏".encode("gb18030")
+    assert name.decode("utf-8") == "©"  # the accident this test is about
+    payload = bytes([msdp.MSDP_VAR]) + b"ROOM_NAME" + bytes([msdp.MSDP_VAL]) + name
+    app.on_telnet_event(Subnegotiation(T.OPT_MSDP, payload))
+    assert app.engine.get_mud_var("ROOM_NAME") == "漏"
+    app.on_telnet_event(Subnegotiation(T.OPT_MSSP, b"\x01NAME\x02" + name))
+    assert app.engine.get_mud_var("NAME") == "漏"
+
+
+def test_an_explicit_western_world_keeps_its_msdp_bytes_as_they_are():
+    from genericmud.protocol import msdp
+
+    app = _app("cp1252")
+    payload = bytes([msdp.MSDP_VAR]) + b"ROOM_NAME" + bytes([msdp.MSDP_VAL]) + "Ã©".encode("cp1252")
+    app.on_telnet_event(Subnegotiation(T.OPT_MSDP, payload))
+    assert app.engine.get_mud_var("ROOM_NAME") == "Ã©"

@@ -141,15 +141,26 @@ class ServerTextCodec:
         return self._decode_auto(data)
 
     def decode_payload(self, data: bytes) -> str:
-        """Text inside a GMCP, MSDP or MSSP payload.
+        """Text inside an MSDP or MSSP payload.
 
-        GMCP must be UTF-8 and the other two name no encoding at all, so a payload that
-        is valid UTF-8 is read as UTF-8, and one that isn't is read in the world's
-        encoding: a KOI8-R MUD's MSDP room name arrives in KOI8-R. Cyrillic, Greek or
-        Western European text in a legacy encoding is practically never valid UTF-8 by
-        accident, so the order can't misread either kind. On ``auto`` the fallback is
-        the same Windows-1252 the text stream latches to. Payloads never move the latch.
+        Neither protocol names an encoding, so a MUD sends them in its own: a KOI8-R MUD's
+        MSDP room name arrives in KOI8-R. A world with an explicit encoding reads them in
+        it, without trying UTF-8 first, because in short strings like room names a GBK,
+        Big5 or Shift JIS pair is often valid UTF-8 by accident (GBK's 漏 is UTF-8's ©).
+        On ``auto`` there is nothing to go on, so valid UTF-8 is read as UTF-8 and anything
+        else as the Windows-1252 the text stream latches to. Payloads never move the latch.
         """
+        if self.encoding != AUTO:
+            return data.decode(self.encoding, errors="replace")
+        return self._utf8_or_fallback(data)
+
+    def decode_gmcp(self, data: bytes) -> str:
+        """Text inside a GMCP payload: UTF-8 by the GMCP spec, whatever the world's encoding,
+        so a compliant server on a KOI8-R world still reads right. Only a payload that isn't
+        valid UTF-8 at all, from a server that ignores the spec, falls back to the world's."""
+        return self._utf8_or_fallback(data)
+
+    def _utf8_or_fallback(self, data: bytes) -> str:
         try:
             return data.decode("utf-8")
         except UnicodeDecodeError:
