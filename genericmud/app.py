@@ -12,7 +12,7 @@ import asyncio
 import json
 import re
 import traceback
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -215,6 +215,7 @@ class EngineApp:
         diag: DiagnosticLog | None = None,
         suppress_reconnect: Callable[[], None] | None = None,
         encoding: str = AUTO,
+        other_worlds: Callable[[], Iterable[str]] | None = None,
     ) -> None:
         self.buffer = Buffer()
         self.voice = voice
@@ -291,6 +292,10 @@ class EngineApp:
         # The world's text encoding, both directions: the UI hands this same codec to the
         # connection so typed commands go out in the encoding the output arrives in.
         self.codec = ServerTextCodec(encoding, on_latch=self._on_encoding_latch)
+        # Names of the saved worlds, so an older ASCII-only folder is only adopted when it
+        # isn't another world's own folder (see _world_path). None: no saved worlds known.
+        self._other_worlds = other_worlds
+        self._world_paths: dict[tuple[Path, str], Path] = {}  # resolved once per session
         self._msdp_routed = 0  # subnegotiation count, for throttling the diag trace
         self._prompt_gen = 0  # bumps per data chunk so a stale idle prompt-flush no-ops
 
@@ -463,15 +468,35 @@ class EngineApp:
 
         Names used to be filed ASCII-only, so "Café" went under "Caf". Where the current
         name has nothing yet and the old one does, the old one is still this world's: its
-        rules and map carry on after an update instead of seeming to vanish.
+        rules and map carry on after an update instead of seeming to vanish. Unless another
+        saved world is literally called "Caf": then that folder is its own, and adopting
+        it would mix the two worlds' rules and maps. Resolved once per session, so a save
+        at close lands where the load at connect read from.
         """
+        key = (root, suffix)
+        if key not in self._world_paths:
+            self._world_paths[key] = self._resolve_world_path(root, suffix)
+        return self._world_paths[key]
+
+    def _resolve_world_path(self, root: Path, suffix: str) -> Path:
         current = root / f"{world_component(self.name)}{suffix}"
         old_name = legacy_world_component(self.name)
-        if old_name and not current.exists():
-            legacy = root / f"{old_name}{suffix}"
-            if legacy != current and legacy.exists():
-                return legacy
-        return current
+        if not old_name or current.exists():
+            return current
+        legacy = root / f"{old_name}{suffix}"
+        if legacy == current or not legacy.exists() or self._owned_by_another_world(old_name):
+            return current
+        return legacy
+
+    def _owned_by_another_world(self, component: str) -> bool:
+        """Whether a saved world other than this one is filed under ``component`` now."""
+        if self._other_worlds is None:
+            return False
+        own = self.name.casefold()
+        return any(
+            name.casefold() != own and world_component(name) == component
+            for name in self._other_worlds()
+        )
 
     def reload_user_rules(self) -> None:
         """(Re)register the world's field-based automation; safe to call live after a save.

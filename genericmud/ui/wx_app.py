@@ -296,6 +296,7 @@ class SessionPanel(wx.Panel):
             diag=self._diag,
             suppress_reconnect=self._connection.suppress_reconnect,
             encoding=self.world.encoding,
+            other_worlds=lambda: [world.name for world in load_worlds()],
         )
         # One codec for both directions: commands go out in the encoding output is read in.
         self._connection.text_codec = self.app.codec

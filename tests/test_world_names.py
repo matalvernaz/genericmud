@@ -102,3 +102,26 @@ def test_ascii_names_file_exactly_where_the_old_scheme_did():
     for name in ("Aardwolf", "My MUD", "a_!b", "x!!!y", "..hidden", "a/b\\c", "_x_", "a  b",
                  "con", "tab\there", "semi;colon", "dots...mid", "-dash-"):
         assert world_component(name) == sanitize_component(name), name
+
+
+def test_a_new_world_never_takes_over_another_saved_worlds_folder(tmp_path):
+    # "Café" used to be filed as "Caf". If a world literally named "Caf" exists, that
+    # folder is its own, not an old copy of Café's, and adopting it would mix the two.
+    (tmp_path / "userpacks" / "Caf").mkdir(parents=True)
+    app = EngineApp(
+        VoiceRouter(RecordingBackend(), clock=lambda: 0.0),
+        packs=PackStore(tmp_path / "soundpacks"),
+        map_dir=tmp_path / "maps",
+        name="Café",
+        other_worlds=lambda: ["Café", "Caf", "Aardwolf"],
+    )
+    assert app.user_rules_dir() == tmp_path / "userpacks" / "Café"
+
+
+def test_a_world_keeps_one_folder_for_the_whole_session(tmp_path):
+    # Resolving again mid-session (a map save, the vars written at close) must not flip
+    # folders because a world was created or a folder appeared meanwhile.
+    app = _app(tmp_path, "Café del Mar")
+    first = app.user_rules_dir()
+    (tmp_path / "userpacks" / "Caf_del_Mar").mkdir(parents=True)
+    assert app.user_rules_dir() == first
