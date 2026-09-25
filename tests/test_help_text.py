@@ -97,3 +97,13 @@ def test_world_commands_and_follow_key_match_the_native_ui():
     for shortcut in ("Ctrl+N", "Ctrl+O", "Ctrl+Shift+F"):
         assert shortcut in help_text.KEYBOARD_SHORTCUTS
     assert "Ctrl+Shift+F is follow mode" in help_text.GETTING_STARTED
+
+
+def test_mud_variables_window_is_documented_where_players_look():
+    # A menu accelerator isn't in the keymap, so the keymap test above can't see it.
+    readme = README.read_text(encoding="utf-8")
+    assert "### Finding out what the MUD sends" in readme
+    assert "| Ctrl+Shift+V |" in readme
+    assert "Ctrl+Shift+V" in help_text.KEYBOARD_SHORTCUTS
+    assert "Speech fields accept the same variables" in help_text.SCRIPTING
+    assert "### Speak a value without writing code" in SCRIPTING_GUIDE.read_text(encoding="utf-8")

@@ -113,3 +113,132 @@ def test_command_line_world_keeps_every_option():
         "mud.example", "mud.example", 4000, tls=True, sounds="/sounds", encoding="koi8-r"
     )
     assert _world_from_args(_parse_args([])) is None
+
+
+# --- MUD variables (issue #4) ---
+
+
+def _rows():
+    from genericmud.automation.variables import list_variables
+
+    return list_variables(
+        {"gmcp.Char.Vitals": {"hp": 90, "mp": 30}, "msdp.HEALTH": "500"}, {"target": "orc"}
+    )
+
+
+def _labels(dialog) -> list[str]:
+    return [child.GetLabel() for child in dialog.GetChildren() if isinstance(child, wx.Button)]
+
+
+def test_variables_dialog_reads_as_one_row_per_value_and_filters(frame):
+    from genericmud.ui.wx_app import VariablesDialog
+
+    dialog = VariablesDialog(frame, _rows, world_name="Aard")
+    try:
+        rows = [dialog._list.GetString(index) for index in range(dialog._list.GetCount())]
+        assert rows == [
+            "Char.Vitals.hp, 90, GMCP", "Char.Vitals.mp, 30, GMCP",
+            "HEALTH, 500, MSDP", "target, orc, script",
+        ]
+        assert dialog._list_label.GetLabel() == "&Variables (4):"
+        assert "Use it as: ${mud:Char.Vitals.hp}" in dialog._details.GetValue()
+        dialog._filter.SetValue("VITALS")
+        assert dialog._list.GetCount() == 2
+        assert dialog._list_label.GetLabel() == "&Variables (2 of 4):"
+        dialog._filter.SetValue("nothing matches")
+        assert dialog._details.GetValue() == "No variable name contains that text."
+        assert not dialog._action.IsEnabled()
+    finally:
+        dialog.Destroy()
+
+
+def test_variables_dialog_says_why_it_is_empty(frame):
+    from genericmud.ui.wx_app import VariablesDialog
+
+    empty = VariablesDialog(frame, lambda: ([], False), world_name="Aard")
+    unanswered = VariablesDialog(frame, lambda: None, world_name="Aard")
+    try:
+        assert "GMCP, MSDP or MSSP" in empty._details.GetValue()
+        assert "didn't answer" in unanswered._details.GetValue()
+        assert not empty._action.IsEnabled()
+    finally:
+        empty.Destroy()
+        unanswered.Destroy()
+
+
+def test_variables_dialog_copies_the_reference_and_keeps_the_row_on_refresh(frame):
+    from genericmud.ui.wx_app import VariablesDialog
+
+    spoken: list[str] = []
+    dialog = VariablesDialog(frame, _rows, world_name="Aard", announce=spoken.append)
+    try:
+        dialog._list.SetSelection(2)
+        dialog._show_details()
+        dialog._on_activate(None)
+        assert spoken[-1] in (
+            "Copied the reference to HEALTH.", "The clipboard is busy; try again.",
+        )
+        if spoken[-1].startswith("Copied") and wx.TheClipboard.Open():
+            data = wx.TextDataObject()
+            wx.TheClipboard.GetData(data)
+            wx.TheClipboard.Close()
+            assert data.GetText() == "${mud:HEALTH}"
+        dialog._refresh(announce=True)
+        assert spoken[-1] == "4 variables."
+        assert dialog._list.GetStringSelection() == "HEALTH, 500, MSDP"
+    finally:
+        dialog.Destroy()
+
+
+def test_variables_picker_returns_the_chosen_row(frame):
+    from genericmud.ui.wx_app import VariablesDialog
+
+    dialog = VariablesDialog(frame, _rows, world_name="", pick=True)
+    try:
+        assert dialog.GetTitle() == "Insert a Variable"
+        assert dialog._action.GetId() == wx.ID_OK
+        dialog.EndModal = lambda _code: None
+        dialog._list.SetSelection(3)
+        dialog._on_activate(None)
+        assert dialog.chosen is not None and dialog.chosen.reference == "${script:target}"
+    finally:
+        dialog.Destroy()
+
+
+def test_rule_editors_offer_variables_only_with_a_live_session(frame, tmp_path):
+    from genericmud.packs.user_rules import UserAlias, UserKey, UserTrigger
+    from genericmud.ui.wx_app import AliasEditorDialog, KeyEditorDialog, TriggerEditorDialog
+
+    makers = (
+        lambda fetch: TriggerEditorDialog(frame, tmp_path, UserTrigger(), variables=fetch),
+        lambda fetch: AliasEditorDialog(frame, UserAlias(), variables=fetch),
+        lambda fetch: KeyEditorDialog(frame, tmp_path, UserKey(), variables=fetch),
+    )
+    for make in makers:
+        with_session, without = make(_rows), make(None)
+        try:
+            assert "Insert a v&ariable into the speech..." in _labels(with_session)
+            assert "Insert a variable into the co&mmands..." in _labels(with_session)
+            assert not [label for label in _labels(without) if "variable" in label]
+        finally:
+            with_session.Destroy()
+            without.Destroy()
+
+
+def test_inserting_a_variable_puts_its_reference_at_the_caret(frame, tmp_path, monkeypatch):
+    from genericmud.packs.user_rules import UserKey
+    from genericmud.ui import wx_app
+
+    def choose_first(picker):
+        picker.chosen = picker._shown[0]
+        return wx.ID_OK
+
+    monkeypatch.setattr(wx_app.VariablesDialog, "ShowModal", choose_first)
+    editor = wx_app.KeyEditorDialog(frame, tmp_path, UserKey(key="f2", speak="HP "),
+                                    variables=_rows)
+    try:
+        editor._speak.SetInsertionPointEnd()
+        editor._insert_variable(editor._speak)
+        assert editor.result().speak == "HP ${mud:Char.Vitals.hp}"
+    finally:
+        editor.Destroy()

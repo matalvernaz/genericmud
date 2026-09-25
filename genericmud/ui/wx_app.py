@@ -19,6 +19,7 @@ and isn't installed on the dev host); the reused engine is what the tests cover.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import shutil
 import tempfile
 import threading
@@ -34,6 +35,7 @@ import wx
 from genericmud import __version__, help_text
 from genericmud.app import EngineApp
 from genericmud.automation.engine import AutomationEngine
+from genericmud.automation.variables import VariableEntry, filter_variables
 from genericmud.bridge import protocol
 from genericmud.completion import CompletionCycler
 from genericmud.config.keymap import load_keymap
@@ -164,6 +166,9 @@ _PASSTHROUGH_COMBOS = frozenset({
 
 _OUTPUT_CAP_LINES = 5000  # keep the native control bounded so NVDA/UIA stays responsive
 _FLUSH_INTERVAL_MS = 50  # batch output appends during floods
+# How long the variables window waits for the session's loop thread to hand over a
+# snapshot. A healthy loop answers in microseconds; this only bounds a wedged one.
+_VARIABLE_SNAPSHOT_TIMEOUT_S = 2.0
 _PACK_SOUND_SUFFIXES = frozenset({".wav", ".ogg", ".mp3", ".flac"})  # bundled-audio detection
 
 # Numpad compass (VIPMud/MUDBall convention): digits walk, 5/0 look, . scans,
@@ -334,6 +339,29 @@ class SessionPanel(wx.Panel):
                 self._connection.send_line(text)
         except ConnectionError:
             pass
+
+    def variable_snapshot(self) -> tuple[list[VariableEntry], bool] | None:
+        """This session's variables, read on the loop thread where engine state changes.
+
+        Called from the UI thread; blocks until the loop hands over the rows. None when
+        the loop doesn't answer in time, which the dialog reports instead of freezing.
+        """
+        app = self.app
+        if app is None:
+            return [], False
+        result: concurrent.futures.Future = concurrent.futures.Future()
+
+        def snapshot() -> None:
+            try:
+                result.set_result(app.variable_listing())
+            except Exception as error:  # noqa: BLE001 - reported to the UI thread, not lost
+                result.set_exception(error)
+
+        try:
+            self._loop.call_soon_threadsafe(snapshot)
+            return result.result(timeout=_VARIABLE_SNAPSHOT_TIMEOUT_S)
+        except Exception:  # noqa: BLE001 - timeout, closed loop, or a failed read: say so
+            return None
 
     def _send_raw(self, data: bytes) -> None:
         try:
@@ -1608,6 +1636,198 @@ class VaultBrowserDialog(wx.Dialog):
 
 # ShowModal return values for UpdateNotificationDialog (distinct from wx.ID_OK/CANCEL so the
 # caller can tell the buttons apart). wx.ID_HIGHEST is the top of wx's own reserved range.
+_NO_VARIABLES = (
+    "Nothing yet. MUD data arrives only from MUDs that support GMCP, MSDP or MSSP, "
+    "usually once you've logged in. Script values appear when a soundpack or one of "
+    "your scripts saves one."
+)
+_SNAPSHOT_FAILED = "The session didn't answer in time. Press Refresh to try again."
+
+
+class VariablesDialog(wx.Dialog):
+    """Every value this world knows: browse them, or pick one for a rule's field.
+
+    ``fetch`` returns ``(rows, truncated)`` from the session, or None when it didn't
+    answer. Browsing copies a reference to the clipboard; picking returns the chosen row
+    through :attr:`chosen` so the rule editor can insert its reference.
+    """
+
+    def __init__(
+        self,
+        parent: wx.Window,
+        fetch: Callable[[], tuple[list[VariableEntry], bool] | None],
+        *,
+        world_name: str,
+        pick: bool = False,
+        announce: Callable[[str], None] | None = None,
+    ) -> None:
+        title = "Insert a Variable" if pick else f"MUD Variables — {world_name}"
+        super().__init__(
+            parent, title=title, size=(640, 480),
+            style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER,
+        )
+        self._fetch = fetch
+        self._pick = pick
+        self._announce = announce or (lambda _text: None)
+        self._entries: list[VariableEntry] = []
+        self._shown: list[VariableEntry] = []
+        self._truncated = False
+        self._failed = False
+        self.chosen: VariableEntry | None = None
+
+        outer = wx.BoxSizer(wx.VERTICAL)
+        purpose = (
+            "Choose a value and press Insert to put it in the field."
+            if pick else
+            "Copy a value's reference to use it in a trigger, alias or hotkey."
+        )
+        intro = wx.StaticText(
+            self,
+            label=(
+                "Values this world has sent over GMCP, MSDP or MSSP, then values saved by "
+                f"scripts. {purpose}"
+            ),
+        )
+        intro.Wrap(600)
+        outer.Add(intro, 0, wx.ALL | wx.EXPAND, 10)
+
+        filter_row = wx.BoxSizer(wx.HORIZONTAL)
+        filter_row.Add(
+            wx.StaticText(self, label="&Filter:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6
+        )
+        self._filter = wx.TextCtrl(self)
+        self._filter.SetName("Filter")
+        self._filter.Bind(wx.EVT_TEXT, lambda _event: self._populate())
+        self._filter.Bind(wx.EVT_KEY_DOWN, self._on_filter_key)
+        filter_row.Add(self._filter, 1, wx.EXPAND)
+        outer.Add(filter_row, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 10)
+
+        self._list_label = wx.StaticText(self, label="&Variables:")
+        outer.Add(self._list_label, 0, wx.LEFT | wx.RIGHT, 10)
+        self._list = wx.ListBox(self, style=wx.LB_SINGLE)
+        self._list.SetName("Variables")
+        self._list.Bind(wx.EVT_LISTBOX, lambda _event: self._show_details())
+        self._list.Bind(wx.EVT_LISTBOX_DCLICK, self._on_activate)
+        self._list.Bind(wx.EVT_KEY_DOWN, self._on_list_key)
+        outer.Add(self._list, 1, wx.ALL | wx.EXPAND, 10)
+
+        outer.Add(wx.StaticText(self, label="&Details:"), 0, wx.LEFT | wx.RIGHT, 10)
+        self._details = wx.TextCtrl(
+            self, style=wx.TE_MULTILINE | wx.TE_READONLY, size=(-1, 72)
+        )
+        self._details.SetName("Details")
+        outer.Add(self._details, 0, wx.ALL | wx.EXPAND, 10)
+
+        buttons = wx.BoxSizer(wx.HORIZONTAL)
+        if pick:
+            self._action = wx.Button(self, wx.ID_OK, "&Insert")
+            self._action.Bind(wx.EVT_BUTTON, self._on_activate)
+            buttons.Add(self._action, 0, wx.RIGHT, 6)
+        else:
+            self._action = wx.Button(self, label="&Copy reference")
+            self._action.Bind(wx.EVT_BUTTON, self._on_activate)
+            buttons.Add(self._action, 0, wx.RIGHT, 6)
+        refresh = wx.Button(self, label="&Refresh")
+        refresh.Bind(wx.EVT_BUTTON, lambda _event: self._refresh(announce=True))
+        buttons.Add(refresh, 0, wx.RIGHT, 6)
+        buttons.Add(wx.Button(self, wx.ID_CANCEL, "Cancel" if pick else "Cl&ose"), 0)
+        outer.Add(buttons, 0, wx.ALL | wx.ALIGN_RIGHT, 10)
+        self.SetSizer(outer)
+        self.SetMinSize((520, 380))
+        self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
+
+        self._refresh()
+        if self._shown:
+            self._list.SetFocus()
+        else:
+            self._filter.SetFocus()
+
+    def _refresh(self, *, announce: bool = False) -> None:
+        """Read the session's values again, keeping the selected row where it still exists."""
+        keep = self._selected()
+        snapshot = self._fetch()
+        self._failed = snapshot is None
+        self._entries, self._truncated = snapshot if snapshot is not None else ([], False)
+        self._populate(keep)
+        if announce:
+            count = len(self._entries)
+            self._announce(
+                _SNAPSHOT_FAILED if self._failed
+                else f"{count} variable{'s' if count != 1 else ''}."
+            )
+
+    def _populate(self, keep: VariableEntry | None = None) -> None:
+        keep = keep or self._selected()
+        self._shown = filter_variables(self._entries, self._filter.GetValue())
+        self._list.Set([entry.row for entry in self._shown])
+        total = len(self._entries)
+        if self._filter.GetValue().strip():
+            count = f"{len(self._shown)} of {total}"
+        else:
+            count = f"{total}{', the first ones only' if self._truncated else ''}"
+        self._list_label.SetLabel(f"&Variables ({count}):")
+        if self._shown:
+            index = next(
+                (i for i, entry in enumerate(self._shown)
+                 if keep is not None and (entry.source, entry.name) == (keep.source, keep.name)),
+                0,
+            )
+            self._list.SetSelection(index)
+        self._show_details()
+
+    def _selected(self) -> VariableEntry | None:
+        index = self._list.GetSelection()
+        return self._shown[index] if 0 <= index < len(self._shown) else None
+
+    def _show_details(self) -> None:
+        entry = self._selected()
+        if entry is not None:
+            self._details.SetValue(entry.details)
+        elif self._failed:
+            self._details.SetValue(_SNAPSHOT_FAILED)
+        elif self._entries:
+            self._details.SetValue("No variable name contains that text.")
+        else:
+            self._details.SetValue(_NO_VARIABLES)
+        self._action.Enable(entry is not None)
+
+    def _on_activate(self, _event) -> None:
+        entry = self._selected()
+        if entry is None:
+            return
+        if self._pick:
+            self.chosen = entry
+            self.EndModal(wx.ID_OK)
+            return
+        if wx.TheClipboard.Open():
+            try:
+                wx.TheClipboard.SetData(wx.TextDataObject(entry.reference))
+            finally:
+                wx.TheClipboard.Close()
+            self._announce(f"Copied the reference to {entry.name}.")
+        else:
+            self._announce("The clipboard is busy; try again.")
+
+    def _on_filter_key(self, event: wx.KeyEvent) -> None:
+        # Down from the filter goes straight to the matches, as in a search box.
+        if event.GetKeyCode() == wx.WXK_DOWN and self._shown:
+            self._list.SetFocus()
+            return
+        event.Skip()
+
+    def _on_list_key(self, event: wx.KeyEvent) -> None:
+        if event.GetKeyCode() in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER):
+            self._on_activate(event)
+            return
+        event.Skip()
+
+    def _on_char_hook(self, event: wx.KeyEvent) -> None:
+        if event.GetKeyCode() == wx.WXK_F5:
+            self._refresh(announce=True)
+            return
+        event.Skip()
+
+
 class _KeyCaptureCtrl(wx.TextCtrl):
     """A read-only-ish field that records the key combination pressed in it.
 
@@ -1639,6 +1859,10 @@ class _KeyCaptureCtrl(wx.TextCtrl):
 
 class _RuleEditorBase(wx.Dialog):
     """Shared layout helpers for automation dialogs (NVDA: label precedes control)."""
+
+    # The session's variables, for the Insert a variable buttons; None hides the buttons
+    # (no live session to read from). Set by each editor before it builds its fields.
+    _variables: Callable[[], tuple[list[VariableEntry], bool] | None] | None = None
 
     def _grid(self) -> wx.FlexGridSizer:
         grid = wx.FlexGridSizer(0, 2, 6, 6)
@@ -1679,7 +1903,34 @@ class _RuleEditorBase(wx.Dialog):
         help_text_ctrl = wx.StaticText(self, label=detail)
         help_text_ctrl.Wrap(480)
         grid.Add(help_text_ctrl, 1, wx.EXPAND)
+        self._variable_button(grid, ctrl, "Insert a variable into the co&mmands...")
         return ctrl
+
+    def _variable_button(self, grid: wx.FlexGridSizer, target: wx.TextCtrl, label: str) -> None:
+        """A button, right after ``target``, that picks a variable and inserts its reference.
+
+        One button per field rather than one for "whichever field had focus": tabbing to a
+        shared button always passes through the field just before it, so a shared button
+        could never reach the other one.
+        """
+        if self._variables is None:
+            return
+        button = wx.Button(self, label=label)
+        button.Bind(wx.EVT_BUTTON, lambda _event: self._insert_variable(target))
+        grid.Add(wx.StaticText(self, label=""))
+        grid.Add(button)
+
+    def _insert_variable(self, target: wx.TextCtrl) -> None:
+        if self._variables is None:
+            return
+        picker = VariablesDialog(self, self._variables, world_name="", pick=True)
+        try:
+            chosen = picker.chosen if picker.ShowModal() == wx.ID_OK else None
+        finally:
+            picker.Destroy()
+        if chosen is not None:
+            target.WriteText(chosen.reference)  # at the caret, like typing it
+        target.SetFocus()  # back where the reference went, so it's read out
 
     def _slider(
         self, grid: wx.FlexGridSizer, label: str, value: int, low: int, high: int
@@ -1699,11 +1950,14 @@ class _RuleEditorBase(wx.Dialog):
 class TriggerEditorDialog(_RuleEditorBase):
     """Create/edit one user trigger: everything a scripted trigger can do, as fields."""
 
-    def __init__(self, parent: wx.Window, pack_dir: Path, trigger: UserTrigger) -> None:
+    def __init__(
+        self, parent: wx.Window, pack_dir: Path, trigger: UserTrigger, *, variables=None
+    ) -> None:
         super().__init__(
             parent, title="Trigger",
             style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER,
         )
+        self._variables = variables
         self._pack_dir = pack_dir
         self._enabled = trigger.enabled
         outer = wx.BoxSizer(wx.VERTICAL)
@@ -1737,6 +1991,7 @@ class TriggerEditorDialog(_RuleEditorBase):
         grid.Add(wx.StaticText(self, label=""))
         grid.Add(self._loop)
         self._speak = self._text(grid, "Spea&k this text (%1 = first wildcard):", trigger.speak)
+        self._variable_button(grid, self._speak, "Insert a v&ariable into the speech...")
         self._send = self._command_text(grid, trigger.send, captures=True)
         self._interrupt = wx.CheckBox(
             self, label="&Interrupt current speech the moment this fires"
@@ -1794,11 +2049,12 @@ class TriggerEditorDialog(_RuleEditorBase):
 
 
 class AliasEditorDialog(_RuleEditorBase):
-    def __init__(self, parent: wx.Window, alias: UserAlias) -> None:
+    def __init__(self, parent: wx.Window, alias: UserAlias, *, variables=None) -> None:
         super().__init__(
             parent, title="Alias",
             style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER,
         )
+        self._variables = variables
         self._enabled = alias.enabled
         outer = wx.BoxSizer(wx.VERTICAL)
         grid = self._grid()
@@ -1811,6 +2067,7 @@ class AliasEditorDialog(_RuleEditorBase):
         grid.Add(self._regex)
         self._send = self._command_text(grid, alias.send, captures=True)
         self._speak = self._text(grid, "Spea&k this confirmation (optional):", alias.speak)
+        self._variable_button(grid, self._speak, "Insert a v&ariable into the speech...")
         self._finish(outer, grid)
 
     def result(self) -> UserAlias:
@@ -1824,11 +2081,14 @@ class AliasEditorDialog(_RuleEditorBase):
 
 
 class KeyEditorDialog(_RuleEditorBase):
-    def __init__(self, parent: wx.Window, pack_dir: Path, key: UserKey) -> None:
+    def __init__(
+        self, parent: wx.Window, pack_dir: Path, key: UserKey, *, variables=None
+    ) -> None:
         super().__init__(
             parent, title="Hotkey",
             style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER,
         )
+        self._variables = variables
         self._pack_dir = pack_dir
         self._enabled = key.enabled
         outer = wx.BoxSizer(wx.VERTICAL)
@@ -1840,6 +2100,7 @@ class KeyEditorDialog(_RuleEditorBase):
         grid.Add(self._key, 1, wx.EXPAND)
         self._send = self._command_text(grid, key.send, captures=False)
         self._speak = self._text(grid, "Spea&k this text:", key.speak)
+        self._variable_button(grid, self._speak, "Insert a v&ariable into the speech...")
         self._sound = self._text(grid, "Play this s&ound (optional):", key.sound)
         browse = wx.Button(self, label="&Browse for sound...")
         browse.Bind(wx.EVT_BUTTON, self._on_browse)
@@ -2189,12 +2450,13 @@ class AutomationManagerDialog(wx.Dialog):
         return True
 
     def _edit_rule(self, kind: str, rule):
+        variables = self._panel.variable_snapshot
         if kind == "trigger":
-            dialog = TriggerEditorDialog(self, self._pack_dir, rule)
+            dialog = TriggerEditorDialog(self, self._pack_dir, rule, variables=variables)
         elif kind == "alias":
-            dialog = AliasEditorDialog(self, rule)
+            dialog = AliasEditorDialog(self, rule, variables=variables)
         elif kind == "key":
-            dialog = KeyEditorDialog(self, self._pack_dir, rule)
+            dialog = KeyEditorDialog(self, self._pack_dir, rule, variables=variables)
         else:
             dialog = ChannelEditorDialog(self, rule)
         try:
@@ -2719,6 +2981,10 @@ class GenericMudFrame(wx.Frame):
         automation_item = automation_menu.Append(
             wx.ID_ANY, "&Manage automation...\tCtrl+B"
         )
+        variables_item = automation_menu.Append(
+            wx.ID_ANY, "MUD &variables...\tCtrl+Shift+V",
+            "Read the values this MUD has sent (GMCP, MSDP, MSSP) and the ones scripts saved",
+        )
         automation_menu.AppendSeparator()
         automation_help_item = automation_menu.Append(wx.ID_ANY, "Automation &help...")
         menubar.Append(automation_menu, "&Automation")
@@ -2771,6 +3037,7 @@ class GenericMudFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, self._on_export_world, export_item)
         self.Bind(wx.EVT_MENU, self._on_import_world, import_item)
         self.Bind(wx.EVT_MENU, self._on_automation_manager, automation_item)
+        self.Bind(wx.EVT_MENU, self._on_mud_variables, variables_item)
         self.Bind(
             wx.EVT_MENU,
             lambda _e: self._show_help("Automation help", help_text.SCRIPTING),
@@ -3012,6 +3279,18 @@ class GenericMudFrame(wx.Frame):
             self.announce("This session isn't ready yet.")
             return
         dialog = AutomationManagerDialog(self, panel, announce=self.announce)
+        dialog.ShowModal()
+        dialog.Destroy()
+
+    def _on_mud_variables(self, _event: wx.CommandEvent) -> None:
+        index = self.book.GetSelection()
+        if index == wx.NOT_FOUND or not self.book.GetPageCount():
+            self.announce("Open a session first; variables belong to a connected world.")
+            return
+        panel = self.book.GetPage(index)
+        dialog = VariablesDialog(
+            self, panel.variable_snapshot, world_name=panel.world.name, announce=self.announce
+        )
         dialog.ShowModal()
         dialog.Destroy()
 

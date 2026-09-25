@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 
 from genericmud.automation.channels import ChannelPolicy
 from genericmud.automation.engine import AutomationEngine, Callback, EngineSink, MatchContext
+from genericmud.automation.variables import VariableEntry, list_variables
 from genericmud.bridge import protocol
 from genericmud.completion import OutputWordIndex
 from genericmud.config.atomic import atomic_write_text
@@ -292,6 +293,14 @@ class EngineApp:
         self.codec = ServerTextCodec(encoding, on_latch=self._on_encoding_latch)
         self._msdp_routed = 0  # subnegotiation count, for throttling the diag trace
         self._prompt_gen = 0  # bumps per data chunk so a stale idle prompt-flush no-ops
+
+    def variable_listing(self) -> tuple[list[VariableEntry], bool]:
+        """Every value this session knows, for the MUD Variables dialog and the picker.
+
+        Reads live engine state, so call it on the loop thread; the rows are plain frozen
+        values, safe to hand to the UI thread afterwards.
+        """
+        return list_variables(self.engine.all_mud_vars(), self.engine.all_vars())
 
     # --- soundpacks ---
 

@@ -1,15 +1,29 @@
-"""Speech that reads MUD data and script values (issue #4)."""
+"""Reading MUD data and script values (issue #4): the listing, and speech that uses them."""
 
 from __future__ import annotations
 
+from genericmud.app import EngineApp
 from genericmud.automation.engine import AutomationEngine
-from genericmud.automation.variables import format_value
+from genericmud.automation.variables import (
+    GMCP,
+    MSDP,
+    MSSP,
+    ROW_VALUE_CHARS,
+    SCRIPT,
+    VariableEntry,
+    filter_variables,
+    format_value,
+    list_variables,
+)
+from genericmud.config.keymap import load_keymap
 from genericmud.model.buffer import Line
 from genericmud.packs import user_rules
 from genericmud.packs.user_rules import UserAlias, UserKey, UserRules, UserTrigger, register_rules
+from genericmud.protocol import msdp
+from genericmud.protocol.telnet import OPT_GMCP, OPT_MSDP, OPT_MSSP, Subnegotiation
 from genericmud.scripting.api import ScriptApi
-from genericmud.voice.router import REVIEW_CHANNEL
-from tests.helpers import RecordingSink
+from genericmud.voice.router import REVIEW_CHANNEL, VoiceRouter
+from tests.helpers import RecordingBackend, RecordingSink
 
 
 def _register(rules: UserRules, tmp_path) -> tuple[RecordingSink, AutomationEngine]:
@@ -17,6 +31,110 @@ def _register(rules: UserRules, tmp_path) -> tuple[RecordingSink, AutomationEngi
     engine = AutomationEngine(sink)
     register_rules(ScriptApi(engine, source=user_rules.SOURCE, base_dir=str(tmp_path)), rules)
     return sink, engine
+
+
+def _app() -> EngineApp:
+    voice = VoiceRouter(RecordingBackend(), clock=lambda: 0.0)
+    return EngineApp(voice, keymap=load_keymap("vipmud"))
+
+
+def _names(entries: list[VariableEntry]) -> list[str]:
+    return [entry.name for entry in entries]
+
+
+# --- the listing ---
+
+
+def test_gmcp_tables_flatten_to_the_paths_references_use():
+    entries, truncated = list_variables(
+        {
+            "Char.Vitals": {"hp": 90, "maxhp": 100},
+            "gmcp.Char.Vitals": {"hp": 90, "maxhp": 100},
+        },
+        {},
+    )
+    assert not truncated
+    assert _names(entries) == ["Char.Vitals.hp", "Char.Vitals.maxhp"]  # not listed twice
+    hp = entries[0]
+    assert (hp.value, hp.source, hp.reference) == ("90", GMCP, "${mud:Char.Vitals.hp}")
+
+
+def test_every_reference_the_list_offers_resolves_to_the_value_shown():
+    app = _app()
+    app.on_telnet_event(Subnegotiation(OPT_GMCP, b'Char.Vitals {"hp":42,"mp":7}'))
+    app.on_telnet_event(Subnegotiation(OPT_GMCP, b'Room.Info {"name":"Temple","exits":{"n":5}}'))
+    app.on_telnet_event(
+        Subnegotiation(OPT_MSDP, msdp.encode_msdp("HEALTH", "500"))
+    )
+    app.on_telnet_event(Subnegotiation(OPT_MSSP, b"\x01NAME\x02Test MUD"))
+    app.engine.set_var("target", "goblin")
+    entries, _truncated = app.variable_listing()
+    by_name = {entry.name: entry for entry in entries}
+    for name, source, value in (
+        ("Char.Vitals.hp", GMCP, "42"),
+        ("Room.Info.exits.n", GMCP, "5"),
+        ("HEALTH", MSDP, "500"),
+        ("NAME", MSSP, "Test MUD"),
+        ("target", SCRIPT, "goblin"),
+    ):
+        entry = by_name[name]
+        assert (entry.source, entry.value) == (source, value)
+        api = ScriptApi(app.engine)
+        assert api.expand_speech(entry.reference) == value
+
+
+def test_mud_data_comes_first_grouped_by_protocol_then_script_values():
+    entries, _ = list_variables(
+        {"mssp.PLAYERS": "3", "msdp.HEALTH": "5", "gmcp.b": 1, "gmcp.A": 2},
+        {"zeta": "1", "alpha": "2"},
+    )
+    assert [(entry.source, entry.name) for entry in entries] == [
+        (GMCP, "A"), (GMCP, "b"), (MSDP, "HEALTH"), (MSSP, "PLAYERS"),
+        (SCRIPT, "alpha"), (SCRIPT, "zeta"),
+    ]
+
+
+def test_lists_stay_one_row_and_values_format_like_expansion():
+    entries, _ = list_variables(
+        {"gmcp.Char.Items": {"list": [{"id": 1}, {"id": 2}], "flag": True, "none": None,
+                             "empty": {}}},
+        {},
+    )
+    by_name = {entry.name: entry.value for entry in entries}
+    assert by_name == {
+        "Char.Items.list": '[{"id":1},{"id":2}]',
+        "Char.Items.flag": "true",
+        "Char.Items.none": "",
+        "Char.Items.empty": "{}",
+    }
+    assert format_value(True) == "true" and format_value(None) == ""
+
+
+def test_the_server_cannot_grow_the_list_without_bound():
+    flood = {f"gmcp.Spam.{index}": index for index in range(50)}
+    entries, truncated = list_variables(flood, {}, limit=10)
+    assert len(entries) == 10 and truncated
+    deep: dict = {"leaf": 1}
+    for _ in range(40):
+        deep = {"d": deep}
+    entries, _ = list_variables({"gmcp.Deep": deep}, {})
+    assert len(entries) == 1  # past the depth cap the rest is one JSON row
+
+
+def test_rows_read_as_speech_and_details_carry_the_reference():
+    entry = VariableEntry("Char.Vitals.hp", "90", GMCP)
+    assert entry.row == "Char.Vitals.hp, 90, GMCP"
+    assert "Use it as: ${mud:Char.Vitals.hp}" in entry.details
+    long_entry = VariableEntry("Blob", "x" * 500, SCRIPT)
+    assert len(long_entry.row) < ROW_VALUE_CHARS + 30
+    assert VariableEntry("Empty", "", SCRIPT).row == "Empty, empty, script"
+    assert VariableEntry("target", "orc", SCRIPT).reference == "${script:target}"
+
+
+def test_filter_matches_any_part_of_the_name_in_any_case():
+    entries = [VariableEntry("Char.Vitals.hp", "1", GMCP), VariableEntry("HEALTH", "2", MSDP)]
+    assert _names(filter_variables(entries, "VITALS")) == ["Char.Vitals.hp"]
+    assert _names(filter_variables(entries, "  ")) == ["Char.Vitals.hp", "HEALTH"]
 
 
 # --- speech that reads variables ---

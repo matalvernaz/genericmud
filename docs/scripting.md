@@ -350,6 +350,14 @@ order:
 Use `${script:name}` or `${mud:name}` when you want to be clear about the source
 or when two sources use the same name.
 
+### Find the names your MUD uses
+
+Every MUD names its data differently, so look before you type. Press
+**Ctrl+Shift+V** for the list of every value the MUD has sent this session and
+every value scripts have saved, each with the reference that reads it. The
+**Insert a variable** buttons in the trigger, alias and hotkey editors put a
+chosen reference straight into a field.
+
 ### Speak a value without writing code
 
 Speech fields take the same variables as command fields. A hotkey with no

@@ -278,6 +278,20 @@ and its name, rather than staying silent. A hotkey or alias speaks its answer
 straight away, cutting off whatever was being read, the way a review key does,
 and it still speaks with self-voice turned off.
 
+### Finding out what the MUD sends
+
+**Ctrl+Shift+V** (Automation menu, MUD variables) lists every value this world
+knows: the GMCP, MSDP and MSSP data the MUD has sent this session, one line per
+value such as `Char.Vitals.hp, 90, GMCP`, then the values soundpacks and scripts
+have saved. Type in **Filter** to narrow the list, and press **Enter** on a line
+to copy the reference that reads it, such as `${mud:Char.Vitals.hp}`. **F5**
+refreshes the values. The list fills only on MUDs that send GMCP, MSDP or MSSP,
+usually once you've logged in.
+
+In the trigger, alias and hotkey editors, **Insert a variable into the speech**
+and **Insert a variable into the commands** open the same list; choose a value
+and press **Insert** to put its reference where the cursor was in that field.
+
 Use **Duplicate** to start from an existing item. **Disable** keeps a trigger,
 alias, hotkey, or channel saved without letting it run. Changes work on the next
 matching line.
@@ -389,9 +403,11 @@ View, **Alt+H** Help.
 | Ctrl+P | Manage soundpacks |
 | Ctrl+Shift+B | Browse soundpacks online |
 | Ctrl+B | Open the Automation Manager |
+| Ctrl+Shift+V | List the values the MUD has sent and scripts have saved |
 | Ctrl+1..5 in Automation Manager | Show triggers / aliases / hotkeys / channels / scripts |
 | Ctrl+N in Automation Manager | Create an item in the category being shown |
 | Enter / Delete in an automation list | Edit / delete the selected item |
+| Enter / F5 in the variables list | Copy the reference / refresh the values |
 | F2 in the Scripts list | Rename the selected script |
 | Alt+Shift+L | Log this session to a file |
 | Alt+Shift+D | Speak the diagnostic log location and summary |

@@ -100,6 +100,12 @@ ${mud:Char.Vitals.hp} health reads your health when you press it, without sendin
 anything. A missing value is spoken as "no value for" and its name. Hotkey and
 alias speech is spoken at once, like a review key, even with self-voice off.
 
+Ctrl+Shift+V, or Automation menu, MUD variables, lists every value this world has:
+GMCP, MSDP and MSSP data from the MUD, then values saved by scripts. Type to filter,
+press Enter to copy a value's reference, and F5 to refresh. In the trigger, alias,
+and hotkey editors, the Insert a variable buttons choose a value from the same list
+and put its reference in the speech or the commands.
+
 Choose Duplicate to start from a copy. Disable keeps an item saved without
 letting it run. Ctrl+1 through Ctrl+5 change categories, Ctrl+N creates an item,
 Enter edits, and Delete deletes after confirmation. F2 renames a script.
@@ -258,13 +264,17 @@ Alt+M             Read this room and where its exits lead
 Tools:
 Ctrl+P            Manage soundpacks
 Ctrl+B            Open the Automation Manager
+Ctrl+Shift+V      List the MUD's variables and script values
 Ctrl+Shift+B      Browse soundpacks online
 Automation Manager:
 Ctrl+1 to 5       Show triggers, aliases, hotkeys, channels, or scripts
 Ctrl+N            Create an item in the category being shown
 Enter / Delete    Edit / delete the selected item
 F2                Rename the selected script
-Automation menu   Manage per-world automation; open automation help
+Variables list:
+Enter             Copy the selected value's reference
+F5                Refresh the values
+Automation menu   Manage per-world automation; list MUD variables; automation help
 Alt+Shift+L       Log this session to a file
 Alt+Shift+D       Speak the diagnostic log location and summary
 """
