@@ -3358,6 +3358,16 @@ class GenericMudFrame(wx.Frame):
             self.book.GetPage(i).set_active(i == selected and self._self_voice and audible)
 
 
+def _world_from_args(args) -> World | None:
+    """The world to auto-connect for ``genericmud host port [--tls] [--sounds] [--encoding]``."""
+    if not args.host:
+        return None
+    return World(
+        name=args.host, host=args.host, port=args.port, tls=args.tls,
+        sounds=args.sounds, encoding=getattr(args, "encoding", AUTO),
+    )
+
+
 def run(args, recovery=None) -> None:
     loop = asyncio.new_event_loop()
     install_loop_exception_handler(loop)  # capture engine-thread coroutine crashes
@@ -3366,13 +3376,8 @@ def run(args, recovery=None) -> None:
     wx_app = wx.App(False)
     frame = GenericMudFrame(loop, load_keymap("vipmud"))
     frame.Show()
-    if args.host:
-        frame.open_session(
-            World(
-                name=args.host, host=args.host, port=args.port, tls=args.tls,
-                encoding=getattr(args, "encoding", AUTO),
-            )
-        )
+    if (world := _world_from_args(args)) is not None:
+        frame.open_session(world)
     else:
         # A blank first launch was silent; give a blind user the way in. Deferred so it
         # speaks after the window is up, not over the screen reader announcing the window.

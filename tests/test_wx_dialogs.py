@@ -98,3 +98,18 @@ def test_connect_dialog_names_a_non_automatic_encoding(frame):
         assert "Encoding" not in details["Aard"]
     finally:
         dialog.Destroy()
+
+
+def test_command_line_world_keeps_every_option():
+    # `genericmud host port --sounds DIR` in the native UI used to drop the sounds folder,
+    # so a MUD's sound cues had nowhere to resolve from.
+    from genericmud.__main__ import _parse_args
+    from genericmud.ui.wx_app import _world_from_args
+
+    args = _parse_args(
+        ["mud.example", "4000", "--tls", "--sounds", "/sounds", "--encoding", "koi8-r"]
+    )
+    assert _world_from_args(args) == World(
+        "mud.example", "mud.example", 4000, tls=True, sounds="/sounds", encoding="koi8-r"
+    )
+    assert _world_from_args(_parse_args([])) is None
