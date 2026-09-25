@@ -135,3 +135,15 @@ def test_expand_speedwalk_rejects_zero_count_leg():
     # the rest with no indication. Reject the whole run so it falls back to a literal command.
     assert expand_speedwalk("3n0e") == []
     assert expand_speedwalk("0n") == []
+
+
+def test_directions_typed_in_full_record_the_same_step():
+    # "north" moves the player exactly as "n" does, but only "n" used to make the trail,
+    # so Alt+R's way home skipped every step typed out in full (and follow mode, which
+    # listens for the same signal, didn't interrupt on them either).
+    nav = Navigator()
+    for typed in ("North", "east", "northeast", "up", "SouthWest"):
+        assert nav.record(typed) is True
+    assert nav.trail == ["n", "e", "ne", "u", "sw"]
+    assert nav.retrace() == ["ne", "d", "sw", "w", "s"]
+    assert nav.record("northward") is False

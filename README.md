@@ -188,7 +188,7 @@ retrace are already on their way to the MUD by the time you could press it.
 ### The breadcrumb trail
 
 genericMud keeps a record of the compass moves you make — pressed on the numpad,
-typed short as `n` or `se`, or sent by either kind of walk. That record is the
+typed as `n` or `north`, or sent by either kind of walk. That record is the
 trail, and **Alt+R** turns it into the way home: the same steps in reverse, each
 one flipped to its opposite.
 
@@ -206,12 +206,10 @@ forgets the trail on the assumption you made it. It won't stop partway if a door
 has closed behind you, so on a route that might have changed, listen to the
 output as it goes and drop a fresh breadcrumb once you're somewhere known.
 
-Two things don't make it into the trail, because genericMud never sees a
-direction for them. One is any move that isn't a compass direction: `enter
-portal`, a teleport, a mount that carries you off, or an exit your MUD names in
-words. The other is a direction typed out in full — `north` sends and works, but
-only the short `n` records a step. After either, the way back isn't in the trail,
-so drop a new breadcrumb with **Alt+B**.
+Some moves don't make it into the trail, because genericMud never sees a
+compass direction for them: `enter portal`, a teleport, a mount that carries you
+off, or an exit your MUD names in words. After one of those, the way back isn't in
+the trail, so drop a new breadcrumb with **Alt+B**.
 
 ### Where am I
 

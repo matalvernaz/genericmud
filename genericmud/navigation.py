@@ -20,6 +20,13 @@ OPPOSITE = {
     "u": "d", "d": "u",
 }
 DIRECTIONS = frozenset(OPPOSITE)
+# The same moves typed out in full. They move the player exactly as the short forms do,
+# so they belong on the trail, recorded short so a retrace sends what a speedwalk would.
+_FULL_NAMES = {
+    "north": "n", "south": "s", "east": "e", "west": "w",
+    "northeast": "ne", "northwest": "nw", "southeast": "se", "southwest": "sw",
+    "up": "u", "down": "d",
+}
 # Two-char directions must be tried before one-char so "ne" doesn't read as "n"+"e".
 _TOKEN = re.compile(r"(\d*)(ne|nw|se|sw|n|s|e|w|u|d)")
 _MAX_SPEEDWALK_STEPS = 1000  # a real route is tens of steps; a typo like ".999999999n" is refused
@@ -80,6 +87,7 @@ class Navigator:
     def record(self, direction: str) -> bool:
         """Append a movement step. Returns False (and ignores) a non-direction."""
         direction = direction.strip().lower()
+        direction = _FULL_NAMES.get(direction, direction)
         if direction not in DIRECTIONS:
             return False
         self.trail.append(direction)
