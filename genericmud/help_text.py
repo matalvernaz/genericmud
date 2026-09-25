@@ -97,8 +97,8 @@ speaks the problem once.
 
 Speech fields accept the same variables. A hotkey whose speech is
 ${mud:Char.Vitals.hp} health reads your health when you press it, without sending
-anything. A missing value is spoken as "no value for" and its name. Hotkey and
-alias speech is spoken at once, like a review key, even with self-voice off.
+anything. A missing value is spoken as "no value for" and its name. Hotkey
+speech is spoken at once, like a review key, even with self-voice off.
 
 Ctrl+Shift+V, or Automation menu, MUD variables, lists every value this world has:
 GMCP, MSDP and MSSP data from the MUD, then values saved by scripts. Type to filter,

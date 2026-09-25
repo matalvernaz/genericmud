@@ -319,11 +319,14 @@ def _register_trigger(api: ScriptApi, t: UserTrigger) -> None:
     )
 
 
-# An alias's or hotkey's speech answers something the player just did, like a review key
-# does, so it goes on the review channel: straight away, not queued behind a screenful of
-# MUD output, not coalesced by the main channel's flood governor, and still spoken with
-# self-voice off (Ctrl+M), when the player is reading the output box themselves.
-_REPLY_CHANNEL = REVIEW_CHANNEL
+# A hotkey's speech answers a key the player just pressed, like a review key does, so it
+# goes on the review channel: straight away, not queued behind a screenful of MUD output,
+# not coalesced by the main channel's flood governor, and still spoken with self-voice off
+# (Ctrl+M). Only hotkeys: keys only ever reach the tab in front. An alias can also fire in a
+# background tab -- /to from another tab, mud.send_to, a pack's Execute -- and the review
+# channel speaks through the mute that keeps background tabs quiet, so an alias there would
+# talk over, and with interrupt cut off, the session the player is actually in.
+_KEY_REPLY_CHANNEL = REVIEW_CHANNEL
 
 
 def _register_alias(api: ScriptApi, a: UserAlias) -> None:
@@ -332,7 +335,7 @@ def _register_alias(api: ScriptApi, a: UserAlias) -> None:
     def fire(ctx: MatchContext) -> None:
         sent = send_commands(ctx)
         if a.speak and sent:
-            api.speak(_speech(api, a.speak, ctx), channel=_REPLY_CHANNEL, interrupt=True)
+            api.speak(_speech(api, a.speak, ctx))
 
     api.add_alias(a.pattern, fire, regex=a.regex, source=SOURCE)
 
@@ -344,7 +347,7 @@ def _register_key(api: ScriptApi, k: UserKey) -> None:
         if k.sound:
             api.play(k.sound, channel="user-key")
         if k.speak:
-            api.speak(_speech(api, k.speak), channel=_REPLY_CHANNEL, interrupt=True)
+            api.speak(_speech(api, k.speak), channel=_KEY_REPLY_CHANNEL, interrupt=True)
         send_commands()
 
     api.add_key(k.key, fire)

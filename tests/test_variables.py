@@ -168,7 +168,10 @@ def test_an_alias_can_read_a_value_without_sending_anything(tmp_path):
     engine.set_mud_var("MAX", 80)
     assert engine.process_input("hp") == []
     assert sink.sent == []
-    assert sink.spoken == [("50 of 80", REVIEW_CHANNEL, True)]
+    # On the main channel, like before: an alias can fire in a background tab (/to,
+    # mud.send_to, a pack's Execute), and the review channel speaks through the mute
+    # that keeps background tabs quiet.
+    assert sink.spoken == [("50 of 80", "main", False)]
 
 
 def test_trigger_speech_fills_captures_and_script_values(tmp_path):
@@ -203,3 +206,21 @@ def test_command_expansion_still_refuses_a_missing_value():
 def test_values_read_the_way_commands_would_put_them():
     assert format_value({"hp": 1}) == '{"hp":1}'
     assert format_value(True) == "true" and format_value(None) == ""
+
+
+def test_an_alias_fired_in_a_background_tab_stays_quiet(tmp_path):
+    # /to from another tab reaches this session through _dispatch_remote. The tab is in
+    # the background, so its voice is muted; the alias's reply must not speak through
+    # that mute, or cut off the tab the player is actually in.
+    from genericmud.app import EngineApp
+    from genericmud.voice.router import VoiceRouter
+    from tests.helpers import RecordingBackend
+
+    backend = RecordingBackend()
+    app = EngineApp(VoiceRouter(backend, clock=lambda: 0.0))
+    rules = UserRules(aliases=[UserAlias(pattern="hp", speak="${mud:HEALTH} health")])
+    register_rules(ScriptApi(app.engine, source=user_rules.SOURCE, base_dir=str(tmp_path)), rules)
+    app.engine.set_mud_var("HEALTH", 50)
+    app.voice.set_muted(True)  # what SessionPanel._apply_active does for a background tab
+    app._dispatch_remote("hp")
+    assert backend.spoken == [] and backend.stops == 0

@@ -272,9 +272,9 @@ available, none of that sequence is sent and genericMud speaks the problem once.
 The speech fields understand the same variables, so a hotkey whose speech is
 `${mud:Char.Vitals.hp} health` reads your health out when you press it, with no
 commands at all. A value the MUD hasn't sent yet is spoken as "no value for"
-and its name, rather than staying silent. A hotkey or alias speaks its answer
-straight away, cutting off whatever was being read, the way a review key does,
-and it still speaks with self-voice turned off.
+and its name, rather than staying silent. A hotkey speaks its answer straight
+away, cutting off whatever was being read, the way a review key does, and it
+still speaks with self-voice turned off.
 
 ### Finding out what the MUD sends
 
