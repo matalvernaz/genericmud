@@ -8,12 +8,22 @@ world directory.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 MSSP_VAR = 1
 MSSP_VAL = 2
 _CONTROL = bytes([MSSP_VAR, MSSP_VAL])
 
 
-def parse_mssp(payload: bytes) -> dict[str, str | list[str]]:
+def _utf8(data: bytes) -> str:
+    return data.decode("utf-8", "replace")
+
+
+def parse_mssp(
+    payload: bytes, decode: Callable[[bytes], str] = _utf8
+) -> dict[str, str | list[str]]:
+    """Parse an MSSP payload. ``decode`` turns each name and value into text; the MSSP
+    spec names no encoding, so a legacy MUD's name can arrive in its own."""
     out: dict[str, str | list[str]] = {}
     i = 0
     n = len(payload)
@@ -22,19 +32,21 @@ def parse_mssp(payload: bytes) -> dict[str, str | list[str]]:
             i += 1
             continue
         i += 1
-        name, i = _read_until_control(payload, i, n)
+        name, i = _read_until_control(payload, i, n, decode)
         if i < n and payload[i] == MSSP_VAL:
             i += 1
-            value, i = _read_until_control(payload, i, n)
+            value, i = _read_until_control(payload, i, n, decode)
             _accumulate(out, name, value)
     return out
 
 
-def _read_until_control(data: bytes, i: int, n: int) -> tuple[str, int]:
+def _read_until_control(
+    data: bytes, i: int, n: int, decode: Callable[[bytes], str]
+) -> tuple[str, int]:
     start = i
     while i < n and data[i] not in _CONTROL:
         i += 1
-    return data[start:i].decode("utf-8", "replace"), i
+    return decode(data[start:i]), i
 
 
 def _accumulate(out: dict[str, str | list[str]], name: str, value: str) -> None:

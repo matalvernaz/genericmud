@@ -295,3 +295,39 @@ def test_auto_sends_utf8_until_the_mud_proves_legacy_then_windows_1252():
     assert codec.encode("señor") == "señor".encode("cp1252")
     codec.reset()  # reconnected: UTF-8 again until proven otherwise
     assert codec.encode("señor") == "señor".encode()
+
+
+# --- text inside GMCP, MSDP and MSSP payloads ---
+
+
+def test_a_legacy_muds_msdp_room_name_reads_in_the_world_encoding():
+    from genericmud.protocol import msdp
+
+    app = _app("koi8-r")
+    payload = bytes([msdp.MSDP_VAR]) + b"ROOM_NAME" + bytes([msdp.MSDP_VAL]) + "Площадь".encode(
+        "koi8-r"
+    )
+    app.on_telnet_event(Subnegotiation(T.OPT_MSDP, payload))
+    assert app.engine.get_mud_var("ROOM_NAME") == "Площадь"
+
+
+def test_gmcp_stays_utf8_even_on_a_legacy_world():
+    # GMCP is UTF-8 by spec; a compliant server on a KOI8-R world still sends UTF-8 JSON.
+    app = _app("koi8-r")
+    app.on_telnet_event(Subnegotiation(T.OPT_GMCP, 'Room.Info {"name":"Площадь"}'.encode()))
+    assert app.engine.get_mud_var("Room.Info.name") == "Площадь"
+
+
+def test_a_non_utf8_gmcp_payload_falls_back_to_the_world_encoding():
+    app = _app("cp1251")
+    app.on_telnet_event(
+        Subnegotiation(T.OPT_GMCP, 'Room.Info {"name":"Площадь"}'.encode("cp1251"))
+    )
+    assert app.engine.get_mud_var("Room.Info.name") == "Площадь"
+
+
+def test_auto_reads_a_latin1_mssp_name_instead_of_replacement_characters():
+    app = _app(AUTO)
+    app.on_telnet_event(Subnegotiation(T.OPT_MSSP, b"\x01NAME\x02Caf\xe9 del Mar"))
+    assert app.engine.get_mud_var("NAME") == "Café del Mar"
+    assert not app.codec.latched  # a payload never moves the text stream's latch

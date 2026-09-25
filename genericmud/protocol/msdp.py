@@ -13,6 +13,7 @@ the nesting; scalars are strings (MSDP is untyped on the wire).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 MSDP_VAR = 1
@@ -76,8 +77,14 @@ def encode_msdp(command: str, value: str) -> bytes:
     )
 
 
-def parse_msdp(payload: bytes) -> dict[str, Any]:
-    return _MsdpParser(payload).parse_table_body(top=True)
+def _utf8(data: bytes) -> str:
+    return data.decode("utf-8", "replace")
+
+
+def parse_msdp(payload: bytes, decode: Callable[[bytes], str] = _utf8) -> dict[str, Any]:
+    """Parse an MSDP payload. ``decode`` turns each name and value into text: the MSDP
+    spec names no encoding, so a MUD on KOI8-R sends its room names in KOI8-R."""
+    return _MsdpParser(payload, decode).parse_table_body(top=True)
 
 
 def _too_deep(depth: int) -> bool:
@@ -85,8 +92,9 @@ def _too_deep(depth: int) -> bool:
 
 
 class _MsdpParser:
-    def __init__(self, data: bytes) -> None:
+    def __init__(self, data: bytes, decode: Callable[[bytes], str] = _utf8) -> None:
         self._data = data
+        self._decode = decode
         self._i = 0
         self._n = len(data)
 
@@ -115,7 +123,7 @@ class _MsdpParser:
         start = self._i
         while self._i < self._n and self._data[self._i] not in _CONTROL:
             self._i += 1
-        return self._data[start : self._i].decode("utf-8", "replace")
+        return self._decode(self._data[start : self._i])
 
     def _read_value(self, depth: int) -> Any:
         b = self._peek()

@@ -746,7 +746,7 @@ class EngineApp:
             )
 
     def _handle_subnegotiation(self, sub: T.Subnegotiation) -> None:
-        result = from_subnegotiation(sub.option, sub.payload)
+        result = from_subnegotiation(sub.option, sub.payload, self.codec.decode_payload)
         if isinstance(result, list):
             msdp_room_changed = False
             for message in result:

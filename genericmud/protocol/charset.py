@@ -140,6 +140,24 @@ class ServerTextCodec:
             return self._decoder.decode(data)
         return self._decode_auto(data)
 
+    def decode_payload(self, data: bytes) -> str:
+        """Text inside a GMCP, MSDP or MSSP payload.
+
+        GMCP must be UTF-8 and the other two name no encoding at all, so a payload that
+        is valid UTF-8 is read as UTF-8, and one that isn't is read in the world's
+        encoding: a KOI8-R MUD's MSDP room name arrives in KOI8-R. Cyrillic, Greek or
+        Western European text in a legacy encoding is practically never valid UTF-8 by
+        accident, so the order can't misread either kind. On ``auto`` the fallback is
+        the same Windows-1252 the text stream latches to. Payloads never move the latch.
+        """
+        try:
+            return data.decode("utf-8")
+        except UnicodeDecodeError:
+            pass
+        if self.encoding == AUTO:
+            return data.decode("latin-1").translate(CP1252_C1_TABLE)
+        return data.decode(self.encoding, errors="replace")
+
     def encode(self, text: str) -> bytes:
         """Encode a typed command; a character the encoding lacks is sent as "?"."""
         if self.encoding != AUTO:

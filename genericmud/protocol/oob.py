@@ -8,6 +8,7 @@ of which protocol a given server speaks. MSSP normalizes to ``ServerStatus``.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -29,18 +30,27 @@ class ServerStatus:
     data: dict[str, str | list[str]]
 
 
-def from_subnegotiation(option: int, payload: bytes) -> list[OobMessage] | ServerStatus | None:
+def _utf8(data: bytes) -> str:
+    return data.decode("utf-8", "replace")
+
+
+def from_subnegotiation(
+    option: int, payload: bytes, decode: Callable[[bytes], str] = _utf8
+) -> list[OobMessage] | ServerStatus | None:
     """Normalize a telnet subnegotiation into out-of-band messages.
 
     Returns a list of :class:`OobMessage` for GMCP/MSDP (GMCP yields one,
     MSDP yields one per top-level variable), a :class:`ServerStatus` for MSSP,
-    or ``None`` for options handled elsewhere.
+    or ``None`` for options handled elsewhere. ``decode`` turns payload text into
+    ``str`` (see ``ServerTextCodec.decode_payload``).
     """
     if option == T.OPT_GMCP:
-        message = parse_gmcp(payload)
+        message = parse_gmcp(payload, decode)
         return [OobMessage(message.package, message.data, "gmcp")]
     if option == T.OPT_MSDP:
-        return [OobMessage(name, value, "msdp") for name, value in parse_msdp(payload).items()]
+        return [
+            OobMessage(name, value, "msdp") for name, value in parse_msdp(payload, decode).items()
+        ]
     if option == T.OPT_MSSP:
-        return ServerStatus(parse_mssp(payload))
+        return ServerStatus(parse_mssp(payload, decode))
     return None
