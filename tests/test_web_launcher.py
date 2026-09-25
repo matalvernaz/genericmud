@@ -60,6 +60,8 @@ def test_launcher_uses_free_local_ports_and_cleans_up(tmp_path, monkeypatch):
             calls["connection_closed"] = True
 
     class FakeApp:
+        codec = None  # EngineApp's text codec; the launcher shares it with the connection
+
         def __init__(self, *_args, **_kwargs):
             pass
 

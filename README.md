@@ -53,9 +53,20 @@ and the locked dependencies on first run. See "For developers" below.
 1. Press **Ctrl+N** (or Alt+F, then New World).
 2. Fill in a name, host, and port — for example Aardwolf: host `aardmud.org`,
    port `4000`. There's a **Use TLS** box for MUDs that want an encrypted
-   connection, and a **Sounds folder** box if you already keep that MUD's sound
-   files somewhere. "Save this world" is checked by default.
+   connection, an **Encoding** choice for MUDs that don't send UTF-8, and a
+   **Sounds folder** box if you already keep that MUD's sound files somewhere.
+   "Save this world" is checked by default.
 3. Press Enter.
+
+Leave **Encoding** on Automatic unless accented or non-Latin letters come out
+wrong. Automatic reads UTF-8 and switches to Windows Western European the moment
+a MUD sends anything else, which suits most older European MUDs. A MUD that uses
+another encoding needs it chosen: Russian MUDs usually offer Windows-1251 or
+KOI8-R, Chinese ones GBK or Big5. What you type is sent in the same encoding.
+Choosing UTF-8 itself helps too, on a UTF-8 MUD that sometimes sends one stray
+byte: Automatic would take that byte as a sign of an older encoding and misread
+the rest of the session. To change it for a saved world, press **Ctrl+O**,
+choose the world, and press **Edit**; it applies from the next connection.
 
 Next time, press **Ctrl+O** to pick the world from your saved list; that dialog
 can also edit a saved world or start a new one. **Ctrl+D** disconnects and

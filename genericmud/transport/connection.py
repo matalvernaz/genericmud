@@ -18,6 +18,7 @@ from dataclasses import dataclass
 
 from genericmud import __version__
 from genericmud.protocol import telnet as T
+from genericmud.protocol.charset import ServerTextCodec
 from genericmud.protocol.telnet import (
     Event,
     Negotiation,
@@ -34,8 +35,9 @@ _TTYPE_IS = 0  # IAC SB TTYPE IS <name> IAC SE — our reply
 
 # MTTS (MUD Terminal Type Standard) capability bits. Only claim what we actually do:
 # ANSI/256/truecolour because render/ansi.py parses all three, UTF-8 because that's the
-# decode we try first, SSL because connect() takes a TLS context. VT100 cursor control,
-# mouse tracking, OSC palette, MNES and MSLP are unimplemented, so their bits stay clear.
+# decode we try first (unless the world is set to another encoding -- see _next_ttype),
+# SSL because connect() takes a TLS context. VT100 cursor control, mouse tracking, OSC
+# palette, MNES and MSLP are unimplemented, so their bits stay clear.
 MTTS_ANSI = 1
 MTTS_UTF8 = 4
 MTTS_256_COLORS = 8
@@ -51,6 +53,11 @@ MTTS_BITS = (
 # MTTS answers successive TTYPE SEND requests with client name, then terminal type, then the
 # capability bitvector; repeating the last entry is how a client signals the cycle has ended.
 TTYPE_CYCLE = (CLIENT_NAME.upper().encode(), b"ANSI", f"MTTS {MTTS_BITS}".encode())
+# The same cycle for a world set to a non-UTF-8 encoding: a server that honours the UTF-8
+# bit switches its output to UTF-8, which is exactly what a KOI8-R world can't read.
+TTYPE_CYCLE_NO_UTF8 = (
+    CLIENT_NAME.upper().encode(), b"ANSI", f"MTTS {MTTS_BITS & ~MTTS_UTF8}".encode()
+)
 
 # GMCP packages we ask the server to send. Servers that follow the spec (Aardwolf, the IRE
 # MUDs and most Evennia games) stream nothing at all until this arrives, so the parser and
@@ -128,6 +135,9 @@ class MudConnection:
         self._server_closing = False  # the server announced a deliberate close (see below)
         self._target: tuple[str, int, bool, ssl.SSLContext | None] | None = None
         self._dispatch_fault_seen = False  # speak the first consumer fault, then stay quiet
+        # The world's text codec (the UI shares the engine's, so commands go out in the
+        # encoding the output is read in). None = UTF-8, as before per-world encodings.
+        self.text_codec: ServerTextCodec | None = None
 
     @property
     def parser(self) -> TelnetParser:
@@ -255,7 +265,9 @@ class MudConnection:
     def _next_ttype(self) -> bytes:
         """The MTTS response for this SEND. Once the cycle is exhausted every further
         SEND repeats the last entry, which is the standard's end-of-cycle signal."""
-        reply = TTYPE_CYCLE[min(self._ttype_cycle, len(TTYPE_CYCLE) - 1)]
+        utf8 = self.text_codec is None or self.text_codec.advertises_utf8
+        cycle = TTYPE_CYCLE if utf8 else TTYPE_CYCLE_NO_UTF8
+        reply = cycle[min(self._ttype_cycle, len(cycle) - 1)]
         self._ttype_cycle += 1
         return reply
 
@@ -290,8 +302,17 @@ class MudConnection:
         self.send_subnegotiation(T.OPT_NAWS, payload)
 
     def send_line(self, text: str) -> None:
-        """Send a user command line (CRLF-terminated, IAC-escaped)."""
-        data = text.encode("utf-8").replace(bytes([T.IAC]), bytes([T.IAC, T.IAC]))
+        """Send a user command line (CRLF-terminated, IAC-escaped).
+
+        Escaping comes after encoding on purpose: 0xFF is a letter in several legacy
+        encodings (Windows-1251's я), and it has to reach the server doubled or the server
+        reads the rest of the command as a telnet control sequence.
+        """
+        if self.text_codec is not None:
+            encoded = self.text_codec.encode(text)
+        else:
+            encoded = text.encode("utf-8", errors="replace")
+        data = encoded.replace(bytes([T.IAC]), bytes([T.IAC, T.IAC]))
         self._raw_write(data + b"\r\n")
         if text.strip().lower() in self.quit_commands:
             self._quit_sent_at = time.monotonic()  # the close that follows is intentional

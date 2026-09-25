@@ -80,6 +80,7 @@ from genericmud.packs.user_rules import (
     save_rules,
 )
 from genericmud.packs.world_share import export_world, import_world
+from genericmud.protocol.charset import AUTO, ENCODING_CHOICES, encoding_label
 from genericmud.scripting import user_scripts
 from genericmud.scripting.api import ScriptApi
 from genericmud.session.crashlog import install_loop_exception_handler
@@ -289,7 +290,10 @@ class SessionPanel(wx.Panel):
             hub=self._hub,
             diag=self._diag,
             suppress_reconnect=self._connection.suppress_reconnect,
+            encoding=self.world.encoding,
         )
+        # One codec for both directions: commands go out in the encoding output is read in.
+        self._connection.text_codec = self.app.codec
         # Seed the persisted speech toggles; changes flow back out through pref_sink.
         self.app.follow_mode = self._prefs.follow_mode
         self.app.interrupt_mode = self._prefs.interrupt_mode
@@ -785,6 +789,13 @@ class WorldDialog(wx.Dialog):
         self._name = self._labeled_text(grid, "&Name:", "Name")
         self._host = self._labeled_text(grid, "&Host:", "Host")
         self._port = self._labeled_text(grid, "&Port:", "Port", str(DEFAULT_PORT))
+        # Most MUDs are fine on automatic; the rest (Russian, Chinese, older European
+        # MUDs) need the encoding they actually send, or every accented letter is garbled.
+        grid.Add(wx.StaticText(self, label="&Encoding:"), 0, wx.ALIGN_CENTER_VERTICAL)
+        self._encoding = wx.Choice(self, choices=[label for _value, label in ENCODING_CHOICES])
+        self._encoding.SetName("Encoding")
+        self._encoding.SetSelection(0)
+        grid.Add(self._encoding, 1, wx.EXPAND)
         self._sounds = self._labeled_text(grid, "So&unds folder:", "Sounds folder")
 
         grid.Add((0, 0))
@@ -829,6 +840,8 @@ class WorldDialog(wx.Dialog):
             self._port.SetValue(str(initial_port))
             self._tls.SetValue(initial.tls)
             self._sounds.SetValue(initial.sounds or "")
+            values = [value for value, _label in ENCODING_CHOICES]
+            self._encoding.SetSelection(values.index(initial.encoding))
         if lock_name:
             self._name.Enable(False)
             self._host.SetFocus()
@@ -865,6 +878,7 @@ class WorldDialog(wx.Dialog):
             port=port,
             tls=self._tls.GetValue(),
             sounds=self._sounds.GetValue().strip() or None,
+            encoding=ENCODING_CHOICES[self._encoding.GetSelection()][0],
         )
         self.EndModal(wx.ID_OK)
 
@@ -940,7 +954,10 @@ class ConnectDialog(wx.Dialog):
             return
         security = "TLS" if world.tls else "plain connection"
         sounds = f"\nSounds: {world.sounds}" if world.sounds else ""
-        self._details.SetValue(f"{world.host}:{world.port} ({security}){sounds}")
+        encoding = (
+            f"\nEncoding: {encoding_label(world.encoding)}" if world.encoding != AUTO else ""
+        )
+        self._details.SetValue(f"{world.host}:{world.port} ({security}){encoding}{sounds}")
 
     def _on_connect(self, _event: wx.CommandEvent) -> None:
         if self.get_world() is not None:
@@ -3351,7 +3368,10 @@ def run(args, recovery=None) -> None:
     frame.Show()
     if args.host:
         frame.open_session(
-            World(name=args.host, host=args.host, port=args.port, tls=args.tls)
+            World(
+                name=args.host, host=args.host, port=args.port, tls=args.tls,
+                encoding=getattr(args, "encoding", AUTO),
+            )
         )
     else:
         # A blank first launch was silent; give a blind user the way in. Deferred so it

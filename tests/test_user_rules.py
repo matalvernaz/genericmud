@@ -320,9 +320,9 @@ def test_decode_state_resets_on_reconnect():
     # byte stream, so reconnect must clear it or the whole reconnected session mis-decodes.
     app = _app()
     app.on_telnet_event(DataReceived(b"caf\xe9\r\n"))  # invalid UTF-8 -> latch
-    assert app._server_latin1 is True
+    assert app.codec.latched is True
     app.on_connection_status("reconnected")
-    assert app._server_latin1 is False and app._decode_pending == b""
+    assert app.codec.latched is False
     app.on_telnet_event(DataReceived(b"caf\xc3\xa9\r\n"))  # clean UTF-8 read again
     assert app.buffer.lines()[-1].plain_text == "café"
 

@@ -29,6 +29,7 @@ from genericmud.navigation import Navigator, SafeWalk, expand_speedwalk
 from genericmud.packs import ActivationResult, PackStore, activate_world, user_rules
 from genericmud.protocol import msdp
 from genericmud.protocol import telnet as T
+from genericmud.protocol.charset import AUTO, ServerTextCodec
 from genericmud.protocol.msp import parse_msp_line
 from genericmud.protocol.oob import OobMessage, ServerStatus, from_subnegotiation
 from genericmud.render.ansi import parse_ansi
@@ -61,15 +62,6 @@ _PROMPT_IDLE_FLUSH_SECONDS = 0.25  # emit a newline-less prompt if the server se
 _MSDP_ROOM_VARS = frozenset(
     {"ROOM", "ROOM_NAME", "ROOM_AREA", "ROOM_EXITS", "ROOM_VNUM", "AREA_NAME"}
 )
-# CP1252 readings of the C1 range (0x80-0x9F): Windows MUDs advertising "Latin-1" almost
-# universally send CP1252, whose curly quotes/dashes live here. Decoding them as Latin-1
-# yields invisible C1 controls a screen reader garbles ("it\x92s"), and any trigger written
-# with the intended punctuation misses. The five bytes CP1252 leaves undefined stay as-is.
-_CP1252_C1_TABLE = {
-    byte: char
-    for byte in range(0x80, 0xA0)
-    if (char := bytes([byte]).decode("cp1252", "ignore"))  # "" for the 5 undefined bytes
-}
 # Interactive /alias and /trigger register under their own source so the soundpack builder's
 # reload (which clears user_rules.SOURCE) can't silently delete them.
 INTERACTIVE_SOURCE = "user-interactive"
@@ -221,6 +213,7 @@ class EngineApp:
         hub: SessionHub | None = None,
         diag: DiagnosticLog | None = None,
         suppress_reconnect: Callable[[], None] | None = None,
+        encoding: str = AUTO,
     ) -> None:
         self.buffer = Buffer()
         self.voice = voice
@@ -294,8 +287,9 @@ class EngineApp:
         self._input_masked = False  # server WILL ECHO (password entry): don't log/store input
         self._ticks_armed = False  # the OnPluginTick chain is scheduled at most once
         self._closed = False  # ends the tick chain at shutdown
-        self._server_latin1 = False  # latched by _decode_server_bytes on invalid UTF-8
-        self._decode_pending = b""  # incomplete UTF-8 tail held across telnet chunks
+        # The world's text encoding, both directions: the UI hands this same codec to the
+        # connection so typed commands go out in the encoding the output arrives in.
+        self.codec = ServerTextCodec(encoding, on_latch=self._on_encoding_latch)
         self._msdp_routed = 0  # subnegotiation count, for throttling the diag trace
         self._prompt_gen = 0  # bumps per data chunk so a stale idle prompt-flush no-ops
 
@@ -650,31 +644,18 @@ class EngineApp:
             self._input_masked = event.command == T.WILL
 
     def _decode_server_bytes(self, data: bytes) -> str:
-        """Decode server text: UTF-8 first, permanently falling back to CP1252/Latin-1.
+        """Decode server text in the world's encoding (see protocol/charset.py).
 
         Many legacy MUDs (notably Spanish-language ones) send an 8-bit encoding; the old
         hard utf-8/replace decode turned every accented letter into U+FFFD, which a screen
-        reader speaks as garbage. A multibyte sequence split across telnet chunks is
-        NOT evidence of a legacy encoding -- the incomplete tail is buffered for the next
-        chunk. The first genuinely invalid byte latches the fallback for the session (a
-        MUD's encoding doesn't change mid-stream, and Latin-1 decodes any byte). The
-        Latin-1 decode is then re-read through the CP1252 C1 table -- see _CP1252_C1_TABLE.
+        reader speaks as garbage. ``auto`` guesses; a world set to its real encoding reads
+        exactly what the MUD sent, including Cyrillic and CJK text the guess can't recover.
         """
-        if self._server_latin1:
-            return data.decode("latin-1").translate(_CP1252_C1_TABLE)
-        buf = self._decode_pending + data
-        self._decode_pending = b""
-        try:
-            return buf.decode("utf-8")
-        except UnicodeDecodeError as err:
-            if err.reason == "unexpected end of data" and err.start >= len(buf) - 3:
-                # A multibyte char truncated at the chunk boundary: hold the tail.
-                self._decode_pending = buf[err.start :]
-                return buf[: err.start].decode("utf-8")
-            self._server_latin1 = True
-            if self._diag is not None:
-                self._diag.event("encoding.latch", encoding="cp1252", at=err.start)
-            return buf.decode("latin-1").translate(_CP1252_C1_TABLE)
+        return self.codec.decode(data)
+
+    def _on_encoding_latch(self, position: int) -> None:
+        if self._diag is not None:
+            self._diag.event("encoding.latch", encoding="cp1252", at=position)
 
     def _feed_text(self, text: str) -> None:
         self._pending += text
@@ -1311,8 +1292,7 @@ class EngineApp:
             self.engine.connected = True
             # A fresh socket is a fresh byte stream: drop any half-decoded multibyte tail and
             # the legacy-encoding latch, or a drop mid-character mis-decodes the whole reconnect.
-            self._decode_pending = b""
-            self._server_latin1 = False
+            self.codec.reset()
             # Echo state belongs to the dead socket. Left armed, every command for the rest
             # of the session logs as "***" because the new server never sends WONT ECHO.
             self._input_masked = False

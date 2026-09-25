@@ -16,6 +16,9 @@ Connecting:
 Press Ctrl+N, type a name, host, and port, and press Enter. "Save this world"
 is checked by default; next time press Ctrl+O and choose it from the saved
 world list. A good first MUD is Aardwolf: host aardmud.org, port 4000.
+If accented or non-Latin letters come out garbled, edit the world and choose
+its Encoding. Russian MUDs often use Windows-1251 or KOI8-R, Chinese ones GBK
+or Big5. Automatic suits most MUDs.
 
 Playing:
 Type commands in the command box and press Enter. Try: look, north (or just

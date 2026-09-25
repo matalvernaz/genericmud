@@ -5,7 +5,7 @@ and sandboxed automation scripts into one file a friend can be sent; import
 unpacks that file into the local userpacks tree and hands back a :class:`World`
 ready to save and connect. The zip layout is flat and boring on purpose::
 
-    world.json      {"name", "host", "port", "tls"}
+    world.json      {"name", "host", "port", "tls", "encoding"}
     rules.json      the soundpack builder's rules (optional)
     sounds/...      cue files referenced by the rules (optional)
     scripts/*.lua   sandboxed per-world automation scripts (optional)
@@ -26,6 +26,7 @@ from pathlib import Path
 from genericmud.config.worlds import World, parse_port
 from genericmud.packs.store import extract_pack
 from genericmud.packs.user_rules import RULES_FILENAME, SOUNDS_DIRNAME
+from genericmud.protocol.charset import normalize_encoding
 from genericmud.safepath import sanitize_component
 from genericmud.scripting.user_scripts import (
     SCRIPTS_DIRNAME,
@@ -44,7 +45,12 @@ def export_world(world: World, pack_dir: Path | None, dest: Path) -> int:
     or a missing directory exports connection details alone, which is still a
     useful "here's how to connect" share.
     """
-    meta = {"name": world.name, "host": world.host, "port": world.port, "tls": world.tls}
+    # The encoding travels with the world: a friend connecting to the same KOI8-R MUD needs
+    # it as much as the port. The sounds folder does not; it's a path on this machine.
+    meta = {
+        "name": world.name, "host": world.host, "port": world.port, "tls": world.tls,
+        "encoding": world.encoding,
+    }
     count = 1
     with zipfile.ZipFile(dest, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr(WORLD_META_FILENAME, json.dumps(meta, indent=2))
@@ -117,7 +123,10 @@ def import_world(zip_path: Path, userpacks_root: Path) -> World:
         port = parse_port(meta.get("port") or 23)
     except ValueError:
         port = 23
-    return World(name=name, host=host, port=port, tls=meta.get("tls") is True)
+    return World(
+        name=name, host=host, port=port, tls=meta.get("tls") is True,
+        encoding=normalize_encoding(meta.get("encoding")),
+    )
 
 
 def _unique_pack_dir(root: Path, name: str) -> tuple[Path, str]:

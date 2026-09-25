@@ -15,6 +15,7 @@ from genericmud.bridge import protocol
 from genericmud.bridge.static_server import STATIC_HOST, serve_static
 from genericmud.bridge.ws_server import WsBridge
 from genericmud.config.keymap import load_keymap
+from genericmud.protocol.charset import AUTO
 from genericmud.resources import resource_root
 from genericmud.session.crashlog import install_loop_exception_handler
 from genericmud.session.diaglog import make_diagnostic_log
@@ -68,7 +69,9 @@ def run(args) -> None:
                 keymap=load_keymap("vipmud"),
                 diag=make_diagnostic_log(),
                 suppress_reconnect=connection.suppress_reconnect,
+                encoding=getattr(args, "encoding", AUTO),
             )
+            connection.text_codec = app.codec  # commands go out in the world's encoding too
             holder["app"] = app
             connection._on_event = app.on_telnet_event
             # Without this, a disconnect (connection._status) goes nowhere and the browser/screen

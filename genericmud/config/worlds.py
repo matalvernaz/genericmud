@@ -1,4 +1,4 @@
-"""Saved MUD worlds (name/host/port/tls/sounds), persisted as TOML.
+"""Saved MUD worlds (name/host/port/tls/sounds/encoding), persisted as TOML.
 
 tomllib is read-only, so saving hand-writes the small, well-defined schema.
 """
@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from genericmud.config.atomic import atomic_write_text
+from genericmud.protocol.charset import AUTO, normalize_encoding
 
 MIN_PORT = 1
 MAX_PORT = 65535
@@ -24,6 +25,12 @@ class World:
     port: int
     tls: bool = False
     sounds: str | None = None
+    # Character encoding for this MUD's text, both directions (protocol/charset.py). Always
+    # a supported setting: anything else becomes "auto", so a typo can't break a world.
+    encoding: str = AUTO
+
+    def __post_init__(self) -> None:
+        self.encoding = normalize_encoding(self.encoding)
 
 
 def parse_port(value: object) -> int:
@@ -91,6 +98,7 @@ def load_worlds(path: Path | None = None) -> list[World]:
                 port=port,
                 tls=entry.get("tls") is True,
                 sounds=sounds,
+                encoding=normalize_encoding(entry.get("encoding")),
             )
         )
     return worlds
@@ -110,6 +118,9 @@ def save_worlds(worlds: list[World], path: Path | None = None) -> None:
         ]
         if world.sounds:
             lines.append(f"sounds = {_quote(world.sounds)}")
+        encoding = normalize_encoding(world.encoding)
+        if encoding != AUTO:  # absent means auto, which keeps files older builds wrote as-is
+            lines.append(f"encoding = {_quote(encoding)}")
         blocks.append("\n".join(lines))
     atomic_write_text(target, "\n\n".join(blocks) + "\n")
 
