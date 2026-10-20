@@ -325,8 +325,8 @@ def test_disconnecting_at_a_password_prompt_makes_typing_ordinary_again(frame, m
         voice = VoiceRouter(RecordingBackend(), clock=lambda: 0.0)
         panel.app = EngineApp(voice, post=posted.append, keymap={})
         panel.app.on_telnet_event(T.Negotiation(T.WILL, T.OPT_ECHO))
-        panel._do_disconnect()  # closes quietly: no connection status reaches the engine
-        assert posted[-1] == protocol.input_masked(False)
+        panel._do_disconnect()  # the transport stays quiet; the panel reports it itself
+        assert protocol.input_masked(False) in posted
     finally:
         panel.app = None
         panel.Destroy()

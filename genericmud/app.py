@@ -446,10 +446,6 @@ class EngineApp:
         self.begin_login(world)
         return result
 
-    def on_disconnected(self) -> None:
-        """The player disconnected on purpose, which sends no status line of its own."""
-        self._vip_connection_changed(False)
-
     def _vip_connection_changed(self, connected: bool) -> None:
         """Run the VIPMud packs' OnConnect or OnDisconnect alias, once per change.
 
@@ -1231,8 +1227,8 @@ class EngineApp:
     def forget_hidden_input(self) -> None:
         """Treat typing as ordinary again, for when no WONT ECHO is coming.
 
-        The socket went away; the window's Disconnect closed it, quietly, so it never
-        reaches on_connection_status; a login prompt timed out; or the user pressed
+        The socket went away or was replaced (the window's Disconnect reports itself
+        through on_connection_status too); a login prompt timed out; or the user pressed
         Escape.
         """
         self._set_input_masked(False)
@@ -1592,8 +1588,15 @@ class EngineApp:
         self.begin_login(self.name)
 
     def on_connection_status(self, message: str) -> None:
-        """Surface a transport status line (reconnecting, reconnected) to the user."""
+        """Surface a transport status line (reconnecting, reconnected) to the user.
+
+        The end of a session arrives here whatever caused it. A dropped link and a quit
+        both end in the transport's own "disconnected"; the UI's deliberate close emits
+        no status at all, so _do_disconnect calls this method itself. Naming the world in
+        one place is what keeps those three worded identically.
+        """
         spoken = message
+        echoed = f"* {message}"
         if message.startswith(_SOCKET_CHANGES):
             # Echo state belongs to the socket that just went away. Left armed, every
             # command after it would go out as a password: no client commands, aliases or
@@ -1613,10 +1616,15 @@ class EngineApp:
                 # detail in the output log (echoed below) for anyone who wants it.
                 spoken = ("Lost connection: the MUD sent data the client couldn't read. "
                           "Not reconnecting.")
+            elif message == "disconnected":
+                # Name the world, so a quit, a dropped link and Ctrl+D all read the same.
+                label = self.name or "the MUD"
+                spoken = f"Disconnected from {label}."
+                echoed = f"* Disconnected from {label}"
         elif message.startswith("reconnected"):
             self.after_reconnect()
         self.voice.speak(spoken, channel=SYSTEM_CHANNEL, interrupt=True)
-        self._post(protocol.echo(f"* {message}"))  # raw detail stays reviewable in the output
+        self._post(protocol.echo(echoed))  # raw detail stays reviewable in the output
         # After the status is said, so a pack's own goodbye or welcome isn't cut off by it.
         if message.startswith(("disconnected", "protocol error", "reconnect failed",
                                "connection lost")):

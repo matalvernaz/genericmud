@@ -181,7 +181,7 @@ def test_a_vipmud_packs_onconnect_and_ondisconnect_follow_the_connection(tmp_pat
     app.on_connection_status("reconnected")
     assert "ready" in backend.spoken
     backend.spoken.clear()
-    app.on_disconnected()  # the window's Disconnect, which sends no status
+    app.on_connection_status("disconnected")  # what the window's Disconnect reports
     assert "gone" in backend.spoken
 
 

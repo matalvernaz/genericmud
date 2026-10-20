@@ -214,3 +214,11 @@ def test_a_disconnected_tab_can_reconnect_without_opening_a_second_one():
     assert "async def _reconnect(self)" in source
     assert "self.app.after_reconnect()" in source
     assert "panel.reconnect()" in source
+
+
+def test_a_deliberate_disconnect_reports_through_the_transport_path():
+    # close() sets _closing, so the read loop never emits its own "disconnected". The panel
+    # therefore has to report the end of the session the same way a dropped link does, or
+    # the wording, the sound flush and the timer cancel all get a second copy that drifts.
+    source = _wx_source()
+    assert 'self.app.on_connection_status("disconnected")' in source

@@ -902,16 +902,13 @@ class SessionPanel(wx.Panel):
             self._connection.auto_reconnect = False
             asyncio.create_task(self._connection.close())
         if self.app is not None:
-            # A deliberate close is silent (no "disconnected" status fires), so the
-            # status-side flush never runs; cut the pack's looping cues here. Also mark
-            # the engine disconnected and cancel pending pack timers, or the OnPluginTick
-            # chain restarts the ambience right after this flush and a scheduled #alarm
-            # fires into a dead session.
-            self.app.engine.connected = False
-            self.app.engine.cancel_timers()
-            self.app.sound.flush()
-            self.app.forget_hidden_input()  # no WONT ECHO will come from a closed socket
-            self.app.on_disconnected()  # VIPMud packs' OnDisconnect (they save settings there)
+            # A deliberate close stays quiet on the transport side -- close() sets _closing,
+            # so the read loop's own "disconnected" never fires -- which is why the flush,
+            # the timer cancel, the hidden-input reset, the VIPMud packs' OnDisconnect and
+            # the wording all have to come from the same place a dropped link uses.
+            # Reporting it through that path keeps the two identical instead of
+            # maintaining a second copy of them here.
+            self.app.on_connection_status("disconnected")
 
     def reconnect(self) -> None:
         """Reconnect this session in place, keeping its tab, scrollback and loaded packs.
@@ -3759,10 +3756,9 @@ class GenericMudFrame(wx.Frame):
             return
         if panel.is_connected():
             panel.disconnect()  # keeps the tab open; stops auto-reconnect
-            self.announce(f"Disconnecting from {panel.world.name}.")
+            # The panel writes and speaks "Disconnected from ..." itself, so saying it here
+            # too would read the same sentence twice.
         else:
-            # The panel speaks "Reconnecting to ..." itself, so this path says nothing extra
-            # -- otherwise Ctrl+D would read the same sentence twice.
             panel.reconnect()
 
     def _on_automation_manager(self, _event: wx.CommandEvent) -> None:

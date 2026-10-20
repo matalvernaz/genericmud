@@ -348,6 +348,30 @@ def test_reconnected_status_shares_the_manual_reattach(monkeypatch):
     assert calls == [True]
 
 
+def test_a_terminal_drop_names_the_world_it_left():
+    # A quit, a dropped link and the UI's own close all end up here, so the wording lives
+    # in one place: each names the world instead of reporting a bare "disconnected".
+    backend = RecordingBackend()
+    voice = VoiceRouter(backend, clock=lambda: 0.0)
+    posted: list[dict] = []
+    app = EngineApp(
+        voice, send=lambda _text: None, post=posted.append,
+        keymap=load_keymap("vipmud"), name="Aardwolf",
+    )
+    app.on_connection_status("disconnected")
+    assert posted[-1]["text"] == "* Disconnected from Aardwolf"
+    assert backend.spoken[-1] == "Disconnected from Aardwolf."
+
+
+def test_a_transient_reconnect_status_still_reports_itself_verbatim():
+    # Only the terminal line names the world; the backoff chatter has to keep saying what
+    # it is doing, and when.
+    app, _backend, _sent, posted = _app()
+    posted.clear()
+    app.on_connection_status("connection lost; reconnecting in 2s (attempt 1)")
+    assert posted[-1]["text"] == "* connection lost; reconnecting in 2s (attempt 1)"
+
+
 def test_pack_variables_persist_across_sessions(tmp_path):
     # MUSHclient SaveState equivalent: user-adjusted pack settings (volumes, toggles)
     # must survive a restart. Saved at shutdown, seeded before packs load on connect
