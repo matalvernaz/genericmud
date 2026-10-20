@@ -1571,6 +1571,26 @@ class EngineApp:
         self.voice.speak(text, channel=SYSTEM_CHANNEL, interrupt=interrupt)
         self._post(protocol.echo(f"* {text}"))
 
+    def after_reconnect(self) -> None:
+        """Reattach this session to a socket that is live again.
+
+        Shared by the transport's own backoff loop and a manual reconnect from the UI, so
+        the two cannot drift. The state it resets is all per-socket -- a socket that is up
+        while the engine still believes it is disconnected leaves packs paused and
+        auto-login stranded at the login screen.
+        """
+        self.engine.connected = True
+        # A fresh socket is a fresh byte stream: drop any half-decoded multibyte tail and
+        # the legacy-encoding latch, or a drop mid-character mis-decodes the whole reconnect.
+        self.codec.reset()
+        # Echo state belongs to the dead socket: no WONT ECHO is coming for it. Through
+        # forget_hidden_input, as on_connection_status does, so the window's history and
+        # the hidden-input timeout hear about it too.
+        self.forget_hidden_input()
+        # A fresh socket means fresh login prompts; the old AutoLogin is marked done, so
+        # re-arm it or a reconnect strands the user at the login screen.
+        self.begin_login(self.name)
+
     def on_connection_status(self, message: str) -> None:
         """Surface a transport status line (reconnecting, reconnected) to the user."""
         spoken = message
@@ -1594,13 +1614,7 @@ class EngineApp:
                 spoken = ("Lost connection: the MUD sent data the client couldn't read. "
                           "Not reconnecting.")
         elif message.startswith("reconnected"):
-            self.engine.connected = True
-            # A fresh socket is a fresh byte stream: drop any half-decoded multibyte tail and
-            # the legacy-encoding latch, or a drop mid-character mis-decodes the whole reconnect.
-            self.codec.reset()
-            # A fresh socket means fresh login prompts; the old AutoLogin is marked done, so
-            # re-arm it or a reconnect strands the user at the login screen.
-            self.begin_login(self.name)
+            self.after_reconnect()
         self.voice.speak(spoken, channel=SYSTEM_CHANNEL, interrupt=True)
         self._post(protocol.echo(f"* {message}"))  # raw detail stays reviewable in the output
         # After the status is said, so a pack's own goodbye or welcome isn't cut off by it.

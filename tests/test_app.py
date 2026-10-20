@@ -317,6 +317,37 @@ def test_terminal_disconnect_flushes_looping_sound():
     assert backend.stopped == ["erion-audio-1"]
 
 
+def test_after_reconnect_reattaches_the_session_to_a_live_socket():
+    # The UI's manual reconnect calls this directly rather than going through a status
+    # string, so it has to restore exactly what the transport's backoff loop restores.
+    # A socket that is up while the engine still thinks it is down leaves packs paused and
+    # auto-login stranded.
+    app, _backend, _sent, _posted = _app()
+    app.on_connection_status("disconnected")
+    assert app.engine.connected is False
+    app._input_masked = True  # set by the dead socket's WILL ECHO
+    app.after_reconnect()
+    assert app.engine.connected is True
+    assert app._input_masked is False  # else every command for the rest logs as "***"
+
+
+def test_after_reconnect_rearms_autologin(monkeypatch):
+    app, _backend, _sent, _posted = _app()
+    calls: list[str] = []
+    monkeypatch.setattr(app, "begin_login", calls.append)
+    app.after_reconnect()
+    assert calls == [app.name]  # a reconnect that forgets this lands on the login screen
+
+
+def test_reconnected_status_shares_the_manual_reattach(monkeypatch):
+    # Both reconnect paths must land in the same method, or they drift apart.
+    app, _backend, _sent, _posted = _app()
+    calls: list[bool] = []
+    monkeypatch.setattr(app, "after_reconnect", lambda: calls.append(True))
+    app.on_connection_status("reconnected")
+    assert calls == [True]
+
+
 def test_pack_variables_persist_across_sessions(tmp_path):
     # MUSHclient SaveState equivalent: user-adjusted pack settings (volumes, toggles)
     # must survive a restart. Saved at shutdown, seeded before packs load on connect

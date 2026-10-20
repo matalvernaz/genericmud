@@ -208,7 +208,7 @@ Alt+F File.  Alt+P Soundpacks.  Alt+A Automation.  Alt+V View.  Alt+H Help.
 Connection:
 Ctrl+N            Create and connect to a new world
 Ctrl+O            Connect to a saved world
-Ctrl+D            Disconnect this tab
+Ctrl+D            Disconnect, or reconnect a disconnected tab
 Ctrl+W            Close this tab
 Ctrl+Tab          Next session
 Ctrl+Shift+Tab    Previous session

@@ -77,6 +77,12 @@ can also edit a saved world or start a new one. **Ctrl+D** disconnects and
 reconnects for you, backing off if the MUD stays down; quitting from inside the
 game doesn't trigger that.
 
+**Ctrl+D** takes a disconnected tab back to the MUD as well — the File menu
+entry changes to **Reconnect** to say so. Reconnecting reuses the tab, so the
+scrollback you already have stays put. Typing a command into a disconnected tab
+asks whether to reconnect rather than dropping the command silently, and your
+text stays in the box until you decide.
+
 `look`, `north` (or just `n`), `say hello`, and `help` are good first commands
 on almost any MUD. A few conveniences in the command box:
 
@@ -380,7 +386,7 @@ View, **Alt+H** Help.
 | --- | --- |
 | Ctrl+N | Create and connect to a new world |
 | Ctrl+O | Connect to a saved world |
-| Ctrl+D | Disconnect this tab |
+| Ctrl+D | Disconnect, or reconnect a disconnected tab |
 | Ctrl+W | Close this tab |
 | Ctrl+Tab / Ctrl+Shift+Tab | Next / previous session |
 | Ctrl+Q | Exit |

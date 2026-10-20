@@ -230,6 +230,15 @@ def _hotkey_taken(combo: str, keymap: dict[str, str]) -> str | None:
     return f"{reason}, so a hotkey on it would never run. Choose another key."
 
 
+def _connection_menu_label(connected: bool) -> str:
+    """The File-menu label for the active tab's connection toggle.
+
+    One item rather than two enabled/disabled ones: Ctrl+D keeps working in both states,
+    so the same key has to mean "drop it" now and "bring it back" a moment later.
+    """
+    return "&Disconnect\tCtrl+D" if connected else "&Reconnect\tCtrl+D"
+
+
 class SessionPanel(wx.Panel):
     """One MUD: read-only output + command input, wired to its own engine."""
 
@@ -264,6 +273,8 @@ class SessionPanel(wx.Panel):
         self._history_draft = ""  # unsent input, parked while Up browses history
         self._input_masked = False  # the server hides typed input: keep it out of history
         self._alive = True
+        self._connect_finished = False  # the first connect attempt has returned (either way)
+        self._reconnecting = False  # a manual reconnect is in flight; ignore repeat presses
         self._pending: list[str] = []
         self._flush_scheduled = False
         self._sound_warned = False  # speak the first sound problem; echo the rest
@@ -384,6 +395,10 @@ class SessionPanel(wx.Panel):
                 self.app.engine.connected = False
             if self._voice is not None:
                 self._voice.speak(f"Connect failed: {error}", channel="system", interrupt=True)
+        finally:
+            # Either way the first attempt is over, so the command box can now tell a real
+            # disconnect from a handshake still in flight.
+            self._connect_finished = True
 
     def _send(self, text: str) -> None:
         try:
@@ -693,6 +708,12 @@ class SessionPanel(wx.Panel):
 
     def _on_send(self, _event: wx.CommandEvent) -> None:
         text = self.input.GetValue()
+        if self._connect_finished and not self.is_connected():
+            # Nothing typed into a dead session reaches the MUD -- the transport drops it and
+            # the client says nothing, which looks exactly like a MUD ignoring the command.
+            # Ask instead, and leave the text in the box so it isn't lost while deciding.
+            self._prompt_reconnect()
+            return
         self.input.SetValue("")
         if text and not self._input_masked:
             self._history.append(text)
@@ -891,6 +912,67 @@ class SessionPanel(wx.Panel):
             self.app.sound.flush()
             self.app.forget_hidden_input()  # no WONT ECHO will come from a closed socket
             self.app.on_disconnected()  # VIPMud packs' OnDisconnect (they save settings there)
+
+    def reconnect(self) -> None:
+        """Reconnect this session in place, keeping its tab, scrollback and loaded packs.
+
+        Two paths lead here with no connection and no way back otherwise: a deliberate
+        disconnect (which cancels auto-reconnect on purpose) and the backoff loop giving
+        up. Opening the world again from Ctrl+O is not a substitute -- it builds a second
+        tab and abandons this one.
+        """
+        self._loop.call_soon_threadsafe(lambda: asyncio.create_task(self._reconnect()))
+
+    async def _reconnect(self) -> None:  # loop thread
+        if self._connection is None or self.app is None:
+            return
+        if self._reconnecting or self._connection.connected:
+            return  # a second Enter on the prompt must not open a second socket
+        self._reconnecting = True
+        # disconnect() turned this off; re-arm it so the socket keeps its own safety net.
+        self._connection.auto_reconnect = True
+        if self._diag is not None:
+            self._diag.event("reconnect.manual", host=self.world.host, port=self.world.port)
+        self._post(protocol.echo(f"* Reconnecting to {self.world.name}"))
+        if self._voice is not None:
+            self._voice.speak(f"Reconnecting to {self.world.name}.", channel="system",
+                              interrupt=True)
+        try:
+            await self._connection.connect(self.world.host, self.world.port, tls=self.world.tls)
+        except OSError as error:
+            if self._diag is not None:
+                self._diag.event("reconnect.failed", error=f"{type(error).__name__}: {error}")
+            self._post(protocol.echo(f"* Reconnect failed: {error}"))
+            if self._voice is not None:
+                self._voice.speak(f"Reconnect failed: {error}", channel="system", interrupt=True)
+            return
+        finally:
+            self._reconnecting = False
+        # The socket is live again, so everything per-socket has to be reset the same way
+        # the transport's own backoff loop resets it.
+        self.app.after_reconnect()
+        self._post(protocol.echo(f"* Reconnected to {self.world.name}"))
+        if self._voice is not None:
+            self._voice.speak(f"Reconnected to {self.world.name}.", channel="system",
+                              interrupt=True)
+
+    def _prompt_reconnect(self) -> None:
+        """Ask to reconnect after a command was typed into a dead session.
+
+        The transport drops commands silently while disconnected, so saying nothing left
+        a blind user unable to tell a dead session from a command the MUD ignored.
+        """
+        dialog = wx.MessageDialog(
+            self,
+            f"Not connected to {self.world.name}.\n\nReconnect now?",
+            "Not connected",
+            wx.YES_NO | wx.ICON_QUESTION,
+        )
+        dialog.SetYesNoLabels("&Reconnect", "&Cancel")
+        answer = dialog.ShowModal()
+        dialog.Destroy()
+        if answer == wx.ID_YES:
+            self.reconnect()
 
 
 class PackQuestionDialog(wx.Dialog):
@@ -3330,7 +3412,8 @@ class GenericMudFrame(wx.Frame):
         file_menu = wx.Menu()
         new_world_item = file_menu.Append(wx.ID_ANY, "&New World...\tCtrl+N")
         connect_item = file_menu.Append(wx.ID_ANY, "&Connect to Saved World...\tCtrl+O")
-        disconnect_item = file_menu.Append(wx.ID_ANY, "&Disconnect\tCtrl+D")
+        disconnect_item = file_menu.Append(wx.ID_ANY, _connection_menu_label(True))
+        self._connection_item = disconnect_item  # relabelled as the active tab connects/drops
         close_item = file_menu.Append(wx.ID_ANY, "Close &Tab\tCtrl+W")
         export_item = file_menu.Append(
             wx.ID_ANY, "&Export This World...",
@@ -3407,6 +3490,7 @@ class GenericMudFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, self._on_new_world, new_world_item)
         self.Bind(wx.EVT_MENU, self._on_connect, connect_item)
         self.Bind(wx.EVT_MENU, self._on_disconnect, disconnect_item)
+        self.Bind(wx.EVT_MENU_OPEN, self._on_menu_open)  # label read aloud must be current
         self.Bind(wx.EVT_MENU, self._on_close_tab, close_item)
         self.Bind(wx.EVT_MENU, self._on_manage_packs, packs_item)
         self.Bind(wx.EVT_MENU, self._on_setup_pack, setup_item)
@@ -3645,16 +3729,41 @@ class GenericMudFrame(wx.Frame):
                     self.announce(f"Imported {world.name}. It's in the saved-world list now.")
         dialog.Destroy()
 
-    def _on_disconnect(self, _event: wx.CommandEvent) -> None:
+    def _active_panel(self) -> SessionPanel | None:
         index = self.book.GetSelection()
         if index == wx.NOT_FOUND or not self.book.GetPageCount():
+            return None
+        return self.book.GetPage(index)
+
+    def _refresh_connection_item(self) -> None:
+        """Point the File item at what it will actually do for the active tab."""
+        panel = self._active_panel()
+        if panel is not None:
+            label = _connection_menu_label(panel.is_connected())
+            if self._connection_item.GetItemLabel() != label:
+                self._connection_item.SetItemLabel(label)
+        # No tab open: nothing to toggle, so the item greys out instead of advertising a
+        # reconnect with no session behind it.
+        self._connection_item.Enable(panel is not None)
+
+    def _on_menu_open(self, event: wx.MenuEvent) -> None:
+        # Refreshed as the menu opens rather than pushed on every status change: the label
+        # only has to be true at the moment the screen reader reads it, and this needs no
+        # cross-thread plumbing from the session's loop.
+        self._refresh_connection_item()
+        event.Skip()
+
+    def _on_disconnect(self, _event: wx.CommandEvent) -> None:
+        panel = self._active_panel()
+        if panel is None:
             return
-        panel = self.book.GetPage(index)
         if panel.is_connected():
             panel.disconnect()  # keeps the tab open; stops auto-reconnect
             self.announce(f"Disconnecting from {panel.world.name}.")
         else:
-            self.announce("Not connected.")
+            # The panel speaks "Reconnecting to ..." itself, so this path says nothing extra
+            # -- otherwise Ctrl+D would read the same sentence twice.
+            panel.reconnect()
 
     def _on_automation_manager(self, _event: wx.CommandEvent) -> None:
         index = self.book.GetSelection()

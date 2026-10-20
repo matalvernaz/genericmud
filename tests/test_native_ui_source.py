@@ -188,3 +188,29 @@ def test_connection_success_is_spoken_not_just_echoed():
 def test_blank_launch_announces_the_way_in():
     source = _wx_source()
     assert "Welcome to genericMud" in source
+
+
+def test_a_dead_tab_asks_before_swallowing_a_command():
+    # The transport drops commands typed while disconnected and says nothing, which is
+    # indistinguishable from a MUD ignoring the line. The command box must notice, ask,
+    # and leave the typed text in place while it asks.
+    source = _wx_source()
+    assert "if self._connect_finished and not self.is_connected():" in source
+    assert "self._prompt_reconnect()" in source
+    assert 'dialog.SetYesNoLabels("&Reconnect", "&Cancel")' in source
+
+
+def test_the_connection_menu_item_is_refreshed_as_the_menu_opens():
+    # The label is only read aloud when the menu opens, so that is the moment it has to be
+    # true; pushing every loop-thread status change onto the wx thread would be worse.
+    source = _wx_source()
+    assert "self.Bind(wx.EVT_MENU_OPEN, self._on_menu_open)" in source
+    assert "self._connection_item.SetItemLabel(label)" in source
+
+
+def test_a_disconnected_tab_can_reconnect_without_opening_a_second_one():
+    # Ctrl+O builds a new tab, so it cannot stand in for reviving this one.
+    source = _wx_source()
+    assert "async def _reconnect(self)" in source
+    assert "self.app.after_reconnect()" in source
+    assert "panel.reconnect()" in source

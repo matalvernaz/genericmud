@@ -779,3 +779,12 @@ def test_editing_a_world_changes_its_open_tab_at_once(frame, monkeypatch):
         panel.Destroy()
         loop.run_until_complete(asyncio.sleep(0.01))
         loop.close()
+
+
+def test_the_connection_menu_item_names_what_it_will_do():
+    # One item, relabelled: Ctrl+D has to mean "drop it" while connected and "bring it
+    # back" once it is down, so the label has to follow the tab, not the menu.
+    from genericmud.ui.wx_app import _connection_menu_label
+
+    assert _connection_menu_label(True) == "&Disconnect\tCtrl+D"
+    assert _connection_menu_label(False) == "&Reconnect\tCtrl+D"
