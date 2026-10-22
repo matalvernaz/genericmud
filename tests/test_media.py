@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import json
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import pytest
+
 from genericmud.app import EngineApp
+from genericmud.packs.vault import BlockedUrl
 from genericmud.protocol.msp import parse_msp_line
 from genericmud.protocol.telnet import OPT_GMCP, DataReceived, Subnegotiation
 from genericmud.sound.bus import SoundBackend
-from genericmud.sound.media import MediaLibrary, is_downloadable, media_url
+from genericmud.sound.media import MediaLibrary, http_fetch, is_downloadable, media_url
 from genericmud.transport.connection import GMCP_SUPPORTS
 from genericmud.voice.router import VoiceRouter
 from tests.helpers import RecordingBackend
@@ -40,8 +45,9 @@ class _Net:
         self.fail = fail
         self.pending: list[tuple] = []
 
-    def fetch(self, url: str, dest: Path) -> None:
+    def fetch(self, url: str, dest: Path, trusted_host: str = "") -> None:
         self.urls.append(url)
+        self.trusted_host = trusted_host
         if self.fail:
             raise OSError("404")
         dest.write_bytes(b"RIFF")
@@ -147,6 +153,60 @@ def test_library_does_not_retry_a_failed_url(tmp_path):
     assert net.urls == ["https://mud.example/hit.wav"]
     assert errors == ["https://mud.example/hit.wav"]
     assert not (tmp_path / "cache" / "hit.wav").exists()
+
+
+def test_library_hands_the_muds_host_to_the_download(tmp_path):
+    net = _Net()
+    library = _library(tmp_path, net)
+    library.trusted_host = "localhost"
+    library.fetch("hit.wav", "http://localhost:8000/hit.wav")
+    assert net.trusted_host == "localhost"
+
+
+@pytest.fixture
+def local_server():
+    """A real HTTP server on 127.0.0.1 serving /hit.wav, and /away redirecting to 10.0.0.1."""
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802 - http.server's naming
+            if self.path == "/away":
+                self.send_response(302)
+                self.send_header("Location", "http://10.0.0.1/hit.wav")
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.send_header("Content-Length", "4")
+            self.end_headers()
+            self.wfile.write(b"RIFF")
+
+        def log_message(self, *_args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield f"http://127.0.0.1:{server.server_address[1]}"
+    server.shutdown()
+    server.server_close()
+
+
+def test_a_mud_on_this_machine_can_serve_its_own_media(tmp_path, local_server):
+    dest = tmp_path / "hit.wav"
+    http_fetch(f"{local_server}/hit.wav", dest, trusted_host="127.0.0.1")
+    assert dest.read_bytes() == b"RIFF"
+
+
+def test_a_public_mud_still_cannot_reach_a_local_address(tmp_path, local_server):
+    with pytest.raises(BlockedUrl):
+        http_fetch(f"{local_server}/hit.wav", tmp_path / "hit.wav")
+    with pytest.raises(BlockedUrl):
+        http_fetch(f"{local_server}/hit.wav", tmp_path / "hit.wav", trusted_host="example.com")
+
+
+def test_trusting_the_muds_host_does_not_trust_other_private_addresses(tmp_path, local_server):
+    # The MUD's own address is allowed; a redirect from it into the rest of the LAN is not.
+    with pytest.raises(BlockedUrl):
+        http_fetch(f"{local_server}/away", tmp_path / "hit.wav", trusted_host="127.0.0.1")
 
 
 def test_library_refuses_non_audio_and_escaping_names(tmp_path):

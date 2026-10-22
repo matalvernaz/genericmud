@@ -34,7 +34,7 @@ _TIMEOUT_SECONDS = 30
 _CHUNK = 65536
 _USER_AGENT = "genericMud-media"
 
-Fetch = Callable[[str, Path], None]  # (url, destination): write the file there or raise
+Fetch = Callable[[str, Path, str], None]  # (url, destination, MUD host): write the file or raise
 Submit = Callable[[Callable[[], None], Callable[[BaseException | None], None]], None]
 
 
@@ -60,13 +60,19 @@ def is_downloadable(name: str) -> bool:
     return not is_unsafe(name) and Path(name.replace("\\", "/")).suffix.lower() in AUDIO_EXTENSIONS
 
 
-def http_fetch(url: str, dest: Path) -> None:
-    """Download ``url`` to ``dest`` with the soundpack downloader's SSRF checks and a size cap."""
-    from genericmud.packs.vault import _secure_urlopen, _validate_url
+def http_fetch(url: str, dest: Path, trusted_host: str = "") -> None:
+    """Download ``url`` to ``dest`` with the soundpack downloader's SSRF checks and a size cap.
 
-    _validate_url(url)
+    ``trusted_host`` is the MUD's own host. Its addresses pass the private-address check, so a
+    MUD on localhost or the LAN can serve its own sounds; every other private address is still
+    refused, so a public MUD can't point downloads at the player's router or other machines.
+    """
+    from genericmud.packs.vault import _validate_url, resolve_addresses, trusting_opener
+
+    trusted = resolve_addresses(trusted_host) if trusted_host else frozenset()
+    _validate_url(url, trusted)
     request = Request(url, headers={"User-Agent": _USER_AGENT})
-    with _secure_urlopen(request, timeout=_TIMEOUT_SECONDS) as response:
+    with trusting_opener(trusted).open(request, timeout=_TIMEOUT_SECONDS) as response:
         length = response.headers.get("Content-Length")
         if length and length.isdigit() and int(length) > MAX_MEDIA_BYTES:
             raise ValueError(f"{url} is larger than {MAX_MEDIA_BYTES // 1_000_000} MB")
@@ -110,6 +116,7 @@ class MediaLibrary:
         on_error: Callable[[str, str], None] | None = None,
     ) -> None:
         self.cache_dir = cache_dir
+        self.trusted_host = ""  # the MUD's host: its own private address may serve media
         self._fetch = fetch
         self._submit = submit
         self._on_error = on_error  # (url, reason): a failed download, reported once per URL
@@ -141,11 +148,12 @@ class MediaLibrary:
             return False
         self._waiting[dest] = [on_ready] if on_ready is not None else []
         partial = dest.with_name(dest.name + ".part")
+        trusted_host = self.trusted_host  # read now: the job runs on another thread
 
         def job() -> None:
             dest.parent.mkdir(parents=True, exist_ok=True)
             try:
-                self._fetch(url, partial)
+                self._fetch(url, partial, trusted_host)
                 os.replace(partial, dest)  # never leave a half-written file a later cue would play
             finally:
                 partial.unlink(missing_ok=True)

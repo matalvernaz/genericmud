@@ -17,7 +17,9 @@ import socket
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, OpenerDirector, Request, build_opener
+
+IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 
 BASE_URL = "https://mudsoundpack.com"
 _USER_AGENT = "genericMud-soundpack-browser"
@@ -41,13 +43,15 @@ class SourceUnavailable(Exception):
     """The catalogue entry has no archive genericMud can currently retrieve."""
 
 
-def _validate_url(url: str) -> None:
+def _validate_url(url: str, trusted: frozenset[IPAddress] = frozenset()) -> None:
     """Refuse SSRF-shaped download URLs before urlopen sees them.
 
     urllib will happily open ``file://`` (local file read) and reach loopback/RFC1918 hosts, so a
     compromised vault page or a malicious pack installer could point us at ``file:///etc/...`` or an
     intranet service. Allow only http(s), and reject a host that resolves to a non-public address.
     An unresolvable host isn't our SSRF concern -- the real fetch fails on its own -- so we skip it.
+    ``trusted`` addresses pass even when private: a MUD on this machine or the LAN serving its
+    own media is the one non-public host the player already chose to connect to.
     """
     parsed = urlparse(url)
     if parsed.scheme not in _ALLOWED_SCHEMES:
@@ -61,6 +65,8 @@ def _validate_url(url: str) -> None:
         return  # unresolvable: let the actual fetch fail normally, not an SSRF risk
     for info in infos:
         ip = ipaddress.ip_address(info[4][0])
+        if ip in trusted:
+            continue
         if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
             raise BlockedUrl(f"refusing to fetch from a non-public address ({ip})")
 
@@ -74,8 +80,12 @@ class _ValidatingRedirectHandler(HTTPRedirectHandler):
     target raises :class:`BlockedUrl` out of the open call rather than being followed.
     """
 
+    def __init__(self, trusted: frozenset[IPAddress] = frozenset()) -> None:
+        super().__init__()
+        self.trusted = trusted
+
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D102 - see class
-        _validate_url(newurl)
+        _validate_url(newurl, self.trusted)
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
@@ -88,6 +98,20 @@ def _open(opener, request):
     if opener is _secure_urlopen:
         return opener(request, timeout=_NETWORK_TIMEOUT_SECONDS)
     return opener(request)
+
+
+def resolve_addresses(host: str) -> frozenset[IPAddress]:
+    """Every address ``host`` resolves to, or nothing when it doesn't resolve."""
+    try:
+        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except (OSError, UnicodeError):
+        return frozenset()
+    return frozenset(ipaddress.ip_address(info[4][0]) for info in infos)
+
+
+def trusting_opener(trusted: frozenset[IPAddress]) -> OpenerDirector:
+    """An opener like :func:`_secure_urlopen`'s whose redirect checks also pass ``trusted``."""
+    return build_opener(_ValidatingRedirectHandler(trusted))
 
 
 def _secure_urlopen(request, *args, **kwargs):
