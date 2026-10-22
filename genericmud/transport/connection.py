@@ -69,6 +69,7 @@ GMCP_SUPPORTS = (
     "Char.Items 1",
     "Char.Skills 1",
     "Char.Vitals 1",
+    "Client.Media 1",
     "Comm.Channel 1",
     "Group 1",
     "Room 1",

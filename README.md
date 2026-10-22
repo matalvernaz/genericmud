@@ -362,8 +362,13 @@ one rather than assuming. Sounds a pack can't find are reported instead of
 failing silently, and a pack that fails to load doesn't take the session with
 it.
 
-If the MUD drives the sounds itself (many do, over MSP), there's nothing to
-install: genericMud plays what the MUD asks for.
+If the MUD drives the sounds itself (many do, over MSP or GMCP `Client.Media`),
+there's nothing to install: genericMud plays what the MUD asks for. Sounds are
+looked for in the world's Sounds folder first; when the MUD says where to
+download one it doesn't find there, genericMud fetches it once into a per-world
+`media` folder next to its settings and plays it from there afterwards. Only
+audio files are downloaded, each up to 64 MB, and never from addresses on your
+own network.
 
 ## Sharing your setup
 

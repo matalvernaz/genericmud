@@ -47,6 +47,7 @@ from genericmud.session.hub import SessionHub
 from genericmud.session.log import SessionLogger
 from genericmud.session.login import AutoLogin
 from genericmud.sound.bus import DEFAULT_CATEGORY, MUSIC_CATEGORY, SoundBackend, SoundBus
+from genericmud.sound.media import MediaLibrary, media_url
 from genericmud.voice.router import REVIEW_CHANNEL, SYSTEM_CHANNEL, VoiceRouter
 
 if TYPE_CHECKING:
@@ -76,6 +77,8 @@ _SOCKET_CHANGES = (
     "connection lost",
     "reconnected",
 )
+_MEDIA_DEFAULT_VOLUME = 50  # Client.Media.Play's volume when the server leaves it out (spec)
+_MEDIA_TRACKED = 64  # Client.Media cues remembered for Stop before finished ones are dropped
 # MSDP variables that mean the player's location changed; both the table and flat forms.
 _MSDP_ROOM_VARS = frozenset(
     {"ROOM", "ROOM_NAME", "ROOM_AREA", "ROOM_EXITS", "ROOM_VNUM", "AREA_NAME"}
@@ -111,6 +114,15 @@ _TOGGLE_ACTIONS = {
     "interrupt_mode": "interrupt mode",
     "autoretype": "auto-repeat",  # spoken as "auto-repeat on/off" (empty Enter resends last cmd)
 }
+
+
+def _media_int(value: object, default, low: int, high: int):
+    """A Client.Media number clamped to its range; servers send strings and floats too."""
+    try:
+        number = int(float(value))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+    return max(low, min(high, number))
 
 
 def _default_schedule(delay: float, callback: Callable[[], None]) -> object | None:
@@ -250,6 +262,7 @@ class EngineApp:
         other_worlds: Callable[[], Iterable[str]] | None = None,
         clock: Callable[[], float] | None = None,
         withdraw_option: Callable[[int], None] | None = None,
+        media: MediaLibrary | None = None,
     ) -> None:
         self.buffer = Buffer()
         self.voice = voice
@@ -264,6 +277,18 @@ class EngineApp:
         # nothing consumes in native mode -- so a "post" backend there is candidate A for silence).
         self._diag_backend_kind = "native" if sound_backend is not None else "post"
         self.sound = SoundBus(sound_backend or _PostSoundBackend(self._post))
+        # Server media (MSP U=, GMCP Client.Media) resolves to files on disk and downloads into a
+        # per-world cache. Only with native audio: the web renderer fetches relative names from
+        # its own /sounds/ route and couldn't play a path from the cache.
+        self._native_audio = sound_backend is not None
+        self.media = media or MediaLibrary(
+            config_dir() / "media" / world_component(name), on_error=self._media_failed
+        )
+        self._msp_urls = {"sound": "", "music": ""}  # set by !!SOUND(Off U=...)/!!MUSIC(Off U=...)
+        self._media_url = ""  # Client.Media.Default
+        self._media_cues: dict[str, dict[str, object]] = {}  # bus channel -> Client.Media.Play
+        self._media_gen: dict[str, int] = {}  # bumps per cue/stop so a late download can't play
+        self._media_seq = 0  # unique channels for keyless Client.Media sounds, which overlap
         self.sink = AppSink(
             send=self._send,
             send_raw=send_raw,
@@ -866,9 +891,11 @@ class EngineApp:
         for cue in cues:
             channel = MUSIC_CATEGORY if cue.kind == "music" else DEFAULT_CATEGORY
             if cue.is_stop:
+                if cue.url:  # the spec's way to set where later cues download from
+                    self._msp_urls[cue.kind] = cue.url
                 if self._diag is not None:
                     self._diag.event("msp.cue", kind=cue.kind, stop=True)
-                self.sound.stop(channel)
+                self._stop_media(channel)
                 continue
             # MSP filenames come straight from the untrusted server. Block the dangerous shapes
             # (absolute / UNC / drive / ..) so a hostile MUD can't open an arbitrary file -- a
@@ -880,11 +907,19 @@ class EngineApp:
                 continue
             if self._diag is not None:
                 self._diag.event("msp.cue", kind=cue.kind, file=cue.file, volume=cue.volume)
+            gain = cue.volume / 100.0
+            url = cue.url or self._msp_urls[cue.kind]
             if cue.kind == "music":
-                self.sound.music(cue.file, channel, gain=cue.volume / 100.0)
+                self._start_media(
+                    cue.file, url, channel,
+                    lambda path, gain=gain: self.sound.music(path, MUSIC_CATEGORY, gain=gain),
+                )
             else:
-                self.sound.play(
-                    cue.file, channel, gain=cue.volume / 100.0, loop=cue.loops_forever
+                self._start_media(
+                    cue.file, url, channel,
+                    lambda path, gain=gain, loop=cue.loops_forever: self.sound.play(
+                        path, DEFAULT_CATEGORY, gain=gain, loop=loop
+                    ),
                 )
         spans = parse_ansi(text)
         plain = "".join(span.text for span in spans)
@@ -941,6 +976,8 @@ class EngineApp:
                             self._server_goodbye(message.value)
                         elif message.name.lower() == "room.wrongdir":
                             self._wrong_direction(message.value)
+                        elif message.name.lower().startswith("client.media."):
+                            self._client_media(message.name, message.value)
                     elif message.name == msdp.REPORTABLE_VARIABLES:
                         self._subscribe_msdp(message.value)
                     elif message.name in _MSDP_ROOM_VARS:
@@ -996,6 +1033,132 @@ class EngineApp:
             "vnum": table.get("VNUM") or self._gauges.get("ROOM_VNUM"),
         }
         return {key: value for key, value in room.items() if value}
+
+    # --- server media (MSP U= and GMCP Client.Media) ---
+
+    def _start_media(
+        self, name: str, url: str, channel: str, play: Callable[[str], None]
+    ) -> None:
+        """Play ``name`` through ``play``: from disk when it's there, after a download when the
+        server said where to get it, else by name as before (the backend reports it missing)."""
+        gen = self._media_gen[channel] = self._media_gen.get(channel, 0) + 1
+        if not self._native_audio:
+            play(name)
+            return
+        path = self.media.locate(name, self.engine.get_var("sppath"))
+        if path is not None:
+            play(path)
+            return
+        if url:
+            address = media_url(url, name)
+
+            def ready(downloaded: str) -> None:
+                # A stop, or a newer cue on this channel, arrived while the file downloaded.
+                if self._media_gen.get(channel) == gen:
+                    play(downloaded)
+
+            if self.media.fetch(name, address, ready):
+                if self._diag is not None:
+                    self._diag.event("media.download", file=name, url=address)
+                return
+        play(name)
+
+    def _stop_media(self, channel: str) -> None:
+        self._media_gen[channel] = self._media_gen.get(channel, 0) + 1
+        self._media_cues.pop(channel, None)
+        self.sound.stop(channel)
+
+    def _media_failed(self, url: str, reason: str) -> None:
+        if self._diag is not None:
+            self._diag.event("media.download", url=url, failed=reason)
+        self._post(protocol.echo(f"* sound download failed: {url} ({reason})"))
+
+    def _client_media(self, package: str, data: object) -> None:
+        """GMCP ``Client.Media.*`` (Mudlet's media spec): Default, Load, Play and Stop."""
+        verb = package.rsplit(".", 1)[-1].lower()
+        body = data if isinstance(data, dict) else {}
+        if verb == "default":
+            self._media_url = str(body.get("url") or "")
+        elif verb == "load":
+            name = str(body.get("name") or "")
+            url = str(body.get("url") or self._media_url)
+            if self._native_audio and name and url and not is_unsafe(name):
+                if self.media.locate(name, self.engine.get_var("sppath")) is None:
+                    self.media.fetch(name, media_url(url, name))
+        elif verb == "play":
+            self._media_play(body)
+        elif verb == "stop":
+            self._media_stop(body)
+
+    def _media_play(self, body: dict) -> None:
+        name = str(body.get("name") or "")
+        kind = str(body.get("type") or "sound").lower()
+        if not name or kind not in ("sound", "music"):  # video has nowhere to play
+            return
+        if is_unsafe(name):  # the same hostile shapes MSP refuses
+            if self._diag is not None:
+                self._diag.event("media.play", file=name, blocked=True)
+            return
+        gain = _media_int(body.get("volume"), _MEDIA_DEFAULT_VOLUME, 1, 100) / 100.0
+        loop = _media_int(body.get("loops"), 1, -1, 1_000_000) < 0  # counts > 1 play once, as MSP
+        key = str(body.get("key") or "")
+        if kind == "music":
+            channel = MUSIC_CATEGORY
+            current = self._media_cues.get(channel)
+            # "continue" (default true): the same track asked for again keeps playing rather
+            # than restarting, which is what a server re-sending an area's music means.
+            if body.get("continue", True) and current and current["name"] == name:
+                return
+        elif key:
+            channel = f"media:{key}"
+        else:
+            self._media_seq += 1
+            channel = f"media-{self._media_seq}"
+        self._forget_finished_media()
+        self._media_cues[channel] = {
+            "name": name,
+            "type": kind,
+            "key": key,
+            "tag": str(body.get("tag") or ""),
+            "priority": _media_int(body.get("priority"), 0, 0, 100),
+        }
+        url = str(body.get("url") or self._media_url)
+        if self._diag is not None:
+            self._diag.event("media.play", file=name, kind=kind, channel=channel)
+        if kind == "music":
+            self._start_media(
+                name, url, channel, lambda path: self.sound.music(path, channel, gain)
+            )
+        else:
+            self._start_media(
+                name, url, channel,
+                lambda path: self.sound.play(path, channel, gain=gain, loop=loop),
+            )
+
+    def _media_stop(self, body: dict) -> None:
+        """Stop the Client.Media cues matching every field given; an empty body stops them all.
+        ``priority`` matches cues at or below it, as the spec defines."""
+        wanted = {
+            field: str(body[field])
+            for field in ("name", "type", "key", "tag")
+            if body.get(field) not in (None, "")
+        }
+        ceiling = _media_int(body.get("priority"), None, 0, 100)
+        for channel, cue in list(self._media_cues.items()):
+            if any(str(cue[field]) != value for field, value in wanted.items()):
+                continue
+            if ceiling is not None and int(cue["priority"]) > ceiling:  # type: ignore[call-overload]
+                continue
+            self._stop_media(channel)
+
+    def _forget_finished_media(self) -> None:
+        """Drop finished one-shots so a long session's keyless cues don't pile up forever."""
+        if len(self._media_cues) < _MEDIA_TRACKED:
+            return
+        for channel in list(self._media_cues):
+            if channel.startswith("media-") and not self.sound.is_playing(channel):
+                self._media_cues.pop(channel, None)
+                self._media_gen.pop(channel, None)
 
     def _server_goodbye(self, reason: object) -> None:
         """GMCP ``Core.Goodbye``: the server is closing this link deliberately, and the body
