@@ -263,8 +263,9 @@ def test_library_hands_the_muds_host_to_the_download(tmp_path):
 
 @pytest.fixture
 def local_server():
-    """A real HTTP server on 127.0.0.1 serving /hit.wav, /away redirecting to 10.0.0.1, and
-    /trickle sending one byte every 0.2 seconds for 3 seconds."""
+    """A real HTTP server on 127.0.0.1 serving /hit.wav, /away redirecting to 10.0.0.1,
+    /trickle sending one byte every 0.2 seconds for 3 seconds, and /announced-big, whose
+    Content-Length says 100 bytes while it sends 4."""
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):  # noqa: N802 - http.server's naming
@@ -285,7 +286,7 @@ def local_server():
                 self.end_headers()
                 return
             self.send_response(200)
-            self.send_header("Content-Length", "4")
+            self.send_header("Content-Length", "100" if self.path == "/announced-big" else "4")
             self.end_headers()
             self.wfile.write(b"RIFF")
 
@@ -314,6 +315,17 @@ def test_a_download_that_trickles_in_is_given_up_on(tmp_path, local_server, monk
     with pytest.raises(TimeoutError):
         http_fetch(f"{local_server}/trickle", tmp_path / "t.wav", trusted_host="127.0.0.1")
     assert time.monotonic() - started < 2
+
+
+def test_a_download_past_the_size_cap_is_refused(tmp_path, local_server, monkeypatch):
+    monkeypatch.setattr(media, "MAX_MEDIA_BYTES", 50)
+    # On the length the server announces, before reading the body...
+    with pytest.raises(ValueError, match="larger than"):
+        http_fetch(f"{local_server}/announced-big", tmp_path / "a.wav", trusted_host="127.0.0.1")
+    # ...and, when it announces none, as soon as the body passes the cap.
+    monkeypatch.setattr(media, "MAX_MEDIA_BYTES", 3)
+    with pytest.raises(ValueError, match="larger than"):
+        http_fetch(f"{local_server}/trickle", tmp_path / "b.wav", trusted_host="127.0.0.1")
 
 
 def test_a_public_mud_still_cannot_reach_a_local_address(tmp_path, local_server):
