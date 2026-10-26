@@ -1,4 +1,4 @@
-"""Saved MUD worlds (name/host/port/tls/sounds/encoding), persisted as TOML.
+"""Saved MUD worlds (connection, encoding, command stacking, logging), persisted as TOML.
 
 tomllib is read-only, so saving hand-writes the small, well-defined schema.
 """
@@ -17,6 +17,12 @@ from genericmud.protocol.charset import AUTO, normalize_encoding
 MIN_PORT = 1
 MAX_PORT = 65535
 DEFAULT_PORT = 4000
+DEFAULT_SEPARATOR = ";"
+# genericMud's own commands start with this ("/goto"), so it can't separate commands too.
+CLIENT_COMMAND_PREFIX = "/"
+# How a world names its log files: a new file each session (the original behaviour), one per
+# day, or one for the world. Each appends.
+LOG_FILES = ("session", "day", "world")
 
 
 @dataclass
@@ -29,14 +35,47 @@ class World:
     # Character encoding for this MUD's text, both directions (protocol/charset.py). Always
     # a supported setting: anything else becomes "auto", so a typo can't break a world.
     encoding: str = AUTO
+    # Command stacking: "n;n;look" sends three commands. The separator is one character, and
+    # typed twice it's sent as itself (MUSHclient's rule). Off sends every line whole.
+    command_stacking: bool = True
+    command_separator: str = DEFAULT_SEPARATOR
+    # Logging: start when the world connects, which files to write (LOG_FILES), and whether
+    # the commands you type go in with the MUD's output.
+    log_automatically: bool = False
+    log_files: str = "session"
+    log_commands: bool = True
 
     def __post_init__(self) -> None:
         self.encoding = normalize_encoding(self.encoding)
+        self.command_separator = normalize_separator(self.command_separator)
+        self.log_files = normalize_log_files(self.log_files)
         # No real world name or host has a control character in it, and one gets in easily:
         # a shared world zip can carry a newline, Ctrl+Backspace in a Windows edit box
         # types a DEL. Keep them out of the name every rule, map and folder is filed under.
         self.name = _without_control_characters(self.name)
         self.host = _without_control_characters(self.host)
+
+
+def separator_problem(value: str) -> str | None:
+    """Why ``value`` can't separate commands, in words for the player; None when it can."""
+    if len(value) != 1:
+        return "The command separator has to be one character."
+    if value.isspace() or unicodedata.category(value) == "Cc":
+        return "The command separator can't be a space."
+    if value == CLIENT_COMMAND_PREFIX:
+        return "The command separator can't be /, which starts genericMud's own commands."
+    return None
+
+
+def normalize_separator(value: object) -> str:
+    """A usable command separator: ``value``, or the default when it can't be one."""
+    text = value if isinstance(value, str) else ""
+    return text if separator_problem(text) is None else DEFAULT_SEPARATOR
+
+
+def normalize_log_files(value: object) -> str:
+    """One of LOG_FILES; anything else is a new file each session."""
+    return value if value in LOG_FILES else "session"
 
 
 def parse_port(value: object) -> int:
@@ -105,6 +144,11 @@ def load_worlds(path: Path | None = None) -> list[World]:
                 tls=entry.get("tls") is True,
                 sounds=sounds,
                 encoding=normalize_encoding(entry.get("encoding")),
+                command_stacking=entry.get("command_stacking") is not False,
+                command_separator=normalize_separator(entry.get("command_separator")),
+                log_automatically=entry.get("log_automatically") is True,
+                log_files=normalize_log_files(entry.get("log_files")),
+                log_commands=entry.get("log_commands") is not False,
             )
         )
     return worlds
@@ -127,6 +171,19 @@ def save_worlds(worlds: list[World], path: Path | None = None) -> None:
         encoding = normalize_encoding(world.encoding)
         if encoding != AUTO:  # absent means auto, which keeps files older builds wrote as-is
             lines.append(f"encoding = {_quote(encoding)}")
+        # The same for the rest: only what differs from the default is written.
+        if not world.command_stacking:
+            lines.append("command_stacking = false")
+        separator = normalize_separator(world.command_separator)
+        if separator != DEFAULT_SEPARATOR:
+            lines.append(f"command_separator = {_quote(separator)}")
+        if world.log_automatically:
+            lines.append("log_automatically = true")
+        log_files = normalize_log_files(world.log_files)
+        if log_files != "session":
+            lines.append(f"log_files = {_quote(log_files)}")
+        if not world.log_commands:
+            lines.append("log_commands = false")
         blocks.append("\n".join(lines))
     atomic_write_text(target, "\n\n".join(blocks) + "\n")
 

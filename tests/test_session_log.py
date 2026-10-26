@@ -86,3 +86,71 @@ def test_session_logger_auto_stops_on_write_error(tmp_path):
     logger._handle.close()  # make the next write raise ValueError/OSError on a closed file
     assert logger.log("x") is False
     assert not logger.active  # auto-stopped
+
+
+def _world(**settings):
+    from genericmud.config.worlds import World
+
+    return World("gw", "gw.example", 23, **settings)
+
+
+def test_a_world_can_log_automatically_when_it_connects(tmp_path):
+    app, backend, _sent, posted = _app(tmp_path)
+    app.apply_world_settings(_world(log_automatically=True))
+    app.on_connect("gw")
+    assert app.logger is not None and app.logger.active
+    app.on_telnet_event(DataReceived(b"Welcome!\r\n"))
+    lines = app.logger.path.read_text(encoding="utf-8").splitlines()
+    assert lines[0].startswith("Session started ")
+    assert "Welcome!" in lines
+    # Said in the output rather than aloud, over the connecting announcements.
+    assert any(m.get("text", "").startswith("* Logging to gw-") for m in posted)
+    assert not any("logging" in spoken.lower() for spoken in backend.spoken)
+
+
+def test_stopping_a_log_by_hand_keeps_it_stopped_when_the_world_reconnects(tmp_path):
+    app, _backend, _sent, _posted = _app(tmp_path)
+    app.apply_world_settings(_world(log_automatically=True))
+    app.on_connect("gw")
+    app._handle_key("alt+shift+l")  # stopped by hand
+    app.on_connection_status("connection lost")
+    app.on_connection_status("reconnected")
+    assert app.logger is None
+
+
+def test_logs_by_day_and_by_world_append_each_session_with_its_time(tmp_path):
+    from datetime import date
+
+    app, _backend, _sent, _posted = _app(tmp_path)
+    app.apply_world_settings(_world(log_files="day"))
+    for _session in range(2):
+        app._handle_key("alt+shift+l")
+        app.on_telnet_event(DataReceived(b"hello\r\n"))
+        app._handle_key("alt+shift+l")
+    day_file = tmp_path / f"gw-{date.today():%Y-%m-%d}.log"
+    lines = day_file.read_text(encoding="utf-8").splitlines()
+    assert [line.startswith("Session started ") for line in lines] == [True, False, True, False]
+    app.apply_world_settings(_world(log_files="world"))
+    app._handle_key("alt+shift+l")
+    assert app.logger.path == tmp_path / "gw.log"
+
+
+def test_a_world_can_leave_what_you_type_out_of_its_log(tmp_path):
+    app, _backend, _sent, _posted = _app(tmp_path)
+    app.apply_world_settings(_world(log_commands=False))
+    app._handle_key("alt+shift+l")
+    app.on_telnet_event(DataReceived(b"You see a dragon\r\n"))
+    app.on_ws_message({"type": "input", "text": "kill dragon"})
+    text = app.logger.path.read_text(encoding="utf-8")
+    assert "You see a dragon" in text
+    assert ">" not in text
+
+
+def test_a_log_that_cant_start_says_so_and_the_world_still_connects(tmp_path):
+    blocked = tmp_path / "logs"
+    blocked.write_text("a file where the logs folder should be", encoding="utf-8")
+    app, backend, _sent, _posted = _app(blocked)
+    app.apply_world_settings(_world(log_automatically=True))
+    app.on_connect("gw")
+    assert app.logger is None
+    assert any(spoken.startswith("Couldn't start logging") for spoken in backend.spoken)

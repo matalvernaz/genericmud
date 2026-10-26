@@ -68,6 +68,9 @@ byte: Automatic would take that byte as a sign of an older encoding and misread
 the rest of the session. To change it for a saved world, press **Ctrl+O**,
 choose the world, and press **Edit**; it applies from the next connection.
 
+A world's details also hold its **command separator** and **logging** settings,
+described below. Changes to those apply straight away, even to an open tab.
+
 Next time, press **Ctrl+O** to pick the world from your saved list; that dialog
 can also edit a saved world or start a new one. **Ctrl+D** disconnects and
 **Ctrl+W** closes the tab. If the connection drops on its own, genericMud
@@ -79,7 +82,10 @@ on almost any MUD. A few conveniences in the command box:
 
 - **Up / Down** step through what you've typed before.
 - A **semicolon** splits one line into several commands, so `n;n;look` sends
-  three.
+  three. Type it twice to send a real one: `say hi;; bye` sends `say hi; bye`.
+  Each world can use a different separator, or none, in its details. The
+  separator works the same in your own aliases, hotkeys and triggers;
+  soundpacks aren't affected.
 - **Ctrl+Enter** turns on autoretype: pressing Enter on an empty line resends
   your last command, which saves a lot of typing in a fight.
 - **Ctrl+Space** completes the word you're typing from words that recently came
@@ -130,8 +136,13 @@ those channels, **Ctrl+Alt+Up/Down** scroll within the one you're on, and
 main output.
 
 **Alt+Shift+L** starts and stops writing everything to a log file, if you want a
-transcript to read later. While the MUD is hiding your typing — which is how
-they ask for a password — the log records `***` instead of what you typed.
+transcript to read later. In a world's details you can have it log automatically
+whenever it connects, choose a new file each session, one file per day or one
+file for the world, and leave out what you type. Every log adds to its file and
+starts with the date and time, and the files are in the `logs` folder. If you
+stop a log with Alt+Shift+L, it stays stopped until you close the tab. While the
+MUD is hiding your typing — which is how they ask for a password — the log
+records `***` instead of what you typed.
 
 ## Getting around the game
 

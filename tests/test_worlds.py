@@ -72,3 +72,51 @@ def test_a_control_character_cannot_cost_the_other_saved_worlds(tmp_path):
 def test_a_world_name_or_host_drops_control_characters():
     world = World("Friend\nMUD\x7f", " mud.example\x00 ", 4000)
     assert (world.name, world.host) == ("Friend MUD", "mud.example")
+
+
+def test_command_stacking_and_logging_settings_round_trip(tmp_path):
+    path = tmp_path / "worlds.toml"
+    worlds = [
+        World(
+            "Chat", "chatmud.com", 7777, command_stacking=False, command_separator="|",
+            log_automatically=True, log_files="day", log_commands=False,
+        ),
+        World("Local", "127.0.0.1", 4000, log_files="world"),
+    ]
+    save_worlds(worlds, path)
+    assert load_worlds(path) == worlds
+
+
+def test_a_world_saved_by_an_older_build_keeps_todays_behaviour(tmp_path):
+    path = tmp_path / "worlds.toml"
+    path.write_text('[[world]]\nname = "Old"\nhost = "old.example"\nport = 23\n',
+                    encoding="utf-8")
+    (world,) = load_worlds(path)
+    assert world.command_stacking and world.command_separator == ";"
+    assert not world.log_automatically
+    assert world.log_files == "session"
+    assert world.log_commands
+    save_worlds([world], path)  # and a default world writes none of the new settings
+    text = path.read_text(encoding="utf-8")
+    assert "command_" not in text and "log_" not in text
+
+
+def test_a_separator_that_cant_work_falls_back_to_a_semicolon(tmp_path):
+    from genericmud.config.worlds import separator_problem
+
+    assert World("A", "h", 23, command_separator=" ").command_separator == ";"
+    assert World("A", "h", 23, command_separator="/").command_separator == ";"
+    assert World("A", "h", 23, command_separator="ab").command_separator == ";"
+    assert World("A", "h", 23, command_separator="|").command_separator == "|"
+    assert World("A", "h", 23, log_files="weekly").log_files == "session"
+    assert separator_problem("") == "The command separator has to be one character."
+    assert separator_problem("/").startswith("The command separator can't be /")
+    assert separator_problem("|") is None
+    path = tmp_path / "worlds.toml"
+    path.write_text(
+        '[[world]]\nname = "A"\nhost = "h"\nport = 23\ncommand_separator = "  "\n'
+        'log_files = "hourly"\n',
+        encoding="utf-8",
+    )
+    (world,) = load_worlds(path)
+    assert world.command_separator == ";" and world.log_files == "session"

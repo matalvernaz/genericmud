@@ -713,3 +713,69 @@ def test_closing_the_tab_tears_the_session_down_even_if_a_question_wont_close(
     finally:
         panel._questions.clear()
         _close_question_panel(panel, loop)
+
+
+def test_world_dialog_round_trips_command_stacking_and_logging(frame):
+    from genericmud.ui.wx_app import WorldDialog
+
+    world = World(
+        "Chat", "chatmud.com", 7777, command_stacking=False, command_separator="|",
+        log_automatically=True, log_files="world", log_commands=False,
+    )
+    dialog = WorldDialog(frame, world)
+    try:
+        assert dialog._separator.GetName() == "Command separator"
+        assert dialog._log_files.GetName() == "Log files"
+        assert dialog._log_files.GetStringSelection() == "One file for this world"
+        _accept(dialog)
+        assert dialog.get_world() == world
+    finally:
+        dialog.Destroy()
+
+
+def test_world_dialog_refuses_a_separator_that_cant_work(frame, monkeypatch):
+    from genericmud.ui import wx_app
+
+    told: list[str] = []
+    monkeypatch.setattr(wx_app.wx, "MessageBox", lambda text, *_args: told.append(text))
+    dialog = wx_app.WorldDialog(frame, World("A", "a.example", 23))
+    try:
+        dialog._separator.SetValue("/")
+        _accept(dialog)
+        assert told == ["The command separator can't be /, which starts genericMud's own commands."]
+        with pytest.raises(RuntimeError):
+            dialog.get_world()  # not accepted
+        dialog._stacking.SetValue(False)  # with stacking off it doesn't matter
+        _accept(dialog)
+        assert dialog.get_world().command_separator == ";"
+    finally:
+        dialog.Destroy()
+
+
+def test_editing_a_world_changes_its_open_tab_at_once(frame, monkeypatch):
+    import asyncio
+
+    from genericmud.app import EngineApp
+    from genericmud.ui import wx_app
+    from genericmud.voice.router import VoiceRouter
+    from tests.helpers import RecordingBackend
+
+    async def no_session(_panel):
+        return None
+
+    monkeypatch.setattr(wx_app.SessionPanel, "_start", no_session)
+    loop = asyncio.new_event_loop()
+    panel = wx_app.SessionPanel(frame, loop, {}, World("W", "w.example", 23))
+    try:
+        panel.app = EngineApp(VoiceRouter(RecordingBackend(), clock=lambda: 0.0), keymap={})
+        edited = World("W", "w.example", 23, command_separator="|", log_commands=False)
+        panel.apply_world_settings(edited)
+        loop.run_until_complete(asyncio.sleep(0.01))
+        assert panel.world is edited
+        assert panel.app.command_separator == "|"
+        assert panel.app.log_commands is False
+    finally:
+        panel.app = None
+        panel.Destroy()
+        loop.run_until_complete(asyncio.sleep(0.01))
+        loop.close()

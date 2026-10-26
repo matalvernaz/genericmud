@@ -45,11 +45,14 @@ from genericmud.config.update_prefs import is_snoozed, load_prefs, save_prefs, s
 from genericmud.config.world_files import migrate_world_files
 from genericmud.config.worlds import (
     DEFAULT_PORT,
+    DEFAULT_SEPARATOR,
+    LOG_FILES,
     World,
     config_dir,
     load_worlds,
     parse_port,
     save_worlds,
+    separator_problem,
 )
 from genericmud.packs import (
     PackError,
@@ -355,6 +358,7 @@ class SessionPanel(wx.Panel):
         self._connection._on_event = self.app.on_telnet_event
         self._connection.auto_reconnect = True
         self._connection.on_status = self.app.on_connection_status
+        self.app.apply_world_settings(self.world)  # command stacking and logging
         if self.world.sounds:  # point @sppath at the world's sound folder before packs load
             self.app.engine.set_var("sppath", self.world.sounds)
             self.app.engine.sounds_dir = self.world.sounds  # and trust it, as packs can't be
@@ -829,6 +833,12 @@ class SessionPanel(wx.Panel):
     def set_active(self, active: bool) -> None:
         self._loop.call_soon_threadsafe(self._apply_active, active)
 
+    def apply_world_settings(self, world: World) -> None:  # UI thread
+        """Use the world's edited settings: stacking and logging now, the rest next connect."""
+        self.world = world
+        if self.app is not None:
+            self._loop.call_soon_threadsafe(self.app.apply_world_settings, world)
+
     def _apply_active(self, active: bool) -> None:  # loop thread
         if self._voice is not None:
             self._voice.set_muted(not active)  # only the foreground MUD self-voices
@@ -1073,6 +1083,9 @@ class FindDialog(wx.Dialog):
         )
 
 
+# What a world's log file choices are called in its details, in LOG_FILES order.
+_LOG_FILE_LABELS = ("A new file each session", "One file per day", "One file for this world")
+
 _ID_NEW_WORLD = wx.ID_HIGHEST + 1
 _ID_EDIT_WORLD = wx.ID_HIGHEST + 2
 
@@ -1116,6 +1129,43 @@ class WorldDialog(wx.Dialog):
         self._tls.SetName("Use TLS")
         grid.Add(self._tls, 1, wx.EXPAND)
 
+        # Command stacking: "n;n;look" sends three commands.
+        grid.Add((0, 0))
+        self._stacking = wx.CheckBox(self, label="&Split commands at a separator, as in n;n;look")
+        self._stacking.SetName("Split commands at a separator, as in n;n;look")
+        self._stacking.SetValue(True)
+        grid.Add(self._stacking, 1, wx.EXPAND)
+        self._separator = self._labeled_text(
+            grid, "Comman&d separator:", "Command separator", DEFAULT_SEPARATOR
+        )
+        self._separator.SetMaxLength(1)
+        grid.Add((0, 0))
+        separator_note = wx.StaticText(
+            self,
+            label=(
+                "Type the separator twice to send it as itself. It works the same in your "
+                "own aliases, hotkeys and triggers. Soundpacks aren't affected."
+            ),
+        )
+        separator_note.Wrap(360)
+        grid.Add(separator_note, 1, wx.EXPAND)
+
+        # Logging (Alt+Shift+L still starts and stops it by hand).
+        grid.Add((0, 0))
+        self._log_automatically = wx.CheckBox(self, label="&Log automatically when connecting")
+        self._log_automatically.SetName("Log automatically when connecting")
+        grid.Add(self._log_automatically, 1, wx.EXPAND)
+        grid.Add(wx.StaticText(self, label="Log &files:"), 0, wx.ALIGN_CENTER_VERTICAL)
+        self._log_files = wx.Choice(self, choices=list(_LOG_FILE_LABELS))
+        self._log_files.SetName("Log files")
+        self._log_files.SetSelection(0)
+        grid.Add(self._log_files, 1, wx.EXPAND)
+        grid.Add((0, 0))
+        self._log_commands = wx.CheckBox(self, label="Log what &you type (passwords stay hidden)")
+        self._log_commands.SetName("Log what you type (passwords stay hidden)")
+        self._log_commands.SetValue(True)
+        grid.Add(self._log_commands, 1, wx.EXPAND)
+
         self._save: wx.CheckBox | None = None
         if show_save:
             grid.Add((0, 0))
@@ -1155,6 +1205,11 @@ class WorldDialog(wx.Dialog):
             self._sounds.SetValue(initial.sounds or "")
             values = [value for value, _label in ENCODING_CHOICES]
             self._encoding.SetSelection(values.index(initial.encoding))
+            self._stacking.SetValue(initial.command_stacking)
+            self._separator.SetValue(initial.command_separator)
+            self._log_automatically.SetValue(initial.log_automatically)
+            self._log_files.SetSelection(LOG_FILES.index(initial.log_files))
+            self._log_commands.SetValue(initial.log_commands)
         if lock_name:
             self._name.Enable(False)
             self._host.SetFocus()
@@ -1185,6 +1240,13 @@ class WorldDialog(wx.Dialog):
             self._port.SetFocus()
             self._port.SelectAll()
             return
+        separator = self._separator.GetValue()
+        problem = separator_problem(separator)
+        if problem is not None and self._stacking.GetValue():
+            wx.MessageBox(problem, "World details", wx.OK | wx.ICON_ERROR, self)
+            self._separator.SetFocus()
+            self._separator.SelectAll()
+            return
         self._world = World(
             name=self._name.GetValue().strip() or host,
             host=host,
@@ -1192,6 +1254,11 @@ class WorldDialog(wx.Dialog):
             tls=self._tls.GetValue(),
             sounds=self._sounds.GetValue().strip() or None,
             encoding=ENCODING_CHOICES[self._encoding.GetSelection()][0],
+            command_stacking=self._stacking.GetValue(),
+            command_separator=separator,  # a bad one with stacking off becomes the default
+            log_automatically=self._log_automatically.GetValue(),
+            log_files=LOG_FILES[self._log_files.GetSelection()],
+            log_commands=self._log_commands.GetValue(),
         )
         self.EndModal(wx.ID_OK)
 
@@ -3451,11 +3518,21 @@ class GenericMudFrame(wx.Frame):
             saved = True
             if dialog.should_save():
                 saved = self._save_world(world, replacing=original_name)
+            if saved and original_name is not None:
+                self._apply_to_open_tabs(original_name, world)
             if connect:
                 self.open_session(world)
             return saved
         finally:
             dialog.Destroy()
+
+    def _apply_to_open_tabs(self, name: str, world: World) -> None:
+        """An edited world's command stacking and logging take effect in its open tabs at
+        once; the rest (host, encoding, sounds) when it next connects."""
+        for index in range(self.book.GetPageCount()):
+            panel = self.book.GetPage(index)
+            if isinstance(panel, SessionPanel) and panel.world.name.casefold() == name.casefold():
+                panel.apply_world_settings(world)
 
     def _save_world(self, world: World, *, replacing: str | None = None) -> bool:
         existing = load_worlds()

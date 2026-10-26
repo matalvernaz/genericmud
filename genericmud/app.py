@@ -50,6 +50,7 @@ from genericmud.sound.bus import DEFAULT_CATEGORY, MUSIC_CATEGORY, SoundBackend,
 from genericmud.voice.router import REVIEW_CHANNEL, SYSTEM_CHANNEL, VoiceRouter
 
 if TYPE_CHECKING:
+    from genericmud.config.worlds import World
     from genericmud.session.diaglog import DiagnosticLog
 
 SPEEDWALK_PREFIX = "."  # ".3n2e" expands to n,n,n,e,e (leading char disambiguates)
@@ -310,6 +311,12 @@ class EngineApp:
         self.name = name  # session label, used for the log filename
         self.log_dir = Path(log_dir) if log_dir else config_dir() / "logs"
         self.logger: SessionLogger | None = None
+        # The world's logging settings (apply_world_settings): start on connect, which files
+        # (config.worlds.LOG_FILES), and whether typed commands go in. Stopping a log by hand
+        # holds for the rest of the tab, so a reconnect doesn't start it again.
+        self.log_automatically = False
+        self.log_files = "session"
+        self.log_commands = True
         self.credentials = credentials
         self._login: AutoLogin | None = None
         self._walk: SafeWalk | None = None
@@ -391,10 +398,20 @@ class EngineApp:
         self._announce_activation(result)
         return result
 
+    def apply_world_settings(self, world: World) -> None:
+        """Take a world's own command stacking and logging settings. Called before the world
+        connects and again when it's edited while open, so the change is felt at once."""
+        self.command_separator = world.command_separator if world.command_stacking else ""
+        self.log_automatically = world.log_automatically
+        self.log_files = world.log_files
+        self.log_commands = world.log_commands
+
     def on_connect(self, world: str) -> ActivationResult | None:
         """The on-connect sequence: register with the hub, activate packs, arm login."""
         if self.hub is not None and self.name:
             self.hub.register(self.name, self._dispatch_remote)
+        if self.log_automatically:
+            self.start_logging(announce=False)  # first, so the log has the whole session
         # Seed saved pack variables BEFORE packs load: OnPluginInstall's `if
         # GetVariable(x) ~= nil` checks are exactly how MUSHclient packs keep user
         # settings (volumes, toggles) across sessions -- with nothing seeded, every
@@ -1113,11 +1130,30 @@ class EngineApp:
             self.voice.speak(summary, channel=SYSTEM_CHANNEL, interrupt=False)
 
     def _split_commands(self, text: str) -> list[str]:
-        """Split stacked input on the separator ("n;n;look"); empty separator = off."""
+        """Split stacked input on the separator ("n;n;look"); an empty separator is off.
+
+        The separator typed twice is sent as itself, as in MUSHclient: "say hi;; bye" is the
+        one command "say hi; bye". Soundpacks' scripts never come through here.
+        """
         separator = self.command_separator
         if not separator or separator not in text:
             return [text]
-        return [part for part in text.split(separator) if part != ""]
+        commands: list[str] = []
+        current: list[str] = []
+        index = 0
+        while index < len(text):
+            if not text.startswith(separator, index):
+                current.append(text[index])
+                index += 1
+            elif text.startswith(separator, index + len(separator)):
+                current.append(separator)  # doubled: the character itself
+                index += 2 * len(separator)
+            else:
+                commands.append("".join(current))
+                current = []
+                index += len(separator)
+        commands.append("".join(current))
+        return [command for command in commands if command != ""]
 
     def _dispatch_command(self, text: str, *, allow_client: bool = True) -> None:
         if text.strip():
@@ -1125,7 +1161,8 @@ class EngineApp:
                 # The user is typing their own login (or already playing): stand down so a
                 # later in-game line can't make auto-login send the stored credentials.
                 self._login.disarm()
-            self._log("> ***" if self._input_masked else f"> {text}")
+            if self.log_commands:
+                self._log("> ***" if self._input_masked else f"> {text}")
         if allow_client and self._client_command(text):
             return
         if self._safe_speedwalk(text) or self._speedwalk(text):
@@ -1145,7 +1182,8 @@ class EngineApp:
         if text.strip():
             if self._login is not None and not self._login.done:
                 self._login.disarm()  # the user is answering the prompt themselves
-            self._log("> ***")
+            if self.log_commands:
+                self._log("> ***")
         self._send(text)
         self._hidden_answers += 1
         if self._hidden_answers == 2:
@@ -1581,17 +1619,39 @@ class EngineApp:
             self._post(protocol.echo("* Session logging stopped: write failed."))
 
     def _toggle_log(self) -> None:
+        """Alt+Shift+L: start or stop logging by hand."""
         if self.logger is not None and self.logger.active:
             name = self.logger.path.name
             self.logger.stop()
             self.logger = None
             self._speak_system(f"logging stopped: {name}")
             return
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        self.start_logging()
+
+    def start_logging(self, *, announce: bool = True) -> None:
+        """Log to the file the world's log_files setting names. Every log appends and begins
+        with the time, so a day's or a world's file reads as one session after another."""
+        if self.logger is not None and self.logger.active:
+            return
+        now = datetime.now()
         # Sanitize the world name -- a pack-derived world could be named "../.." and escape the
         # logs directory when joined onto the path.
         safe_name = world_component(self.name or "session")
-        path = self.log_dir / f"{safe_name}-{stamp}.log"
-        self.logger = SessionLogger(path)
-        self.logger.start()
-        self._speak_system(f"logging to {path.name}")
+        if self.log_files == "world":
+            path = self.log_dir / f"{safe_name}.log"
+        elif self.log_files == "day":
+            path = self.log_dir / f"{safe_name}-{now:%Y-%m-%d}.log"
+        else:
+            path = self.log_dir / f"{safe_name}-{now:%Y%m%d-%H%M%S}.log"
+        logger = SessionLogger(path)
+        try:
+            logger.start()
+        except OSError as error:
+            self._speak_system(f"Couldn't start logging: {error.strerror or error}")
+            return
+        self.logger = logger
+        self._log(f"Session started {now:%Y-%m-%d %H:%M:%S}")
+        if announce:
+            self._speak_system(f"logging to {path.name}")
+        else:
+            self._post(protocol.echo(f"* Logging to {path.name}"))

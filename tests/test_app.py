@@ -43,7 +43,7 @@ def test_command_stacking_splits_on_separator():
 
 def test_command_stacking_drops_empty_pieces_and_records_walk():
     app, _backend, sent, _posted = _app()
-    app.on_ws_message({"type": "input", "text": "n;;s;"})
+    app.on_ws_message({"type": "input", "text": ";n;s;"})  # ";;" would be a real semicolon
     assert sent == ["n", "s"]
     assert app.nav.trail == ["n", "s"]
 
@@ -435,3 +435,46 @@ def test_the_session_log_keeps_the_line_the_mud_sent_when_a_pack_replaces_it():
     )
     app.on_telnet_event(DataReceived(b"james tells you 'hi'\r\nspam\r\n"))
     assert app.logger.lines == ["james tells you 'hi'", "spam"]
+
+
+def test_a_doubled_separator_sends_itself():
+    # MUSHclient's rule: "say hi;; bye" is one command with a real semicolon in it.
+    app, _backend, sent, _posted = _app()
+    app.on_ws_message({"type": "input", "text": "say hi;; bye;look"})
+    assert sent == ["say hi; bye", "look"]
+
+
+def test_a_world_can_use_its_own_separator_or_none():
+    from genericmud.config.worlds import World
+
+    app, _backend, sent, _posted = _app()
+    app.apply_world_settings(World("W", "w.example", 23, command_separator="|"))
+    app.on_ws_message({"type": "input", "text": "n|say a;b||c"})
+    assert sent == ["n", "say a;b|c"]
+    sent.clear()
+    app.apply_world_settings(World("W", "w.example", 23, command_stacking=False))
+    app.on_ws_message({"type": "input", "text": "say hi;bye;;"})
+    assert sent == ["say hi;bye;;"]
+
+
+def test_the_worlds_separator_splits_the_players_own_aliases_too():
+    from genericmud.config.worlds import World
+
+    app, _backend, sent, _posted = _app()
+    app.apply_world_settings(World("W", "w.example", 23, command_separator="|"))
+    app.on_ws_message({"type": "input", "text": "/alias gg = get gold|look"})
+    sent.clear()
+    app.on_ws_message({"type": "input", "text": "gg"})
+    assert sent == ["get gold", "look"]
+
+
+def test_soundpacks_split_their_own_way_whatever_the_world_says():
+    from genericmud.config.worlds import World
+    from genericmud.scripting.api import ScriptApi
+    from genericmud.scripting.vipmud_dialect import VipMudPack
+
+    app, _backend, sent, _posted = _app()
+    app.apply_world_settings(World("W", "w.example", 23, command_stacking=False))
+    VipMudPack(ScriptApi(app.engine, source="vip")).load_source("#alias go {n;s}")
+    app.on_ws_message({"type": "input", "text": "go"})
+    assert sent == ["n", "s"]
