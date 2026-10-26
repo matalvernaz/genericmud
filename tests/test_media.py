@@ -119,6 +119,22 @@ def test_only_safe_audio_names_are_downloadable():
     assert not is_downloadable(r"\\host\share\x.wav")
 
 
+def test_names_that_are_not_one_plain_file_on_windows_are_not_downloadable():
+    # MSP's * and ? are wildcards, never one file (Mudlet never downloads such a name), and on
+    # NTFS "evil.bat:x.wav" is a hidden stream written onto evil.bat, not a sound.
+    assert not is_downloadable("alarm*.wav")
+    assert not is_downloadable("berlioz/fantas?.mid")
+    assert not is_downloadable("evil.bat:x.wav")
+    assert not is_downloadable('say "hi".wav')
+
+
+def test_msp_does_not_download_a_wildcard_name(tmp_path):
+    net = _Net()
+    app, _backend, _posted = _app(tmp_path, net)
+    app.on_telnet_event(DataReceived(b"!!SOUND(alarm*.wav U=https://mud.example/sounds/)\r\n"))
+    assert net.urls == []
+
+
 # --- MediaLibrary ---
 
 

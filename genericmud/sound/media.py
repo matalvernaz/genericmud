@@ -28,6 +28,10 @@ AUDIO_EXTENSIONS = frozenset(
     {".wav", ".ogg", ".oga", ".opus", ".mp3", ".flac", ".mid", ".midi"}
     | {".mod", ".xm", ".it", ".s3m"}
 )
+# Characters Windows can't keep in a file name, refused on every platform so a name means one
+# plain file everywhere: "*" and "?" are MSP wildcards (Mudlet never downloads such a name), and
+# on NTFS "evil.bat:x.wav" writes a hidden stream onto evil.bat instead of a sound file.
+_NOT_IN_FILE_NAMES = frozenset('<>:"|?*') | frozenset(chr(code) for code in range(32))
 MAX_MEDIA_BYTES = 64 * 1024 * 1024  # a long music track; nothing a sound cue needs is bigger
 MAX_IN_FLIGHT = 16  # a server spamming new names can't queue unbounded fetches
 _TIMEOUT_SECONDS = 30
@@ -57,7 +61,9 @@ def media_url(base: str, name: str) -> str:
 
 def is_downloadable(name: str) -> bool:
     """Whether ``name`` is a safe relative path to an audio file we'd be willing to write."""
-    return not is_unsafe(name) and Path(name.replace("\\", "/")).suffix.lower() in AUDIO_EXTENSIONS
+    if is_unsafe(name) or any(character in _NOT_IN_FILE_NAMES for character in name):
+        return False
+    return Path(name.replace("\\", "/")).suffix.lower() in AUDIO_EXTENSIONS
 
 
 def http_fetch(url: str, dest: Path, trusted_host: str = "") -> None:
