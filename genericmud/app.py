@@ -293,7 +293,9 @@ class EngineApp:
         self.media = media or MediaLibrary(
             config_dir() / "media" / world_component(name), on_error=self._media_failed
         )
-        self._msp_urls = {"sound": "", "music": ""}  # set by !!SOUND(Off U=...)/!!MUSIC(Off U=...)
+        # Set by !!SOUND(Off U=...) or !!MUSIC(Off U=...): one default for both kinds, which the
+        # MSP spec calls the "default URL for all requests" and Mudlet keeps as one location.
+        self._msp_url = ""
         self._media_url = ""  # Client.Media.Default
         self._media_cues: dict[str, dict[str, object]] = {}  # bus channel -> Client.Media.Play
         self._media_gen: dict[str, int] = {}  # bumps per cue/stop so a late download can't play
@@ -901,7 +903,7 @@ class EngineApp:
             channel = MUSIC_CATEGORY if cue.kind == "music" else DEFAULT_CATEGORY
             if cue.is_stop:
                 if cue.url:  # the spec's way to set where later cues download from
-                    self._msp_urls[cue.kind] = cue.url
+                    self._msp_url = cue.url
                 if self._diag is not None:
                     self._diag.event("msp.cue", kind=cue.kind, stop=True)
                 self._stop_media(channel)
@@ -917,7 +919,7 @@ class EngineApp:
             if self._diag is not None:
                 self._diag.event("msp.cue", kind=cue.kind, file=cue.file, volume=cue.volume)
             gain = cue.volume / 100.0
-            url = cue.url or self._msp_urls[cue.kind]
+            url = cue.url or self._msp_url
             if cue.kind == "music":
                 self._start_media(
                     cue.file, url, channel,

@@ -247,6 +247,16 @@ def test_msp_off_with_a_url_sets_the_default_download_url(tmp_path):
     assert backend.musics == [(str((tmp_path / "cache" / "tavern.ogg").resolve()), 0.4)]
 
 
+def test_msp_off_with_a_url_sets_one_default_for_sounds_and_music(tmp_path):
+    # The MSP spec: Off with U= sets "default URL for all requests", and Mudlet keeps one MSP
+    # media location for both kinds.
+    net = _Net()
+    app, backend, _posted = _app(tmp_path, net)
+    app.on_telnet_event(DataReceived(b"!!SOUND(Off U=https://mud.example/media/)\r\n"))
+    app.on_telnet_event(DataReceived(b"!!MUSIC(theme.mid)\r\n"))
+    assert net.urls == ["https://mud.example/media/theme.mid"]
+
+
 def test_msp_plays_from_the_worlds_sounds_folder_before_downloading(tmp_path):
     net = _Net()
     app, backend, _posted = _app(tmp_path, net)
