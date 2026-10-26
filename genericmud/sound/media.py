@@ -36,6 +36,9 @@ AUDIO_EXTENSIONS = frozenset(
 # on NTFS "evil.bat:x.wav" writes a hidden stream onto evil.bat instead of a sound file.
 _NOT_IN_FILE_NAMES = frozenset('<>:"|?*') | frozenset(chr(code) for code in range(32))
 MAX_MEDIA_BYTES = 64 * 1024 * 1024  # a long music track; nothing a sound cue needs is bigger
+# A world's whole media folder, so a MUD naming new files without end can't fill the disk. It's
+# checked before each download, so the downloads running at that moment can still finish.
+MAX_CACHE_BYTES = 2 * 1024 * 1024 * 1024
 MAX_IN_FLIGHT = 16  # a server spamming new names can't queue unbounded fetches
 _AT_ONCE = 4  # of those, how many one session downloads at the same time
 _TIMEOUT_SECONDS = 30  # for each read, so a server sending a byte at a time never trips it
@@ -101,6 +104,22 @@ def http_fetch(url: str, dest: Path, trusted_host: str = "") -> None:
                 handle.write(chunk)
 
 
+class MediaFolderFull(Exception):
+    """The world's media folder has reached :data:`MAX_CACHE_BYTES`."""
+
+
+def _folder_bytes(root: Path) -> int:
+    """Bytes in the files under ``root``, or 0 when it doesn't exist yet."""
+    total = 0
+    for folder, _folders, files in os.walk(root):
+        for name in files:
+            try:
+                total += os.stat(os.path.join(folder, name)).st_size
+            except OSError:
+                pass  # removed while we counted
+    return total
+
+
 def _loop_submit(job: Callable[[], None], done: Callable[[BaseException | None], None]) -> None:
     """Run ``job`` on a thread of its own and ``done`` back on the event loop (or inline, no loop).
 
@@ -156,6 +175,7 @@ class MediaLibrary:
         self._waiting: dict[Path, list[Callable[[str], None]]] = {}
         self._failed: set[str] = set()  # URLs not retried this session (a 404 recurs per cue)
         self._slots = threading.BoundedSemaphore(_AT_ONCE)
+        self._full = False  # the folder reached its cap: said once, then nothing more is fetched
 
     def locate(self, name: str, *roots: str | None) -> str | None:
         """An existing file for ``name`` under ``roots`` and then the cache, or None."""
@@ -166,10 +186,12 @@ class MediaLibrary:
         """Download ``name`` from ``url`` into the cache, then call ``on_ready(path)``.
 
         Returns False when the download was refused outright (unsafe name, not audio, no
-        cache, a URL that already failed, too many in flight). A second request for a file
-        already downloading joins the first instead of fetching it twice.
+        cache, a URL that already failed, too many in flight, a full folder). A second
+        request for a file already downloading joins the first instead of fetching it twice.
         """
         if self.cache_dir is None or not url or url in self._failed or not is_downloadable(name):
+            return False
+        if self._full:
             return False
         dest = confine(self.cache_dir, name.replace("\\", "/"))
         if dest is None:
@@ -182,8 +204,15 @@ class MediaLibrary:
             return False
         self._waiting[dest] = [on_ready] if on_ready is not None else []
         trusted_host = self.trusted_host  # read now: the job runs on another thread
+        cache_dir = self.cache_dir
 
         def download() -> None:
+            if _folder_bytes(cache_dir) >= MAX_CACHE_BYTES:
+                gigabytes = MAX_CACHE_BYTES / 1024**3
+                raise MediaFolderFull(
+                    f"this world's media folder holds {gigabytes:g} GB already; delete files "
+                    f"in {cache_dir} to let it download more"
+                )
             dest.parent.mkdir(parents=True, exist_ok=True)
             # A file of its own rather than dest + ".part": tabs on one world share this
             # folder, and through one fixed name a second download truncated the first.
@@ -202,6 +231,8 @@ class MediaLibrary:
 
         def done(error: BaseException | None) -> None:
             waiters = self._waiting.pop(dest, [])
+            if isinstance(error, MediaFolderFull):
+                self._full = True
             if error is not None or not dest.is_file():
                 self._failed.add(url)
                 if self._on_error is not None:

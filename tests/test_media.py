@@ -175,6 +175,21 @@ def test_library_does_not_retry_a_failed_url(tmp_path):
     assert not (tmp_path / "cache" / "hit.wav").exists()
 
 
+def test_downloads_stop_once_the_worlds_media_folder_is_full(tmp_path, monkeypatch):
+    # Each file had a cap and the folder none, so a MUD naming new files without end could
+    # fill the disk 64 MB at a time.
+    monkeypatch.setattr(media, "MAX_CACHE_BYTES", 10, raising=False)
+    net = _Net()
+    errors: list[str] = []
+    library = _library(tmp_path, net, errors)
+    (tmp_path / "cache").mkdir()
+    (tmp_path / "cache" / "old.wav").write_bytes(b"x" * 10)
+    library.fetch("one.wav", "https://mud.example/one.wav")
+    library.fetch("two.wav", "https://mud.example/two.wav")
+    assert net.urls == []
+    assert errors == ["https://mud.example/one.wav"]  # said once, not once per file
+
+
 def test_two_tabs_on_one_world_fetching_one_file_land_a_whole_file(tmp_path):
     # Tabs on one world share its media folder. When both wrote through one fixed hit.wav.part,
     # the second truncated the first mid-write and what landed was neither download.

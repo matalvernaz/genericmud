@@ -367,9 +367,9 @@ there's nothing to install: genericMud plays what the MUD asks for. Sounds are
 looked for in the world's Sounds folder first; when the MUD says where to
 download one it doesn't find there, genericMud fetches it once into a per-world
 `media` folder next to its settings and plays it from there afterwards. Only
-audio files are downloaded, each up to 64 MB, and never from addresses on your
-own network, except the machine the MUD itself runs on (so a MUD on your own
-computer or LAN can serve its sounds).
+audio files are downloaded, each up to 64 MB and 2 GB in all for one world, and
+never from addresses on your own network, except the machine the MUD itself
+runs on (so a MUD on your own computer or LAN can serve its sounds).
 
 ## Sharing your setup
 
