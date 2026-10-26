@@ -380,6 +380,36 @@ def test_a_muds_name_now_resolving_to_this_machine_earns_no_trust(
         http_fetch(f"http://mud.example:{port}/hit.wav", tmp_path / "hit.wav", "mud.example")
 
 
+def test_a_name_answering_public_to_the_check_and_local_to_the_connection_is_refused(
+    tmp_path, local_server, monkeypatch
+):
+    # DNS rebinding: the guard looked the name up and saw a public address, then the
+    # connection looked it up again and was handed 127.0.0.1. The address reached is checked.
+    port = int(local_server.rsplit(":", 1)[1])
+    real_getaddrinfo = socket.getaddrinfo
+    answers = iter(["93.184.216.34"])
+
+    def rebinding_dns(host, *args, **kwargs):
+        if host == "rebind.example":
+            host = next(answers, "127.0.0.1")
+        return real_getaddrinfo(host, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", rebinding_dns)
+    with pytest.raises(BlockedUrl):
+        http_fetch(f"http://rebind.example:{port}/hit.wav", tmp_path / "hit.wav")
+
+
+def test_a_download_through_the_players_proxy_still_works(tmp_path, local_server, monkeypatch):
+    # Through a proxy the socket reaches the proxy, which the player set up, so the address
+    # check after connecting stands aside; the check on the URL's own address still runs.
+    monkeypatch.setenv("http_proxy", local_server)
+    monkeypatch.delenv("no_proxy", raising=False)
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    dest = tmp_path / "hit.wav"
+    http_fetch("http://media.invalid/hit.wav", dest)
+    assert dest.read_bytes() == b"RIFF"
+
+
 def test_a_public_mud_still_cannot_reach_a_local_address(tmp_path, local_server):
     with pytest.raises(BlockedUrl):
         http_fetch(f"{local_server}/hit.wav", tmp_path / "hit.wav")

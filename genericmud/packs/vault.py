@@ -11,13 +11,21 @@ breaks only this module, not the rest of the app.
 from __future__ import annotations
 
 import html
+import http.client
 import ipaddress
 import re
 import socket
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
-from urllib.request import HTTPRedirectHandler, OpenerDirector, Request, build_opener
+from urllib.request import (
+    HTTPHandler,
+    HTTPRedirectHandler,
+    HTTPSHandler,
+    OpenerDirector,
+    Request,
+    build_opener,
+)
 
 IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 
@@ -64,11 +72,15 @@ def _validate_url(url: str, trusted: frozenset[IPAddress] = frozenset()) -> None
     except OSError:
         return  # unresolvable: let the actual fetch fail normally, not an SSRF risk
     for info in infos:
-        ip = ipaddress.ip_address(info[4][0])
-        if ip in trusted:
-            continue
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
-            raise BlockedUrl(f"refusing to fetch from a non-public address ({ip})")
+        _refuse_address(ipaddress.ip_address(info[4][0]), trusted)
+
+
+def _refuse_address(ip: IPAddress, trusted: frozenset[IPAddress] = frozenset()) -> None:
+    """Raise :class:`BlockedUrl` for a non-public address that isn't one of ``trusted``."""
+    if ip in trusted:
+        return
+    if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+        raise BlockedUrl(f"refusing to fetch from a non-public address ({ip})")
 
 
 class _ValidatingRedirectHandler(HTTPRedirectHandler):
@@ -100,9 +112,61 @@ def _open(opener, request):
     return opener(request)
 
 
+def _checked_connection(connection_class, request: Request, trusted: frozenset[IPAddress]):
+    """A urllib connection factory whose sockets must reach a public or ``trusted`` address.
+
+    :func:`_validate_url` looks the host up, then the connection looks it up again, and a
+    server's DNS can answer a public address the first time and 127.0.0.1 or the player's
+    router the second (DNS rebinding). So the address the socket reached is checked too. A
+    request through a proxy reaches the proxy, which the player set up, and is left alone.
+    """
+    proxied = request.has_proxy() or request._tunnel_host is not None
+
+    def connect(address, *args, **kwargs):
+        sock = socket.create_connection(address, *args, **kwargs)
+        try:
+            _refuse_address(ipaddress.ip_address(sock.getpeername()[0]), trusted)
+        except BaseException:
+            sock.close()
+            raise
+        return sock
+
+    def make(host, **kwargs):
+        connection = connection_class(host, **kwargs)
+        if not proxied:
+            connection._create_connection = connect
+        return connection
+
+    return make
+
+
+class _CheckedHTTPHandler(HTTPHandler):
+    def __init__(self, trusted: frozenset[IPAddress]) -> None:
+        super().__init__()
+        self.trusted = trusted
+
+    def http_open(self, req):  # noqa: D102 - see _checked_connection
+        return self.do_open(_checked_connection(http.client.HTTPConnection, req, self.trusted), req)
+
+
+class _CheckedHTTPSHandler(HTTPSHandler):
+    def __init__(self, trusted: frozenset[IPAddress]) -> None:
+        super().__init__()
+        self.trusted = trusted
+
+    def https_open(self, req):  # noqa: D102 - see _checked_connection
+        factory = _checked_connection(http.client.HTTPSConnection, req, self.trusted)
+        return self.do_open(factory, req, context=self._context)
+
+
 def trusting_opener(trusted: frozenset[IPAddress]) -> OpenerDirector:
-    """An opener like :func:`_secure_urlopen`'s whose redirect checks also pass ``trusted``."""
-    return build_opener(_ValidatingRedirectHandler(trusted))
+    """An opener like :func:`_secure_urlopen`'s whose redirect checks also pass ``trusted``,
+    and which checks the address every connection actually reached."""
+    return build_opener(
+        _ValidatingRedirectHandler(trusted),
+        _CheckedHTTPHandler(trusted),
+        _CheckedHTTPSHandler(trusted),
+    )
 
 
 def _secure_urlopen(request, *args, **kwargs):
