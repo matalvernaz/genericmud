@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import tempfile
 from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import quote, urlparse
@@ -153,11 +154,15 @@ class MediaLibrary:
         if len(self._waiting) >= MAX_IN_FLIGHT:
             return False
         self._waiting[dest] = [on_ready] if on_ready is not None else []
-        partial = dest.with_name(dest.name + ".part")
         trusted_host = self.trusted_host  # read now: the job runs on another thread
 
         def job() -> None:
             dest.parent.mkdir(parents=True, exist_ok=True)
+            # A file of its own rather than dest + ".part": tabs on one world share this
+            # folder, and through one fixed name a second download truncated the first.
+            handle, temporary = tempfile.mkstemp(".part", ".genericmud-media-", dest.parent)
+            os.close(handle)
+            partial = Path(temporary)
             try:
                 self._fetch(url, partial, trusted_host)
                 os.replace(partial, dest)  # never leave a half-written file a later cue would play

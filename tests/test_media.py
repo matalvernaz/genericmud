@@ -171,6 +171,51 @@ def test_library_does_not_retry_a_failed_url(tmp_path):
     assert not (tmp_path / "cache" / "hit.wav").exists()
 
 
+def test_two_tabs_on_one_world_fetching_one_file_land_a_whole_file(tmp_path):
+    # Tabs on one world share its media folder. When both wrote through one fixed hit.wav.part,
+    # the second truncated the first mid-write and what landed was neither download.
+    first_half_written = threading.Event()
+    second_opened = threading.Event()
+
+    def tab_one(_url, dest, _trusted=""):
+        with open(dest, "wb") as handle:
+            handle.write(b"RIFF-one-first-half|")
+            handle.flush()
+            first_half_written.set()
+            second_opened.wait(5)
+            handle.write(b"one-second-half")
+
+    def tab_two(_url, dest, _trusted=""):
+        first_half_written.wait(5)
+        with open(dest, "wb") as handle:
+            second_opened.set()
+            handle.write(b"RIFF-two")
+
+    threads: list[threading.Thread] = []
+
+    def threaded(job, done):
+        def run():
+            try:
+                job()
+            except Exception as exc:  # noqa: BLE001
+                done(exc)
+            else:
+                done(None)
+
+        thread = threading.Thread(target=run)
+        thread.start()
+        threads.append(thread)
+
+    cache = tmp_path / "media" / "World"
+    MediaLibrary(cache, fetch=tab_one, submit=threaded).fetch("hit.wav", "https://x.example/hit.wav")
+    MediaLibrary(cache, fetch=tab_two, submit=threaded).fetch("hit.wav", "https://x.example/hit.wav")
+    for thread in threads:
+        thread.join(10)
+    whole = (b"RIFF-one-first-half|one-second-half", b"RIFF-two")
+    assert (cache / "hit.wav").read_bytes() in whole
+    assert not list(cache.glob("*.part"))
+
+
 def test_library_hands_the_muds_host_to_the_download(tmp_path):
     net = _Net()
     library = _library(tmp_path, net)
