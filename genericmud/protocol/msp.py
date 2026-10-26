@@ -104,8 +104,15 @@ def _parse_cue(kind: str, body: str) -> SoundCue | None:
         repeats=_to_int(params.get("L"), DEFAULT_REPEATS),
         priority=_to_int(params.get("P"), DEFAULT_PRIORITY),
         type=params.get("T", ""),
-        url=params.get("U", ""),
+        url=_unquote(params.get("U", "")),
     )
+
+
+def _unquote(value: str) -> str:
+    """A U= value without the double quotes the spec allows around it."""
+    if len(value) >= 2 and value[0] == '"' and value[-1] == '"':
+        return value[1:-1]
+    return value
 
 
 def _to_int(value: str | None, default: int) -> int:

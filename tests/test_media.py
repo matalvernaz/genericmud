@@ -225,6 +225,12 @@ def test_msp_parses_the_download_url():
     assert cues[0].url == "https://mud.example/sounds/"
 
 
+def test_msp_takes_a_download_url_in_quotes():
+    # The MSP spec: "The URL can also be enclosed in quotes".
+    _text, cues = parse_msp_line('!!SOUND(hit.wav U="https://mud.example/sounds/")')
+    assert cues[0].url == "https://mud.example/sounds/"
+
+
 def test_msp_url_downloads_then_plays_the_cached_file(tmp_path):
     net = _Net()
     app, backend, _posted = _app(tmp_path, net)
