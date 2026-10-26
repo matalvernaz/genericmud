@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import socket
 import threading
 import time
@@ -500,10 +501,42 @@ def test_msp_plays_from_the_worlds_sounds_folder_before_downloading(tmp_path):
     sounds = tmp_path / "sounds"
     sounds.mkdir()
     (sounds / "hit.wav").write_bytes(b"RIFF")
+    app.engine.sounds_dir = str(sounds)  # what the window does with the world's Sounds folder
     app.engine.set_var("sppath", str(sounds))
     app.on_telnet_event(DataReceived(b"!!SOUND(hit.wav U=https://mud.example/)\r\n"))
     assert net.urls == []
     assert backend.played[0][0] == str((sounds / "hit.wav").resolve())
+
+
+def test_server_media_isnt_looked_for_under_an_sppath_outside_the_players_folders(tmp_path):
+    # @sppath is a variable a pack, or MUD text a pack runs as script, can set, so ScriptApi
+    # only trusts it inside the pack or the player's Sounds folder. Taken as it was, a cue
+    # could name any file under it: here a folder outside both, standing in for "/".
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.wav").write_bytes(b"RIFF")
+    net = _Net()
+    app, backend, _posted = _app(tmp_path, net)
+    app.engine.set_var("sppath", str(outside))
+    app.on_telnet_event(DataReceived(b"!!SOUND(secret.wav)\r\n"))
+    assert backend.played == [("secret.wav", "sound", 1.0, False)]
+
+
+def test_a_unc_sppath_is_never_looked_at_for_server_media(tmp_path, monkeypatch):
+    # On Windows, asking whether \\host\share is a folder already sends the player's NTLM hash.
+    net = _Net()
+    app, _backend, _posted = _app(tmp_path, net)
+    app.engine.set_var("sppath", r"\\attacker.example\share")
+    looked_at: list[str] = []
+    real_isdir = os.path.isdir
+
+    def recording_isdir(candidate):
+        looked_at.append(str(candidate))
+        return real_isdir(candidate)
+
+    monkeypatch.setattr(os.path, "isdir", recording_isdir)
+    app.on_telnet_event(DataReceived(b"!!SOUND(hit.wav)\r\n"))
+    assert not [seen for seen in looked_at if "attacker" in seen]
 
 
 def test_music_stopped_while_downloading_does_not_start_late(tmp_path):

@@ -37,7 +37,13 @@ from genericmud.protocol.oob import OobMessage, ServerStatus, from_subnegotiatio
 from genericmud.render.ansi import parse_ansi
 from genericmud.review.channels import ChannelReview
 from genericmud.review.cursor import ReviewCursor
-from genericmud.safepath import is_unsafe, legacy_world_component, world_component
+from genericmud.safepath import (
+    is_unc,
+    is_unsafe,
+    legacy_world_component,
+    within,
+    world_component,
+)
 from genericmud.scripting import user_scripts
 from genericmud.scripting.api import ScriptApi
 from genericmud.scripting.mushclient_compat import MushclientPack
@@ -1056,7 +1062,7 @@ class EngineApp:
         if not self._native_audio:
             play(name)
             return
-        path = self.media.locate(name, self.engine.get_var("sppath"))
+        path = self.media.locate(name, self._media_sounds_root())
         if path is not None:
             play(path)
             return
@@ -1075,6 +1081,25 @@ class EngineApp:
                     self._diag.event("media.download", file=name, url=address)
                 return
         play(name)
+
+    def _media_sounds_root(self) -> str | None:
+        """The folder server media is looked for in before the download cache: @sppath when it
+        lies inside the player's Sounds folder or an installed pack, else the Sounds folder.
+
+        @sppath is a variable any pack, or MUD text a pack runs as script, can set, and
+        ScriptApi._sounds_root holds packs to the same rule; taken as it is, a cue could name
+        any file under "/". A UNC @sppath isn't even checked: on Windows, resolving one is
+        enough to send the player's NTLM hash to that host.
+        """
+        sounds_dir = self.engine.sounds_dir
+        sppath = self.engine.get_var("sppath")
+        if not sppath or is_unc(sppath):
+            return sounds_dir
+        packs_dir = getattr(self.packs, "packs_dir", None)
+        trusted = [root for root in (sounds_dir, packs_dir) if root]
+        if any(within(root, sppath) for root in trusted):
+            return sppath
+        return sounds_dir
 
     def _stop_media(self, channel: str) -> None:
         self._media_gen[channel] = self._media_gen.get(channel, 0) + 1
@@ -1098,7 +1123,7 @@ class EngineApp:
                 return
             url = self._media_source(body)
             if self._native_audio and url:
-                if self.media.locate(name, self.engine.get_var("sppath")) is None:
+                if self.media.locate(name, self._media_sounds_root()) is None:
                     self.media.fetch(name, media_url(url, name))
         elif verb == "play":
             self._media_play(body)
