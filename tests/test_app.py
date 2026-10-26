@@ -364,12 +364,27 @@ def test_a_terminal_drop_names_the_world_it_left():
 
 
 def test_a_transient_reconnect_status_still_reports_itself_verbatim():
-    # Only the terminal line names the world; the backoff chatter has to keep saying what
-    # it is doing, and when.
+    # Only the lines that say the session ended or came back name the world; the backoff
+    # chatter has to keep saying what it is doing, and when.
     app, _backend, _sent, posted = _app()
     posted.clear()
     app.on_connection_status("connection lost; reconnecting in 2s (attempt 1)")
     assert posted[-1]["text"] == "* connection lost; reconnecting in 2s (attempt 1)"
+
+
+def test_a_reconnect_names_the_world_it_rejoined():
+    # The backoff loop and the window's Reconnect both report here, so both read
+    # "Reconnected to Aardwolf." rather than a bare "reconnected".
+    backend = RecordingBackend()
+    voice = VoiceRouter(backend, clock=lambda: 0.0)
+    posted: list[dict] = []
+    app = EngineApp(
+        voice, send=lambda _text: None, post=posted.append,
+        keymap=load_keymap("vipmud"), name="Aardwolf",
+    )
+    app.on_connection_status("reconnected")
+    assert posted[-1]["text"] == "* Reconnected to Aardwolf"
+    assert backend.spoken[-1] == "Reconnected to Aardwolf."
 
 
 def test_pack_variables_persist_across_sessions(tmp_path):

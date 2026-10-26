@@ -956,13 +956,11 @@ class SessionPanel(wx.Panel):
             return
         finally:
             self._reconnecting = False
-        # The socket is live again, so everything per-socket has to be reset the same way
-        # the transport's own backoff loop resets it.
-        self.app.after_reconnect()
-        self._post(protocol.echo(f"* Reconnected to {self.world.name}"))
-        if self._voice is not None:
-            self._voice.speak(f"Reconnected to {self.world.name}.", channel="system",
-                              interrupt=True)
+        # The socket is live again. Report it the way the transport's own backoff loop
+        # does, for the reason _do_disconnect reports through that path: the per-socket
+        # reset, the wording and the VIPMud packs' OnConnect (run after the announcement,
+        # so it can't cut off a pack's welcome) all come from one place, not a copy here.
+        self.app.on_connection_status("reconnected")
 
     def _prompt_reconnect(self) -> None:
         """Ask to reconnect after a command was typed into a dead session.

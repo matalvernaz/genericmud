@@ -1593,7 +1593,9 @@ class EngineApp:
         The end of a session arrives here whatever caused it. A dropped link and a quit
         both end in the transport's own "disconnected"; the UI's deliberate close emits
         no status at all, so _do_disconnect calls this method itself. Naming the world in
-        one place is what keeps those three worded identically.
+        one place is what keeps those three worded identically. A reconnect arrives here
+        the same way, from the backoff loop or from the window's Reconnect, so both get
+        the per-socket reset and the VIPMud packs' OnConnect.
         """
         spoken = message
         echoed = f"* {message}"
@@ -1623,6 +1625,12 @@ class EngineApp:
                 echoed = f"* Disconnected from {label}"
         elif message.startswith("reconnected"):
             self.after_reconnect()
+            if message == "reconnected":
+                # Named like the disconnect above, and worded the same whether the backoff
+                # loop or the window's Reconnect brought the session back.
+                label = self.name or "the MUD"
+                spoken = f"Reconnected to {label}."
+                echoed = f"* Reconnected to {label}"
         self.voice.speak(spoken, channel=SYSTEM_CHANNEL, interrupt=True)
         self._post(protocol.echo(echoed))  # raw detail stays reviewable in the output
         # After the status is said, so a pack's own goodbye or welcome isn't cut off by it.

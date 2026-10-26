@@ -212,7 +212,9 @@ def test_a_disconnected_tab_can_reconnect_without_opening_a_second_one():
     # Ctrl+O builds a new tab, so it cannot stand in for reviving this one.
     source = _wx_source()
     assert "async def _reconnect(self)" in source
-    assert "self.app.after_reconnect()" in source
+    # Reattached through the path the backoff loop reports on (after_reconnect and the
+    # VIPMud packs' OnConnect come with it).
+    assert 'self.app.on_connection_status("reconnected")' in source
     assert "panel.reconnect()" in source
 
 

@@ -862,3 +862,59 @@ def test_a_reconnect_waits_for_a_connect_already_under_way(frame, monkeypatch):
     finally:
         panel.app = None
         _close_question_panel(panel, loop)
+
+
+def test_a_vipmud_pack_hears_a_reconnect_made_from_the_window(frame, monkeypatch, tmp_path):
+    # VIPMud packs load their settings and switch their sounds on in OnConnect, and save
+    # them in OnDisconnect. The window's Reconnect skipped OnConnect, and the state that
+    # left made the next Disconnect skip OnDisconnect as well, so nothing was saved.
+    import asyncio
+
+    from genericmud.app import EngineApp
+    from genericmud.packs import PackStore
+    from genericmud.transport.connection import MudConnection
+    from genericmud.voice.router import VoiceRouter
+    from tests.helpers import RecordingBackend
+
+    async def fake_open_connection(host, port, ssl=None):
+        return _FakeMudReader(ended=False), _FakeMudWriter()
+
+    monkeypatch.setattr(asyncio, "open_connection", fake_open_connection)
+    store = PackStore(tmp_path / "store")
+    pack_source = tmp_path / "pack.set"
+    pack_source.write_text(
+        "#alias OnConnect {#say ready}\n#alias OnDisconnect {#say gone}\n", encoding="latin-1"
+    )
+    store.install(pack_source, world="Test", trust=True)
+    panel, loop = _question_panel(frame, monkeypatch)
+    backend = RecordingBackend()
+    voice = VoiceRouter(backend, clock=lambda: 0.0)
+
+    async def scenario() -> list[list[str]]:
+        panel._voice = voice
+        panel.app = EngineApp(voice, post=lambda _m: None, keymap={}, packs=store, name="Test")
+        panel._connection = MudConnection(on_event=panel.app.on_telnet_event)
+        panel._connection.on_status = panel.app.on_connection_status
+        panel.app.on_connect("Test")
+        await panel._connection.connect("mud.example", 4000)
+        heard: list[list[str]] = []
+        for step in ("disconnect", "reconnect", "disconnect"):
+            backend.spoken.clear()
+            if step == "disconnect":
+                panel._do_disconnect()  # Ctrl+D while connected
+            else:
+                await panel._reconnect()  # Ctrl+D once it isn't
+            await asyncio.sleep(0.01)
+            heard.append(list(backend.spoken))
+        return heard
+
+    try:
+        disconnected, reconnected, disconnected_again = loop.run_until_complete(scenario())
+        assert "gone" in disconnected
+        # OnConnect runs once, after the reconnect is said, so the pack's welcome stands.
+        assert reconnected.count("ready") == 1
+        assert reconnected.index("Reconnected to Test.") < reconnected.index("ready")
+        assert "gone" in disconnected_again
+    finally:
+        panel.app = None
+        _close_question_panel(panel, loop)
