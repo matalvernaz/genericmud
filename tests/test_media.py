@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -15,6 +16,7 @@ from genericmud.app import EngineApp
 from genericmud.packs.vault import BlockedUrl
 from genericmud.protocol.msp import parse_msp_line
 from genericmud.protocol.telnet import OPT_GMCP, DataReceived, Subnegotiation
+from genericmud.sound import media
 from genericmud.sound.bus import SoundBackend
 from genericmud.sound.media import MediaLibrary, http_fetch, is_downloadable, media_url
 from genericmud.transport.connection import GMCP_SUPPORTS
@@ -261,10 +263,22 @@ def test_library_hands_the_muds_host_to_the_download(tmp_path):
 
 @pytest.fixture
 def local_server():
-    """A real HTTP server on 127.0.0.1 serving /hit.wav, and /away redirecting to 10.0.0.1."""
+    """A real HTTP server on 127.0.0.1 serving /hit.wav, /away redirecting to 10.0.0.1, and
+    /trickle sending one byte every 0.2 seconds for 3 seconds."""
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):  # noqa: N802 - http.server's naming
+            if self.path == "/trickle":
+                self.send_response(200)
+                self.end_headers()
+                for _ in range(15):
+                    try:
+                        self.wfile.write(b"x")
+                        self.wfile.flush()
+                    except OSError:
+                        return  # the client gave up
+                    time.sleep(0.2)
+                return
             if self.path == "/away":
                 self.send_response(302)
                 self.send_header("Location", "http://10.0.0.1/hit.wav")
@@ -290,6 +304,16 @@ def test_a_mud_on_this_machine_can_serve_its_own_media(tmp_path, local_server):
     dest = tmp_path / "hit.wav"
     http_fetch(f"{local_server}/hit.wav", dest, trusted_host="127.0.0.1")
     assert dest.read_bytes() == b"RIFF"
+
+
+def test_a_download_that_trickles_in_is_given_up_on(tmp_path, local_server, monkeypatch):
+    # The timeout covers one read at a time, so a server sending a byte every few seconds
+    # never tripped it and could hold a download, and its thread, for as long as it liked.
+    monkeypatch.setattr(media, "_DEADLINE_SECONDS", 0.5, raising=False)
+    started = time.monotonic()
+    with pytest.raises(TimeoutError):
+        http_fetch(f"{local_server}/trickle", tmp_path / "t.wav", trusted_host="127.0.0.1")
+    assert time.monotonic() - started < 2
 
 
 def test_a_public_mud_still_cannot_reach_a_local_address(tmp_path, local_server):

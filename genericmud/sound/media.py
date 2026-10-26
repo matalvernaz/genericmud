@@ -17,6 +17,7 @@ import asyncio
 import os
 import tempfile
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import quote, urlparse
@@ -37,7 +38,8 @@ _NOT_IN_FILE_NAMES = frozenset('<>:"|?*') | frozenset(chr(code) for code in rang
 MAX_MEDIA_BYTES = 64 * 1024 * 1024  # a long music track; nothing a sound cue needs is bigger
 MAX_IN_FLIGHT = 16  # a server spamming new names can't queue unbounded fetches
 _AT_ONCE = 4  # of those, how many one session downloads at the same time
-_TIMEOUT_SECONDS = 30
+_TIMEOUT_SECONDS = 30  # for each read, so a server sending a byte at a time never trips it
+_DEADLINE_SECONDS = 600  # for the whole body: 64 MB still lands at about 1 Mbit/s
 _CHUNK = 65536
 _USER_AGENT = "genericMud-media"
 
@@ -81,13 +83,18 @@ def http_fetch(url: str, dest: Path, trusted_host: str = "") -> None:
     trusted = resolve_addresses(trusted_host) if trusted_host else frozenset()
     _validate_url(url, trusted)
     request = Request(url, headers={"User-Agent": _USER_AGENT})
+    deadline = time.monotonic() + _DEADLINE_SECONDS
     with trusting_opener(trusted).open(request, timeout=_TIMEOUT_SECONDS) as response:
         length = response.headers.get("Content-Length")
         if length and length.isdigit() and int(length) > MAX_MEDIA_BYTES:
             raise ValueError(f"{url} is larger than {MAX_MEDIA_BYTES // 1_000_000} MB")
         total = 0
         with open(dest, "wb") as handle:
-            while chunk := response.read(_CHUNK):
+            # read1 hands back whatever has arrived, where read() waits for a whole chunk, so
+            # the deadline is checked as the bytes come in, however slowly.
+            while chunk := response.read1(_CHUNK):
+                if time.monotonic() > deadline:
+                    raise TimeoutError(f"{url} was still downloading after {_DEADLINE_SECONDS:g} s")
                 total += len(chunk)
                 if total > MAX_MEDIA_BYTES:
                     raise ValueError(f"{url} is larger than {MAX_MEDIA_BYTES // 1_000_000} MB")
