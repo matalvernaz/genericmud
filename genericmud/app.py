@@ -1090,8 +1090,10 @@ class EngineApp:
             self._media_url = str(body.get("url") or "")
         elif verb == "load":
             name = str(body.get("name") or "")
-            url = str(body.get("url") or self._media_url)
-            if self._native_audio and name and url and not is_unsafe(name):
+            if not name or is_unsafe(name):
+                return
+            url = self._media_source(body)
+            if self._native_audio and url:
                 if self.media.locate(name, self.engine.get_var("sppath")) is None:
                     self.media.fetch(name, media_url(url, name))
         elif verb == "play":
@@ -1131,7 +1133,7 @@ class EngineApp:
             "tag": str(body.get("tag") or ""),
             "priority": _media_int(body.get("priority"), 0, 0, 100),
         }
-        url = str(body.get("url") or self._media_url)
+        url = self._media_source(body)
         if self._diag is not None:
             self._diag.event("media.play", file=name, kind=kind, channel=channel)
         if kind == "music":
@@ -1143,6 +1145,15 @@ class EngineApp:
                 name, url, channel,
                 lambda path: self.sound.play(path, channel, gain=gain, loop=loop),
             )
+
+    def _media_source(self, body: dict) -> str:
+        """Where a Load or Play downloads from: its own url, which then stays the default for
+        later cues, else the default. The spec lets Play leave url out once Default or Load
+        has given one, and Mudlet keeps the last url a Load or Play gave."""
+        url = str(body.get("url") or "")
+        if url:
+            self._media_url = url
+        return self._media_url
 
     def _media_stop(self, body: dict) -> None:
         """Stop the Client.Media cues matching every field given; an empty body stops them all.

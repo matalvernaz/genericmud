@@ -367,6 +367,23 @@ def test_client_media_stop_by_priority_stops_at_or_below_it(tmp_path):
     assert backend.stopped == ["media:lo"]
 
 
+def test_client_media_url_from_a_load_or_play_is_where_later_cues_download_from(tmp_path):
+    # The spec lets Play leave url out once "a URL was set by Default or Load", and Mudlet
+    # keeps the last url a Load or Play gave as the one later cues download from.
+    net = _Net()
+    app, _backend, _posted = _app(tmp_path, net)
+    _gmcp(app, "Client.Media.Load", {"name": "one.wav", "url": "https://mud.example/media/"})
+    _gmcp(app, "Client.Media.Play", {"name": "two.wav"})
+    _gmcp(app, "Client.Media.Play", {"name": "three.wav", "url": "https://cdn.example/fx/"})
+    _gmcp(app, "Client.Media.Play", {"name": "four.wav"})
+    assert net.urls == [
+        "https://mud.example/media/one.wav",
+        "https://mud.example/media/two.wav",
+        "https://cdn.example/fx/three.wav",
+        "https://cdn.example/fx/four.wav",
+    ]
+
+
 def test_client_media_load_downloads_without_playing(tmp_path):
     net = _Net()
     app, backend, _posted = _app(tmp_path, net)
