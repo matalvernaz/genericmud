@@ -66,7 +66,9 @@ KOI8-R, Chinese ones GBK or Big5. What you type is sent in the same encoding.
 Choosing UTF-8 itself helps too, on a UTF-8 MUD that sometimes sends one stray
 byte: Automatic would take that byte as a sign of an older encoding and misread
 the rest of the session. To change it for a saved world, press **Ctrl+O**,
-choose the world, and press **Edit**; it applies from the next connection.
+choose the world, and press **Edit**; it applies the next time you open the
+world. A tab that's already open, reconnecting included, keeps the host, port,
+encoding and sounds folder it opened with.
 
 A world's details also hold its **command separator** and **logging** settings,
 described below. Changes to those apply straight away, even to an open tab.

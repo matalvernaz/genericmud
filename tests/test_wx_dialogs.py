@@ -768,12 +768,19 @@ def test_editing_a_world_changes_its_open_tab_at_once(frame, monkeypatch):
     panel = wx_app.SessionPanel(frame, loop, {}, World("W", "w.example", 23))
     try:
         panel.app = EngineApp(VoiceRouter(RecordingBackend(), clock=lambda: 0.0), keymap={})
-        edited = World("W", "w.example", 23, command_separator="|", log_commands=False)
+        edited = World(
+            "W", "new.example", 4000, encoding="cp1251", sounds="C:/sounds",
+            command_separator="|", log_commands=False,
+        )
         panel.apply_world_settings(edited)
         loop.run_until_complete(asyncio.sleep(0.01))
-        assert panel.world is edited
         assert panel.app.command_separator == "|"
         assert panel.app.log_commands is False
+        # How the tab connects stays as it opened until the world is opened again, so a
+        # reconnect (Ctrl+D) can't mix a new host with the old encoding and sounds.
+        assert (panel.world.host, panel.world.port) == ("w.example", 23)
+        assert (panel.world.encoding, panel.world.sounds) == ("auto", None)
+        assert panel.world.command_separator == "|" and not panel.world.log_commands
     finally:
         panel.app = None
         panel.Destroy()

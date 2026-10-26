@@ -860,10 +860,19 @@ class SessionPanel(wx.Panel):
         self._loop.call_soon_threadsafe(self._apply_active, active)
 
     def apply_world_settings(self, world: World) -> None:  # UI thread
-        """Use the world's edited settings: stacking and logging now, the rest next connect."""
-        self.world = world
+        """Take a world's edited command stacking and logging now. How the tab connects (host,
+        port, TLS, encoding, sounds) stays as it opened, so a reconnect from this tab doesn't
+        reach a new host with the old encoding; those apply when the world is opened again."""
+        self.world = replace(
+            self.world,
+            command_stacking=world.command_stacking,
+            command_separator=world.command_separator,
+            log_automatically=world.log_automatically,
+            log_files=world.log_files,
+            log_commands=world.log_commands,
+        )
         if self.app is not None:
-            self._loop.call_soon_threadsafe(self.app.apply_world_settings, world)
+            self._loop.call_soon_threadsafe(self.app.apply_world_settings, self.world)
 
     def _apply_active(self, active: bool) -> None:  # loop thread
         if self._voice is not None:
