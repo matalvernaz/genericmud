@@ -331,6 +331,19 @@ def test_client_media_music_continues_when_the_same_track_is_asked_for(tmp_path)
     assert len(backend.musics) == 2
 
 
+def test_client_media_continue_sent_as_text_is_read_as_true_or_false(tmp_path):
+    # The spec has clients take every Client.Media value as a quoted string too, for servers
+    # that can't send JSON booleans; Mudlet restarts the track on "false".
+    net = _Net()
+    app, backend, _posted = _app(tmp_path, net)
+    play = {"name": "area.ogg", "type": "music", "url": "https://x.example/"}
+    _gmcp(app, "Client.Media.Play", play)
+    _gmcp(app, "Client.Media.Play", {**play, "continue": "false"})
+    assert len(backend.musics) == 2
+    _gmcp(app, "Client.Media.Play", {**play, "continue": "true"})
+    assert len(backend.musics) == 2
+
+
 def test_client_media_stop_matches_fields_and_empty_stops_everything(tmp_path):
     net = _Net()
     app, backend, _posted = _app(tmp_path, net)

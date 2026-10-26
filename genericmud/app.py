@@ -125,6 +125,15 @@ def _media_int(value: object, default, low: int, high: int):
     return max(low, min(high, number))
 
 
+def _media_continues(value: object) -> bool:
+    """Client.Media.Play's ``continue``: true unless the server sent false, either as a JSON
+    boolean or as the text "false". The spec has clients take every value as a quoted string
+    too, for servers that can't send JSON types, and Mudlet restarts the track on both."""
+    if isinstance(value, str):
+        return value.strip().lower() != "false"
+    return value is not False
+
+
 def _default_schedule(delay: float, callback: Callable[[], None]) -> object | None:
     try:
         loop = asyncio.get_running_loop()
@@ -1107,7 +1116,7 @@ class EngineApp:
             current = self._media_cues.get(channel)
             # "continue" (default true): the same track asked for again keeps playing rather
             # than restarting, which is what a server re-sending an area's music means.
-            if body.get("continue", True) and current and current["name"] == name:
+            if _media_continues(body.get("continue")) and current and current["name"] == name:
                 return
         elif key:
             channel = f"media:{key}"
