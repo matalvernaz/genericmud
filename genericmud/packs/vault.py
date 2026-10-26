@@ -100,15 +100,6 @@ def _open(opener, request):
     return opener(request)
 
 
-def resolve_addresses(host: str) -> frozenset[IPAddress]:
-    """Every address ``host`` resolves to, or nothing when it doesn't resolve."""
-    try:
-        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
-    except (OSError, UnicodeError):
-        return frozenset()
-    return frozenset(ipaddress.ip_address(info[4][0]) for info in infos)
-
-
 def trusting_opener(trusted: frozenset[IPAddress]) -> OpenerDirector:
     """An opener like :func:`_secure_urlopen`'s whose redirect checks also pass ``trusted``."""
     return build_opener(_ValidatingRedirectHandler(trusted))

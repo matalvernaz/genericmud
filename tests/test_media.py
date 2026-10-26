@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import socket
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -19,7 +20,7 @@ from genericmud.protocol.telnet import OPT_GMCP, DataReceived, Subnegotiation
 from genericmud.sound import media
 from genericmud.sound.bus import SoundBackend
 from genericmud.sound.media import MediaLibrary, http_fetch, is_downloadable, media_url
-from genericmud.transport.connection import GMCP_SUPPORTS
+from genericmud.transport.connection import GMCP_SUPPORTS, MudConnection
 from genericmud.voice.router import VoiceRouter
 from tests.helpers import RecordingBackend
 
@@ -49,9 +50,9 @@ class _Net:
         self.fail = fail
         self.pending: list[tuple] = []
 
-    def fetch(self, url: str, dest: Path, trusted_host: str = "") -> None:
+    def fetch(self, url: str, dest: Path, trusted_address: str = "") -> None:
         self.urls.append(url)
-        self.trusted_host = trusted_host
+        self.trusted_address = trusted_address
         if self.fail:
             raise OSError("404")
         dest.write_bytes(b"RIFF")
@@ -268,12 +269,29 @@ def test_downloads_leave_the_loops_threads_free_and_dont_hold_the_app_open(tmp_p
     assert daemon == [True, True, True]
 
 
-def test_library_hands_the_muds_host_to_the_download(tmp_path):
+def test_library_hands_the_sessions_address_to_the_download(tmp_path):
     net = _Net()
     library = _library(tmp_path, net)
-    library.trusted_host = "localhost"
+    library.trusted_address = lambda: "127.0.0.1"  # what the session's connection reached
     library.fetch("hit.wav", "http://localhost:8000/hit.wav")
-    assert net.trusted_host == "localhost"
+    assert net.trusted_address == "127.0.0.1"
+
+
+async def test_the_connection_reports_the_address_it_reached():
+    async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        await reader.read()  # until the client goes
+        writer.close()
+
+    server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    connection = MudConnection()
+    assert connection.peer_address() == ""
+    await connection.connect("localhost", port)
+    assert connection.peer_address() == "127.0.0.1"
+    await connection.close()
+    assert connection.peer_address() == ""
+    server.close()
+    await server.wait_closed()
 
 
 @pytest.fixture
@@ -318,7 +336,7 @@ def local_server():
 
 def test_a_mud_on_this_machine_can_serve_its_own_media(tmp_path, local_server):
     dest = tmp_path / "hit.wav"
-    http_fetch(f"{local_server}/hit.wav", dest, trusted_host="127.0.0.1")
+    http_fetch(f"{local_server}/hit.wav", dest, trusted_address="127.0.0.1")
     assert dest.read_bytes() == b"RIFF"
 
 
@@ -328,7 +346,7 @@ def test_a_download_that_trickles_in_is_given_up_on(tmp_path, local_server, monk
     monkeypatch.setattr(media, "_DEADLINE_SECONDS", 0.5, raising=False)
     started = time.monotonic()
     with pytest.raises(TimeoutError):
-        http_fetch(f"{local_server}/trickle", tmp_path / "t.wav", trusted_host="127.0.0.1")
+        http_fetch(f"{local_server}/trickle", tmp_path / "t.wav", trusted_address="127.0.0.1")
     assert time.monotonic() - started < 2
 
 
@@ -336,24 +354,45 @@ def test_a_download_past_the_size_cap_is_refused(tmp_path, local_server, monkeyp
     monkeypatch.setattr(media, "MAX_MEDIA_BYTES", 50)
     # On the length the server announces, before reading the body...
     with pytest.raises(ValueError, match="larger than"):
-        http_fetch(f"{local_server}/announced-big", tmp_path / "a.wav", trusted_host="127.0.0.1")
+        http_fetch(
+            f"{local_server}/announced-big", tmp_path / "a.wav", trusted_address="127.0.0.1"
+        )
     # ...and, when it announces none, as soon as the body passes the cap.
     monkeypatch.setattr(media, "MAX_MEDIA_BYTES", 3)
     with pytest.raises(ValueError, match="larger than"):
-        http_fetch(f"{local_server}/trickle", tmp_path / "b.wav", trusted_host="127.0.0.1")
+        http_fetch(f"{local_server}/trickle", tmp_path / "b.wav", trusted_address="127.0.0.1")
+
+
+def test_a_muds_name_now_resolving_to_this_machine_earns_no_trust(
+    tmp_path, local_server, monkeypatch
+):
+    # The MUD's host name was resolved again for every download, and a MUD decides what its
+    # own name resolves to: pointed at 127.0.0.1, or the player's router, it made that
+    # address trusted. Only the address the session is connected to is trusted.
+    port = int(local_server.rsplit(":", 1)[1])
+    real_getaddrinfo = socket.getaddrinfo
+
+    def muds_dns(host, *args, **kwargs):
+        return real_getaddrinfo("127.0.0.1" if host == "mud.example" else host, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", muds_dns)
+    with pytest.raises(BlockedUrl):
+        http_fetch(f"http://mud.example:{port}/hit.wav", tmp_path / "hit.wav", "mud.example")
 
 
 def test_a_public_mud_still_cannot_reach_a_local_address(tmp_path, local_server):
     with pytest.raises(BlockedUrl):
         http_fetch(f"{local_server}/hit.wav", tmp_path / "hit.wav")
     with pytest.raises(BlockedUrl):
-        http_fetch(f"{local_server}/hit.wav", tmp_path / "hit.wav", trusted_host="example.com")
+        http_fetch(
+            f"{local_server}/hit.wav", tmp_path / "hit.wav", trusted_address="93.184.216.34"
+        )
 
 
 def test_trusting_the_muds_host_does_not_trust_other_private_addresses(tmp_path, local_server):
     # The MUD's own address is allowed; a redirect from it into the rest of the LAN is not.
     with pytest.raises(BlockedUrl):
-        http_fetch(f"{local_server}/away", tmp_path / "hit.wav", trusted_host="127.0.0.1")
+        http_fetch(f"{local_server}/away", tmp_path / "hit.wav", trusted_address="127.0.0.1")
 
 
 def test_library_refuses_non_audio_and_escaping_names(tmp_path):

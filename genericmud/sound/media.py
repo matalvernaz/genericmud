@@ -14,6 +14,7 @@ loopback hosts, re-checked on every redirect).
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import os
 import tempfile
 import threading
@@ -46,7 +47,7 @@ _DEADLINE_SECONDS = 600  # for the whole body: 64 MB still lands at about 1 Mbit
 _CHUNK = 65536
 _USER_AGENT = "genericMud-media"
 
-Fetch = Callable[[str, Path, str], None]  # (url, destination, MUD host): write the file or raise
+Fetch = Callable[[str, Path, str], None]  # (url, destination, MUD's address): write it or raise
 Submit = Callable[[Callable[[], None], Callable[[BaseException | None], None]], None]
 
 
@@ -74,16 +75,30 @@ def is_downloadable(name: str) -> bool:
     return Path(name.replace("\\", "/")).suffix.lower() in AUDIO_EXTENSIONS
 
 
-def http_fetch(url: str, dest: Path, trusted_host: str = "") -> None:
+def _trusted(address: str) -> frozenset[ipaddress.IPv4Address | ipaddress.IPv6Address]:
+    """The non-public addresses a download may reach: the one the MUD session is connected
+    to, with the rest of loopback when that's loopback ("localhost" is 127.0.0.1 and ::1).
+    A host name trusts nothing: the MUD decides what its own name resolves to."""
+    try:
+        peer = ipaddress.ip_address(address)
+    except ValueError:
+        return frozenset()
+    if peer.is_loopback:
+        return frozenset({peer, ipaddress.ip_address("127.0.0.1"), ipaddress.ip_address("::1")})
+    return frozenset({peer})
+
+
+def http_fetch(url: str, dest: Path, trusted_address: str = "") -> None:
     """Download ``url`` to ``dest`` with the soundpack downloader's SSRF checks and a size cap.
 
-    ``trusted_host`` is the MUD's own host. Its addresses pass the private-address check, so a
-    MUD on localhost or the LAN can serve its own sounds; every other private address is still
-    refused, so a public MUD can't point downloads at the player's router or other machines.
+    ``trusted_address`` is the address the MUD session is connected to. It passes the
+    private-address check, so a MUD on localhost or the LAN can serve its own sounds; every
+    other private address is still refused, so a public MUD can't point downloads at the
+    player's router or other machines.
     """
-    from genericmud.packs.vault import _validate_url, resolve_addresses, trusting_opener
+    from genericmud.packs.vault import _validate_url, trusting_opener
 
-    trusted = resolve_addresses(trusted_host) if trusted_host else frozenset()
+    trusted = _trusted(trusted_address)
     _validate_url(url, trusted)
     request = Request(url, headers={"User-Agent": _USER_AGENT})
     deadline = time.monotonic() + _DEADLINE_SECONDS
@@ -168,7 +183,10 @@ class MediaLibrary:
         on_error: Callable[[str, str], None] | None = None,
     ) -> None:
         self.cache_dir = cache_dir
-        self.trusted_host = ""  # the MUD's host: its own private address may serve media
+        # Asked at each download for the address the session's connection reached: the one
+        # non-public address that may serve media. Not the MUD's host name resolved again,
+        # since the MUD decides what that resolves to and could point it at the player's router.
+        self.trusted_address: Callable[[], str] = lambda: ""
         self._fetch = fetch
         self._submit = submit
         self._on_error = on_error  # (url, reason): a failed download, reported once per URL
@@ -203,7 +221,7 @@ class MediaLibrary:
         if len(self._waiting) >= MAX_IN_FLIGHT:
             return False
         self._waiting[dest] = [on_ready] if on_ready is not None else []
-        trusted_host = self.trusted_host  # read now: the job runs on another thread
+        trusted_address = self.trusted_address()  # asked now: the job runs on another thread
         cache_dir = self.cache_dir
 
         def download() -> None:
@@ -220,7 +238,7 @@ class MediaLibrary:
             os.close(handle)
             partial = Path(temporary)
             try:
-                self._fetch(url, partial, trusted_host)
+                self._fetch(url, partial, trusted_address)
                 os.replace(partial, dest)  # never leave a half-written file a later cue would play
             finally:
                 partial.unlink(missing_ok=True)

@@ -358,8 +358,8 @@ class SessionPanel(wx.Panel):
             other_worlds=lambda: [world.name for world in load_worlds()],
         )
         self.app.asker = self._ask_from_pack
-        # The MUD's own host may serve its media even when it's on localhost or the LAN.
-        self.app.media.trusted_host = self.world.host or ""
+        # The address this session reaches may serve its media even on localhost or the LAN.
+        self.app.media.trusted_address = self._connection.peer_address
         # One codec for both directions: commands go out in the encoding output is read in.
         self._connection.text_codec = self.app.codec
         # Seed the persisted speech toggles; changes flow back out through pref_sink.

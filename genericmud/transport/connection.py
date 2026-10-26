@@ -366,6 +366,13 @@ class MudConnection:
             self._read_task.cancel()
         self._teardown()
 
+    def peer_address(self) -> str:
+        """The IP address this connection reached, or "" while it isn't connected."""
+        if self._writer is None:
+            return ""
+        peer = self._writer.get_extra_info("peername")
+        return str(peer[0]) if peer else ""
+
     def _teardown(self) -> None:
         if self._writer is not None and not self._writer.is_closing():
             self._writer.close()
