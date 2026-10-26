@@ -34,7 +34,7 @@ from pathlib import Path
 import wx
 
 from genericmud import __version__, help_text
-from genericmud.app import EngineApp
+from genericmud.app import CLIENT_PREFIX, EngineApp
 from genericmud.automation.engine import AutomationEngine
 from genericmud.automation.variables import VariableEntry, filter_variables
 from genericmud.bridge import protocol
@@ -708,7 +708,12 @@ class SessionPanel(wx.Panel):
 
     def _on_send(self, _event: wx.CommandEvent) -> None:
         text = self.input.GetValue()
-        if self._connect_finished and not self.is_connected():
+        # genericMud's own commands ("/to", "/alias", "/map", ...) don't need this tab's
+        # connection: "/to" goes out through another session. Asking first left no way to
+        # run them here at all, since Cancel keeps the line and Enter asks again. An unknown
+        # "/verb" a MUD owns is dropped unasked, as it was before the question existed.
+        offline_ok = text.startswith(CLIENT_PREFIX)
+        if self._connect_finished and not self.is_connected() and not offline_ok:
             # Nothing typed into a dead session reaches the MUD -- the transport drops it and
             # the client says nothing, which looks exactly like a MUD ignoring the command.
             # Ask instead, and leave the text in the box so it isn't lost while deciding.

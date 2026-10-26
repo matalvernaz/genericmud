@@ -1022,3 +1022,46 @@ def test_a_reconnect_whose_turn_comes_after_the_tab_closed_does_nothing(frame, m
     finally:
         panel.app = None
         _close_question_panel(panel, loop)
+
+
+def test_a_disconnected_tab_still_runs_genericmuds_own_commands(frame, monkeypatch):
+    # "/to Bob say hi" goes out through Bob's session and "/aliases" only reads this
+    # world's aliases; neither needs this tab's connection. The "Reconnect now?" question
+    # stopped both, and Cancel keeps the line in the box, so they could not run at all.
+    import asyncio
+
+    from genericmud.app import EngineApp
+    from genericmud.session.hub import SessionHub
+    from genericmud.transport.connection import MudConnection
+    from genericmud.ui import wx_app
+    from genericmud.voice.router import VoiceRouter
+    from tests.helpers import RecordingBackend
+
+    asked: list[str] = []
+    monkeypatch.setattr(
+        wx_app.SessionPanel, "_prompt_reconnect",
+        lambda panel: asked.append(panel.input.GetValue()),
+    )
+    panel, loop = _question_panel(frame, monkeypatch)
+    hub = SessionHub()
+    bob_heard: list[str] = []
+    hub.register("Bob", bob_heard.append)  # another tab, still connected
+    backend = RecordingBackend()
+    panel.app = EngineApp(
+        VoiceRouter(backend, clock=lambda: 0.0), post=lambda _m: None, keymap={},
+        name="Test", hub=hub,
+    )
+    panel._connection = MudConnection()  # this tab's link is down
+    panel._connect_finished = True
+    try:
+        for typed in ("/to Bob say hi", "/aliases", "look"):
+            panel.input.SetValue(typed)
+            panel._on_send(None)
+            loop.run_until_complete(asyncio.sleep(0.01))  # the engine's turn on the loop
+        assert bob_heard == ["say hi"]
+        assert "no aliases" in backend.spoken
+        assert asked == ["look"]  # a line for the MUD still asks first
+        assert panel.input.GetValue() == "look"  # and stays in the box meanwhile
+    finally:
+        panel.app = None
+        _close_question_panel(panel, loop)

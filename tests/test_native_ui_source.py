@@ -195,7 +195,7 @@ def test_a_dead_tab_asks_before_swallowing_a_command():
     # indistinguishable from a MUD ignoring the line. The command box must notice, ask,
     # and leave the typed text in place while it asks.
     source = _wx_source()
-    assert "if self._connect_finished and not self.is_connected():" in source
+    assert "if self._connect_finished and not self.is_connected() and not offline_ok:" in source
     assert "self._prompt_reconnect()" in source
     assert 'dialog.SetYesNoLabels("&Reconnect", "&Cancel")' in source
 

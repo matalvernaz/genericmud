@@ -79,9 +79,11 @@ game doesn't trigger that.
 
 **Ctrl+D** takes a disconnected tab back to the MUD as well — the File menu
 entry changes to **Reconnect** to say so. Reconnecting reuses the tab, so the
-scrollback you already have stays put. Typing a command into a disconnected tab
-asks whether to reconnect rather than dropping the command silently, and your
-text stays in the box until you decide.
+scrollback you already have stays put. Typing a command for the MUD into a
+disconnected tab asks whether to reconnect rather than dropping the command
+silently, and what you typed stays in the box, ready to send once you're back.
+genericMud's own slash commands, such as `/to` and `/aliases`, still run without
+asking.
 
 `look`, `north` (or just `n`), `say hello`, and `help` are good first commands
 on almost any MUD. A few conveniences in the command box:
