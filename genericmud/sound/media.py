@@ -46,6 +46,9 @@ _TIMEOUT_SECONDS = 30  # for each read, so a server sending a byte at a time nev
 _DEADLINE_SECONDS = 600  # for the whole body: 64 MB still lands at about 1 Mbit/s
 _CHUNK = 65536
 _USER_AGENT = "genericMud-media"
+# What a Wi-Fi sign-in page or a server's error page is sent as. Nothing else is turned away
+# by its type, since servers label sound files every which way.
+_WEB_PAGE_TYPES = frozenset({"text/html", "application/xhtml+xml"})
 
 Fetch = Callable[[str, Path, str], None]  # (url, destination, MUD's address): write it or raise
 Submit = Callable[[Callable[[], None], Callable[[BaseException | None], None]], None]
@@ -103,6 +106,9 @@ def http_fetch(url: str, dest: Path, trusted_address: str = "") -> None:
     request = Request(url, headers={"User-Agent": _USER_AGENT})
     deadline = time.monotonic() + _DEADLINE_SECONDS
     with trusting_opener(trusted).open(request, timeout=_TIMEOUT_SECONDS) as response:
+        if response.headers.get_content_type() in _WEB_PAGE_TYPES:
+            # Saved under the sound's name, it would be found there and never fetched again.
+            raise ValueError(f"{url} sent a web page, not a sound")
         length = response.headers.get("Content-Length")
         if length and length.isdigit() and int(length) > MAX_MEDIA_BYTES:
             raise ValueError(f"{url} is larger than {MAX_MEDIA_BYTES // 1_000_000} MB")

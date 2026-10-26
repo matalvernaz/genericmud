@@ -297,8 +297,8 @@ async def test_the_connection_reports_the_address_it_reached():
 @pytest.fixture
 def local_server():
     """A real HTTP server on 127.0.0.1 serving /hit.wav, /away redirecting to 10.0.0.1,
-    /trickle sending one byte every 0.2 seconds for 3 seconds, and /announced-big, whose
-    Content-Length says 100 bytes while it sends 4."""
+    /trickle sending one byte every 0.2 seconds for 3 seconds, /announced-big, whose
+    Content-Length says 100 bytes while it sends 4, and /portal, a Wi-Fi sign-in page."""
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):  # noqa: N802 - http.server's naming
@@ -312,6 +312,14 @@ def local_server():
                     except OSError:
                         return  # the client gave up
                     time.sleep(0.2)
+                return
+            if self.path == "/portal":
+                page = b"<!DOCTYPE html><html><body>Sign in to the hotel Wi-Fi</body></html>"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(page)))
+                self.end_headers()
+                self.wfile.write(page)
                 return
             if self.path == "/away":
                 self.send_response(302)
@@ -361,6 +369,13 @@ def test_a_download_past_the_size_cap_is_refused(tmp_path, local_server, monkeyp
     monkeypatch.setattr(media, "MAX_MEDIA_BYTES", 3)
     with pytest.raises(ValueError, match="larger than"):
         http_fetch(f"{local_server}/trickle", tmp_path / "b.wav", trusted_address="127.0.0.1")
+
+
+def test_a_web_page_answering_for_a_sound_is_not_kept_as_one(tmp_path, local_server):
+    # A Wi-Fi sign-in page, or a server's error page sent as 200, answers any address. Saved
+    # under the sound's name it was found there on every later cue and never fetched again.
+    with pytest.raises(ValueError, match="web page"):
+        http_fetch(f"{local_server}/portal", tmp_path / "hit.wav", trusted_address="127.0.0.1")
 
 
 def test_a_muds_name_now_resolving_to_this_machine_earns_no_trust(
