@@ -120,7 +120,7 @@ def _media_int(value: object, default, low: int, high: int):
     """A Client.Media number clamped to its range; servers send strings and floats too."""
     try:
         number = int(float(value))  # type: ignore[arg-type]
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):  # OverflowError: infinity, 400-digit numbers
         return default
     return max(low, min(high, number))
 

@@ -300,6 +300,18 @@ def test_client_media_play_defaults_to_half_volume_and_honours_infinite_loops(tm
     assert backend.played[0][2:] == (0.5, True)
 
 
+def test_client_media_numbers_too_big_for_a_whole_number_fall_back_to_the_default(tmp_path):
+    # JSON's 1e999 and Infinity both decode to float("inf"), and a 400-digit integer can't
+    # become a float: int() raises OverflowError for all three, not ValueError.
+    net = _Net()
+    app, backend, _posted = _app(tmp_path, net)
+    play = {"name": "a.wav", "url": "https://x.example/", "volume": float("inf")}
+    _gmcp(app, "Client.Media.Play", {**play, "loops": 10**400, "priority": float("-inf")})
+    assert backend.played[0][2:] == (0.5, False)
+    _gmcp(app, "Client.Media.Stop", {"priority": 10**400})
+    assert backend.stopped == ["media-1"]
+
+
 def test_client_media_keyless_sounds_overlap(tmp_path):
     net = _Net()
     app, backend, _posted = _app(tmp_path, net)
