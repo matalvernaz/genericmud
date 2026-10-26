@@ -300,6 +300,22 @@ def test_music_stopped_while_downloading_does_not_start_late(tmp_path):
     assert backend.musics == []
 
 
+def test_a_download_that_lands_after_all_sound_was_cut_stays_silent(tmp_path):
+    # The panic key, a dropped link and closing the tab all flush the bus. A looping cue whose
+    # file lands after that would start with nothing left to stop it.
+    net = _Net(hold=True)
+    app, backend, _posted = _app(tmp_path, net)
+    rain = {"name": "rain.wav", "url": "https://x.example/", "loops": -1, "key": "rain"}
+    _gmcp(app, "Client.Media.Play", rain)
+    app.on_telnet_event(DataReceived(b"!!MUSIC(theme.ogg U=https://x.example/)\r\n"))
+    app.sound.flush()
+    net.release()
+    _gmcp(app, "Client.Media.Play", {**rain, "name": "wind.wav"})
+    app.on_connection_status("disconnected")
+    net.release()
+    assert backend.played == [] and backend.musics == []
+
+
 def test_web_renderer_keeps_getting_the_bare_name(tmp_path):
     net = _Net()
     app, _backend, posted = _app(tmp_path, net, native=False)

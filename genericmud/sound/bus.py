@@ -50,6 +50,8 @@ class SoundBus:
         self._master = max(0.0, master)
         self._policies: dict[str, BusPolicy] = {}
         self._playing: set[str] = set()
+        # How many times all sound was cut, so a cue still waiting on its file can tell.
+        self.flushes = 0
 
     def set_backend(self, backend: SoundBackend) -> None:
         """Swap the playback backend (e.g. EngineApp injects the renderer poster)."""
@@ -116,6 +118,7 @@ class SoundBus:
 
     def flush(self) -> None:
         """Stop every playing category (the sound panic key, e.g. Shift+F11)."""
+        self.flushes += 1
         for channel in sorted(self._playing):
             self._backend.stop(channel)
         self._playing.clear()

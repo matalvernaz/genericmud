@@ -1062,10 +1062,12 @@ class EngineApp:
             return
         if url:
             address = media_url(url, name)
+            flushes = self.sound.flushes
 
             def ready(downloaded: str) -> None:
-                # A stop, or a newer cue on this channel, arrived while the file downloaded.
-                if self._media_gen.get(channel) == gen:
+                # A stop, or a newer cue on this channel, arrived while the file downloaded,
+                # or all sound was cut: the panic key, a dropped link, the tab closing.
+                if self._media_gen.get(channel) == gen and self.sound.flushes == flushes:
                     play(downloaded)
 
             if self.media.fetch(name, address, ready):
