@@ -918,3 +918,107 @@ def test_a_vipmud_pack_hears_a_reconnect_made_from_the_window(frame, monkeypatch
     finally:
         panel.app = None
         _close_question_panel(panel, loop)
+
+
+def _closing_panel_session(panel):
+    """A disconnected session on ``panel``, speaking into the returned recording backend."""
+    from genericmud.app import EngineApp
+    from genericmud.transport.connection import MudConnection
+    from genericmud.voice.router import VoiceRouter
+    from tests.helpers import RecordingBackend
+
+    backend = RecordingBackend()
+    voice = VoiceRouter(backend, clock=lambda: 0.0)
+    panel._voice = voice
+    panel.app = EngineApp(voice, post=lambda _m: None, keymap={}, name="Test")
+    panel.app.engine.connected = False  # the tab's link is down
+    panel._connection = MudConnection()
+    return backend
+
+
+@pytest.mark.parametrize(
+    ("closed_by", "settled_first", "refused"),
+    [("tab", True, False), ("tab", False, False), ("connection", True, False),
+     ("tab", True, True)],
+    ids=["tab-closed", "tab-closing", "connection-closed", "tab-closed-refused"],
+)
+def test_a_reconnect_closed_during_its_handshake_says_nothing_untrue(
+    frame, monkeypatch, closed_by, settled_first, refused
+):
+    # Ctrl+D on a dead tab, then Ctrl+W while the MUD hasn't answered yet: the closed tab
+    # still said "Reconnected to Test." with no socket live, and marked its shut-down
+    # engine connected. The same goes for the connection being closed under it, which
+    # connect() answers by dropping the late socket and returning quietly. "tab-closing" is
+    # the MUD answering before the closed tab's teardown has had its turn on the loop;
+    # "tab-closed-refused" is the MUD refusing, which a closed tab has no one to tell.
+    import asyncio
+
+    handshake_started = asyncio.Event()
+    release_handshake = asyncio.Event()
+    writers: list[_FakeMudWriter] = []
+
+    async def held_open_connection(host, port, ssl=None):
+        handshake_started.set()
+        await release_handshake.wait()
+        if refused:
+            raise ConnectionRefusedError("Connection refused")
+        writers.append(_FakeMudWriter())
+        return _FakeMudReader(ended=False), writers[-1]
+
+    monkeypatch.setattr(asyncio, "open_connection", held_open_connection)
+    panel, loop = _question_panel(frame, monkeypatch)
+
+    async def scenario():
+        backend = _closing_panel_session(panel)
+        reconnecting = asyncio.ensure_future(panel._reconnect())  # Ctrl+D
+        await handshake_started.wait()
+        if closed_by == "tab":
+            panel.close()  # Ctrl+W before the MUD answers
+        else:
+            await panel._connection.close()
+        if settled_first:
+            await asyncio.sleep(0.01)  # the teardown runs before the MUD answers
+        release_handshake.set()
+        await reconnecting
+        await asyncio.sleep(0.01)  # a teardown still queued runs now
+        return backend
+
+    try:
+        backend = loop.run_until_complete(scenario())
+        assert backend.spoken == ["Reconnecting to Test."]  # said before the close only
+        assert panel.app.engine.connected is False
+        assert all(writer.closed for writer in writers)  # a late socket was dropped
+        assert len(writers) == (0 if refused else 1)
+    finally:
+        panel.app = None
+        _close_question_panel(panel, loop)
+
+
+def test_a_reconnect_whose_turn_comes_after_the_tab_closed_does_nothing(frame, monkeypatch):
+    # Ctrl+D then Ctrl+W at once: the reconnect queued on the loop runs after the close, and
+    # opened a socket for a tab that no longer exists, announcing it as it went.
+    import asyncio
+
+    opened: list[str] = []
+
+    async def fake_open_connection(host, port, ssl=None):
+        opened.append(host)
+        return _FakeMudReader(ended=False), _FakeMudWriter()
+
+    monkeypatch.setattr(asyncio, "open_connection", fake_open_connection)
+    panel, loop = _question_panel(frame, monkeypatch)
+
+    async def scenario():
+        backend = _closing_panel_session(panel)
+        panel.close()
+        await panel._reconnect()
+        await asyncio.sleep(0.01)
+        return backend
+
+    try:
+        backend = loop.run_until_complete(scenario())
+        assert opened == []
+        assert backend.spoken == []
+    finally:
+        panel.app = None
+        _close_question_panel(panel, loop)

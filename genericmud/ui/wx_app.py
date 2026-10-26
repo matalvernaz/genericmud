@@ -921,8 +921,8 @@ class SessionPanel(wx.Panel):
         self._loop.call_soon_threadsafe(lambda: asyncio.create_task(self._reconnect()))
 
     async def _reconnect(self) -> None:  # loop thread
-        if self._connection is None or self.app is None:
-            return
+        if not self._alive or self._connection is None or self.app is None:
+            return  # the tab closed before this got its turn on the loop
         if self._connection.connected:
             return  # the link came back while this waited its turn on the loop
         if self._reconnecting or self._connection.connecting:
@@ -948,6 +948,8 @@ class SessionPanel(wx.Panel):
         try:
             await self._connection.connect(self.world.host, self.world.port, tls=self.world.tls)
         except OSError as error:
+            if not self._alive:
+                return  # the tab closed while this waited; nobody is listening for it
             if self._diag is not None:
                 self._diag.event("reconnect.failed", error=f"{type(error).__name__}: {error}")
             self._post(protocol.echo(f"* Reconnect failed: {error}"))
@@ -956,6 +958,12 @@ class SessionPanel(wx.Panel):
             return
         finally:
             self._reconnecting = False
+        if not self._alive or not self._connection.connected:
+            # The tab closed during the handshake. Either its teardown has closed the
+            # connection already (connect() then drops the late socket and returns quietly)
+            # or it is about to. There is nothing to reattach, and saying "Reconnected"
+            # would be untrue, which is what the transport's own loop stopped doing too.
+            return
         # The socket is live again. Report it the way the transport's own backoff loop
         # does, for the reason _do_disconnect reports through that path: the per-socket
         # reset, the wording and the VIPMud packs' OnConnect (run after the announcement,
