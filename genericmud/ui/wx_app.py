@@ -923,8 +923,19 @@ class SessionPanel(wx.Panel):
     async def _reconnect(self) -> None:  # loop thread
         if self._connection is None or self.app is None:
             return
-        if self._reconnecting or self._connection.connected:
-            return  # a second Enter on the prompt must not open a second socket
+        if self._connection.connected:
+            return  # the link came back while this waited its turn on the loop
+        if self._reconnecting or self._connection.connecting:
+            # Already on its way back: this tab's first connect, a reconnect asked for a
+            # moment ago, or the transport's own backoff between tries. A second connect
+            # would open a second socket, and the two read loops would then tear down each
+            # other's sockets and restart the backoff without end. Say so, so the key press
+            # isn't met with silence.
+            self._post(protocol.echo(f"* Still connecting to {self.world.name}"))
+            if self._voice is not None:
+                self._voice.speak(f"Still connecting to {self.world.name}.", channel="system",
+                                  interrupt=True)
+            return
         self._reconnecting = True
         # disconnect() turned this off; re-arm it so the socket keeps its own safety net.
         self._connection.auto_reconnect = True

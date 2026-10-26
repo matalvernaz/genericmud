@@ -788,3 +788,77 @@ def test_the_connection_menu_item_names_what_it_will_do():
 
     assert _connection_menu_label(True) == "&Disconnect\tCtrl+D"
     assert _connection_menu_label(False) == "&Reconnect\tCtrl+D"
+
+
+class _FakeMudReader:
+    """The first link the server drops at once; every later one stays up, saying nothing."""
+
+    def __init__(self, ended: bool) -> None:
+        self._ended = ended
+
+    async def read(self, _n):
+        import asyncio
+
+        if not self._ended:
+            await asyncio.Event().wait()
+        return b""
+
+
+class _FakeMudWriter:
+    def __init__(self) -> None:
+        self.closed = False
+
+    def write(self, _data) -> None:
+        pass
+
+    def is_closing(self) -> bool:
+        return self.closed
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_a_reconnect_waits_for_a_connect_already_under_way(frame, monkeypatch):
+    # Ctrl+D and "Reconnect now?" are offered whenever the tab isn't connected, which
+    # includes the transport's own backoff between tries. A second connect() there opened
+    # a second socket: the two read loops tore down each other's and restarted the backoff
+    # without end, saying "reconnected" twice a second.
+    import asyncio
+
+    from genericmud.app import EngineApp
+    from genericmud.transport.connection import MudConnection, ReconnectPolicy
+    from genericmud.voice.router import VoiceRouter
+    from tests.helpers import RecordingBackend
+
+    opened: list[str] = []
+
+    async def fake_open_connection(host, port, ssl=None):
+        opened.append(host)
+        return _FakeMudReader(ended=len(opened) == 1), _FakeMudWriter()
+
+    monkeypatch.setattr(asyncio, "open_connection", fake_open_connection)
+    panel, loop = _question_panel(frame, monkeypatch)
+    backend = RecordingBackend()
+    voice = VoiceRouter(backend, clock=lambda: 0.0)
+    connection = MudConnection()
+    connection.auto_reconnect = True
+    connection.reconnect_policy = ReconnectPolicy(base_delay=0.2, max_attempts=1)
+
+    async def scenario() -> None:
+        panel._voice = voice
+        panel.app = EngineApp(voice, post=lambda _m: None, keymap={}, name="Test")
+        connection.on_status = panel.app.on_connection_status
+        panel._connection = connection
+        await connection.connect("mud.example", 4000)
+        await asyncio.sleep(0.05)  # the link drops; the backoff waits before its first try
+        await panel._reconnect()  # Ctrl+D, or "Reconnect now?" answered
+        await asyncio.sleep(0.4)  # the backoff's own try
+        await connection.close()
+
+    try:
+        loop.run_until_complete(scenario())
+        assert opened == ["mud.example", "mud.example"]  # the first link, then the backoff's
+        assert "Still connecting to Test." in backend.spoken
+    finally:
+        panel.app = None
+        _close_question_panel(panel, loop)

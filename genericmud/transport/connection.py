@@ -125,6 +125,8 @@ class MudConnection:
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
         self._read_task: asyncio.Task[None] | None = None
+        self._handshakes = 0  # connect() calls still waiting on the network
+        self._reconnect_task: asyncio.Task[None] | None = None  # the backoff loop, once started
         self._remote_enabled: set[int] = set()
         self._local_enabled: set[int] = set()
         self._ttype_cycle = 0  # position in TTYPE_CYCLE; per-connection, reset in connect()
@@ -151,6 +153,18 @@ class MudConnection:
     def connected(self) -> bool:
         return self._writer is not None and not self._writer.is_closing()
 
+    @property
+    def connecting(self) -> bool:
+        """A connection is on its way: a handshake in flight, or the backoff loop between tries.
+
+        Calling connect() in either state opens a second socket. The two read loops then read
+        whichever socket is newest, tear down each other's, and restart the backoff without
+        end, so anything that offers to connect has to check this first.
+        """
+        if self._handshakes:
+            return True
+        return self._reconnect_task is not None and not self._reconnect_task.done()
+
     async def connect(
         self,
         host: str,
@@ -175,7 +189,11 @@ class MudConnection:
         ctx: ssl.SSLContext | None = None
         if tls or ssl_context is not None:
             ctx = ssl_context or ssl.create_default_context()
-        reader, writer = await asyncio.open_connection(host, port, ssl=ctx)
+        self._handshakes += 1
+        try:
+            reader, writer = await asyncio.open_connection(host, port, ssl=ctx)
+        finally:
+            self._handshakes -= 1
         if self._closing:
             # Disconnected during the connect handshake: close() couldn't cancel a read task that
             # didn't exist yet, so drop the socket here instead of going live behind the user.
@@ -216,7 +234,8 @@ class MudConnection:
             if protocol_error is not None:
                 self._status(f"protocol error, disconnected: {protocol_error}")
             elif self._should_reconnect():
-                asyncio.create_task(self._reconnect_loop())  # noqa: RUF006 - fire-and-forget
+                # Kept, not fire-and-forget: `connecting` reads it to tell the backoff is running.
+                self._reconnect_task = asyncio.create_task(self._reconnect_loop())
             elif not self._closing:
                 # A drop we won't reconnect (quit/auto_reconnect off); confirm it to the user.
                 # A user-initiated close() stays quiet -- the UI already announced it.

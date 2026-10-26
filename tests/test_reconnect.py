@@ -173,3 +173,83 @@ async def test_disconnect_during_the_reconnect_handshake_is_not_announced(monkey
     assert writer.closed
     assert not conn.connected
     assert "reconnected" not in statuses
+
+
+async def test_connecting_while_the_handshake_is_in_flight(monkeypatch):
+    # The window offers to reconnect whenever the tab isn't connected, and a handshake still
+    # in flight isn't connected either: a second connect() there opens a second socket.
+    handshake_started = asyncio.Event()
+    release_handshake = asyncio.Event()
+
+    async def slow_open_connection(host, port, ssl=None):
+        handshake_started.set()
+        await release_handshake.wait()
+        return _IdleReader(), _ClosingWriter()
+
+    monkeypatch.setattr(asyncio, "open_connection", slow_open_connection)
+    conn = MudConnection()
+    assert conn.connecting is False
+    connecting = asyncio.create_task(conn.connect("host", 23))
+    await handshake_started.wait()
+    assert conn.connecting is True
+    assert conn.connected is False
+    release_handshake.set()
+    await connecting
+    assert conn.connecting is False
+    assert conn.connected is True
+    await conn.close()
+
+
+class _EndedReader:
+    async def read(self, _n):
+        return b""  # the server closed the link
+
+
+def _backoff_setup(monkeypatch):
+    """A link that drops at once, a backoff held in its wait, and no server for the retry."""
+    sleeping = asyncio.Event()
+    wake = asyncio.Event()
+    opened: list[str] = []
+
+    async def held_sleep(_delay):
+        sleeping.set()
+        await wake.wait()
+
+    async def open_then_refuse(host, port, ssl=None):
+        opened.append(host)
+        if len(opened) > 1:
+            raise OSError("connection refused")
+        return _EndedReader(), _ClosingWriter()
+
+    monkeypatch.setattr(asyncio, "open_connection", open_then_refuse)
+    monkeypatch.setattr(asyncio, "sleep", held_sleep)
+    conn = MudConnection()
+    conn.auto_reconnect = True
+    conn.reconnect_policy = ReconnectPolicy(max_attempts=1)
+    statuses: list[str] = []
+    conn.on_status = statuses.append
+    return conn, sleeping, wake, opened, statuses
+
+
+async def test_connecting_while_the_backoff_waits_and_not_once_it_gives_up(monkeypatch):
+    conn, sleeping, wake, opened, statuses = _backoff_setup(monkeypatch)
+    await conn.connect("host", 23)
+    await sleeping.wait()  # the link dropped; the backoff waits before its first try
+    assert conn.connected is False
+    assert conn.connecting is True  # a manual reconnect now would race the backoff's
+    wake.set()
+    await conn._reconnect_task
+    assert any("giving up" in status for status in statuses)
+    assert opened == ["host", "host"]
+    assert conn.connecting is False  # a dead end again, where a manual reconnect belongs
+
+
+async def test_a_close_during_the_backoff_wait_ends_connecting_without_a_retry(monkeypatch):
+    conn, sleeping, wake, opened, _statuses = _backoff_setup(monkeypatch)
+    await conn.connect("host", 23)
+    await sleeping.wait()
+    await conn.close()
+    wake.set()
+    await conn._reconnect_task
+    assert conn.connecting is False
+    assert opened == ["host"]  # the backoff saw the close and didn't try again
