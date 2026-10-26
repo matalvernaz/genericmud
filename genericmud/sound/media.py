@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import os
 import tempfile
+import threading
 from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import quote, urlparse
@@ -35,6 +36,7 @@ AUDIO_EXTENSIONS = frozenset(
 _NOT_IN_FILE_NAMES = frozenset('<>:"|?*') | frozenset(chr(code) for code in range(32))
 MAX_MEDIA_BYTES = 64 * 1024 * 1024  # a long music track; nothing a sound cue needs is bigger
 MAX_IN_FLIGHT = 16  # a server spamming new names can't queue unbounded fetches
+_AT_ONCE = 4  # of those, how many one session downloads at the same time
 _TIMEOUT_SECONDS = 30
 _CHUNK = 65536
 _USER_AGENT = "genericMud-media"
@@ -93,7 +95,13 @@ def http_fetch(url: str, dest: Path, trusted_host: str = "") -> None:
 
 
 def _loop_submit(job: Callable[[], None], done: Callable[[BaseException | None], None]) -> None:
-    """Run ``job`` on a worker thread and ``done`` back on the event loop (or inline, no loop)."""
+    """Run ``job`` on a thread of its own and ``done`` back on the event loop (or inline, no loop).
+
+    Not the loop's default executor: asyncio resolves the host name of every connect and
+    reconnect on those threads, so downloads stalled on a slow server kept every session from
+    connecting. A daemon thread, because Python waits for executor threads before it exits,
+    and a download still running would keep genericMud open after it was quit.
+    """
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
@@ -104,8 +112,19 @@ def _loop_submit(job: Callable[[], None], done: Callable[[BaseException | None],
         else:
             done(None)
         return
-    future = loop.run_in_executor(None, job)
-    future.add_done_callback(lambda f: done(None if f.cancelled() else f.exception()))
+
+    def run() -> None:
+        error: BaseException | None = None
+        try:
+            job()
+        except Exception as exc:  # noqa: BLE001 - reported to done() on the loop
+            error = exc
+        try:
+            loop.call_soon_threadsafe(done, error)
+        except RuntimeError:
+            pass  # the loop has closed: genericMud is quitting and nothing is left to play it
+
+    threading.Thread(target=run, name="genericmud-media", daemon=True).start()
 
 
 class MediaLibrary:
@@ -129,6 +148,7 @@ class MediaLibrary:
         self._on_error = on_error  # (url, reason): a failed download, reported once per URL
         self._waiting: dict[Path, list[Callable[[str], None]]] = {}
         self._failed: set[str] = set()  # URLs not retried this session (a 404 recurs per cue)
+        self._slots = threading.BoundedSemaphore(_AT_ONCE)
 
     def locate(self, name: str, *roots: str | None) -> str | None:
         """An existing file for ``name`` under ``roots`` and then the cache, or None."""
@@ -156,7 +176,7 @@ class MediaLibrary:
         self._waiting[dest] = [on_ready] if on_ready is not None else []
         trusted_host = self.trusted_host  # read now: the job runs on another thread
 
-        def job() -> None:
+        def download() -> None:
             dest.parent.mkdir(parents=True, exist_ok=True)
             # A file of its own rather than dest + ".part": tabs on one world share this
             # folder, and through one fixed name a second download truncated the first.
@@ -168,6 +188,10 @@ class MediaLibrary:
                 os.replace(partial, dest)  # never leave a half-written file a later cue would play
             finally:
                 partial.unlink(missing_ok=True)
+
+        def job() -> None:
+            with self._slots:  # the rest of this session's downloads wait their turn
+                download()
 
         def done(error: BaseException | None) -> None:
             waiters = self._waiting.pop(dest, [])

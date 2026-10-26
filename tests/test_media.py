@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -214,6 +216,39 @@ def test_two_tabs_on_one_world_fetching_one_file_land_a_whole_file(tmp_path):
     whole = (b"RIFF-one-first-half|one-second-half", b"RIFF-two")
     assert (cache / "hit.wav").read_bytes() in whole
     assert not list(cache.glob("*.part"))
+
+
+def test_downloads_leave_the_loops_threads_free_and_dont_hold_the_app_open(tmp_path):
+    # asyncio resolves the host name of every connect and reconnect on the loop's default
+    # threads, and Python waits for those threads before it exits. Downloads stalled on a
+    # slow server there kept every session from connecting, and genericMud from quitting.
+    release = threading.Event()
+    daemon: list[bool] = []
+    landed: list[str] = []
+
+    def stalled(_url, dest, _trusted=""):
+        daemon.append(threading.current_thread().daemon)
+        release.wait(10)
+        dest.write_bytes(b"RIFF")
+
+    async def until_landed() -> None:
+        while len(landed) < 3:
+            await asyncio.sleep(0.01)
+
+    async def scenario() -> str:
+        loop = asyncio.get_running_loop()
+        loop.set_default_executor(ThreadPoolExecutor(max_workers=2))
+        library = MediaLibrary(tmp_path, fetch=stalled)
+        for number in range(3):
+            library.fetch(f"s{number}.wav", f"https://slow.example/s{number}.wav", landed.append)
+        try:
+            return await asyncio.wait_for(loop.run_in_executor(None, lambda: "free"), 2)
+        finally:
+            release.set()
+            await asyncio.wait_for(until_landed(), 10)
+
+    assert asyncio.run(scenario()) == "free"
+    assert daemon == [True, True, True]
 
 
 def test_library_hands_the_muds_host_to_the_download(tmp_path):
