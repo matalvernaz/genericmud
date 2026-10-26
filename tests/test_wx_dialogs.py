@@ -1065,3 +1065,46 @@ def test_a_disconnected_tab_still_runs_genericmuds_own_commands(frame, monkeypat
     finally:
         panel.app = None
         _close_question_panel(panel, loop)
+
+
+def test_ctrl_d_works_in_the_first_tab_after_a_menu_was_opened_with_none(
+    frame, monkeypatch, tmp_path
+):
+    # At a blank launch, Alt+F to find Connect is a natural first move. Opening any menu
+    # with no tab open greys the File item out, a greyed item's Ctrl+D never fires, and
+    # opening a tab didn't bring it back: Ctrl+D did nothing until a menu was opened again.
+    import asyncio
+
+    from genericmud.ui import wx_app
+    from tests.helpers import RecordingBackend
+
+    monkeypatch.setenv("HOME", str(tmp_path))  # the frame reads and writes its config
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setattr(wx_app, "make_voice_backend", RecordingBackend)
+    monkeypatch.setattr(wx_app, "make_diagnostic_log", lambda: None)
+
+    async def no_session(_panel):
+        return None
+
+    monkeypatch.setattr(wx_app.SessionPanel, "_start", no_session)
+    pressed: list[str] = []
+    monkeypatch.setattr(
+        wx_app.SessionPanel, "reconnect", lambda panel: pressed.append(panel.world.name)
+    )
+    loop = asyncio.new_event_loop()
+    main = wx_app.GenericMudFrame(loop, {})
+    try:
+        item = main._connection_item
+        menu_open = wx.MenuEvent(wx.wxEVT_MENU_OPEN, 0, main.GetMenuBar().GetMenu(0))
+        main._on_menu_open(menu_open)
+        assert not item.IsEnabled()  # no tab: nothing to disconnect or reconnect
+        main.open_session(World("Test", "mud.example", 4000))
+        assert item.IsEnabled()
+        main.ProcessCommand(item.GetId())  # the route wx gives the Ctrl+D accelerator
+        assert pressed == ["Test"]  # the tab isn't connected, so Ctrl+D reconnects it
+        main._on_close_tab(None)
+        assert not item.IsEnabled()  # the last tab closed: greyed out again
+    finally:
+        main.Destroy()
+        loop.run_until_complete(asyncio.sleep(0.01))
+        loop.close()

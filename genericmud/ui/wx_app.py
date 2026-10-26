@@ -3564,6 +3564,9 @@ class GenericMudFrame(wx.Frame):
         self.book.AddPage(panel, world.name, select=True)
         panel.input.SetFocus()
         self._update_active()
+        # Opening any menu with no tab open greys the File item out, and a greyed item's
+        # Ctrl+D never fires. Bring it back with the tab, not at the next menu opening.
+        self._refresh_connection_item()
 
     def _on_engine_pref(self, attr: str, value: bool) -> None:  # loop thread
         """A keymap toggle changed a speech pref; persist it (prefs mutate on the wx thread)."""
@@ -3698,6 +3701,7 @@ class GenericMudFrame(wx.Frame):
             self.book.GetPage(index).close()  # cancel connection, stop speech
             self.book.DeletePage(index)
             self._update_active()
+            self._refresh_connection_item()  # greys out again once the last tab is gone
             if self.book.GetPageCount():  # no tab strip to fall back on; place focus
                 self.book.GetPage(self.book.GetSelection()).input.SetFocus()
             else:
