@@ -37,7 +37,9 @@ others keep playing quietly, triggers and all.
 Making it talk your way:
 Ctrl+Shift+F is follow mode: when you move rooms, speech skips straight to the
 new room. Ctrl+I makes every line interrupt (fast fights). View menu,
-Background silence keeps genericMud quiet while you're in another window.
+Background silence keeps genericMud quiet while you're in another window, and
+Silence other worlds, in the same menu, decides whether the worlds behind the one
+you're looking at speak too.
 Ctrl silences the voice, as it does for your screen reader (F11 works too);
 Shift+F11 stops every sound.
 

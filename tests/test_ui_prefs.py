@@ -44,3 +44,15 @@ def test_non_table_ui_section_uses_defaults(tmp_path):
     path = tmp_path / "ui-prefs.toml"
     path.write_text('ui = "not a table"\n', encoding="utf-8")
     assert load_ui_prefs(path) == UiPrefs()
+
+
+def test_other_worlds_are_silenced_unless_the_player_says_otherwise(tmp_path):
+    # On by default: a player upgrading sees exactly what they saw before, with nine worlds
+    # open and one of them talking.
+    assert UiPrefs().silence_other_worlds is True
+
+    path = tmp_path / "ui-prefs.toml"
+    save_ui_prefs(UiPrefs(silence_other_worlds=False), path)
+    assert load_ui_prefs(path).silence_other_worlds is False
+    # And it is written out beside the other toggles, so it survives a restart.
+    assert "silence_other_worlds = false" in path.read_text(encoding="utf-8")

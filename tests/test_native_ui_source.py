@@ -6,6 +6,24 @@ import ast
 from pathlib import Path
 
 
+def test_the_view_menu_can_let_every_open_world_speak():
+    # Nine worlds, one in front: by default only that one speaks, and the setting is the
+    # tab-level twin of Background silence, in the same menu and saved the same way.
+    source = (
+        Path(__file__).resolve().parents[1] / "genericmud/ui/wx_app.py"
+    ).read_text(encoding="utf-8")
+    assert '"Silence &other worlds"' in source
+    assert "self._other_worlds_item.Check(self._prefs.silence_other_worlds)" in source
+    assert 'self._save_pref("silence_other_worlds"' in source
+    assert "self.Bind(wx.EVT_MENU, self._on_toggle_other_worlds, self._other_worlds_item)" in source
+
+    # The setting has to reach the code that decides who speaks, and it has to be able to
+    # say yes for a tab that isn't the selected one.
+    handler = source.split("def _update_active", 1)[1].split("def _world_from_args", 1)[0]
+    assert "silence_other_worlds" in handler
+    assert "i == selected or every_world" in handler
+
+
 def test_new_world_and_saved_connect_use_distinct_dialogs_and_commands():
     source = (
         Path(__file__).resolve().parents[1] / "genericmud/ui/wx_app.py"
