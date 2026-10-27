@@ -136,11 +136,11 @@ def install_crash_handlers() -> CrashLog | None:
     :func:`genericmud.session.diaglog.make_diagnostic_log`.
     """
     global _ACTIVE
-    from genericmud.config.worlds import config_dir  # local: avoid an import cycle at load
+    from genericmud.logpaths import diagnostic_log_dir  # local: avoid an import cycle at load
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     try:
-        log = CrashLog(config_dir() / "logs" / f"crash-{stamp}.log")
+        log = CrashLog(diagnostic_log_dir() / f"crash-{stamp}.log")
         log.start()
     except OSError:
         return None

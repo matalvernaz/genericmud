@@ -31,6 +31,7 @@ from genericmud.bridge import protocol
 from genericmud.completion import OutputWordIndex
 from genericmud.config.atomic import atomic_write_text
 from genericmud.config.worlds import config_dir
+from genericmud.logpaths import diagnostic_log_dir, log_count, world_log_dir
 from genericmud.mapping import RoomMap, load_map, save_map, spoken_count
 from genericmud.model.buffer import Buffer, Line
 from genericmud.navigation import Navigator, SafeWalk, expand_speedwalk
@@ -120,6 +121,11 @@ _REVIEW_VERBS = frozenset(
 _CHANNEL_REVIEW_VERBS = frozenset(
     {"prev", "next", "older", "newer", "prev_word", "next_word"}
 )
+
+
+def _files(count: int) -> str:
+    """A spoken file count: "1 file", "2 files". Read aloud, "1 files" sounds like a bug."""
+    return f"{count} file" if count == 1 else f"{count} files"
 
 
 def _parse_count(text: str) -> int | None:
@@ -449,7 +455,7 @@ class EngineApp:
         self._map_unsaved = 0  # new rooms learned since the last write
         self.command_separator = ";"  # stacked input ("n;n;look"); set "" to disable
         self.name = name  # session label, used for the log filename
-        self.log_dir = Path(log_dir) if log_dir else config_dir() / "logs"
+        self.log_dir = Path(log_dir) if log_dir else world_log_dir()
         self.logger: SessionLogger | None = None
         # The world's logging settings (apply_world_settings): start on connect, which files
         # (config.worlds.LOG_FILES), and whether typed commands go in. Stopping a log by hand
@@ -1849,6 +1855,8 @@ class EngineApp:
             self._speak_system(self.map.summary())
         elif verb == "update" and not rest:
             self.update_packs()
+        elif verb == "logs":
+            self._speak_logs()
         else:
             return False  # unknown /verb -> let the MUD have it (some use slash commands)
         return True
@@ -2005,6 +2013,20 @@ class EngineApp:
         elif namespace == "diag" and argument == "where":
             self._diag_where()
         # "soundpack:toggle" and other namespaces are wired as features land.
+
+    def _speak_logs(self) -> None:
+        """`/logs`: where each kind of log is kept, and how many are in each folder.
+
+        Two folders, two audiences -- a session log to read back, a diagnostic file to send
+        to someone when something is wrong -- so it is worth being able to ask which is
+        which without opening a file manager and listening to a list.
+        """
+        worlds = world_log_dir()
+        diagnostics = diagnostic_log_dir()
+        self._speak_system(
+            f"world logs in {worlds} ({_files(log_count(worlds))}); "
+            f"diagnostics in {diagnostics} ({_files(log_count(diagnostics))})"
+        )
 
     def _diag_where(self) -> None:
         """Speak the diagnostic log path + a one-line summary (often names the failure)."""

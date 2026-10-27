@@ -100,17 +100,17 @@ class DiagnosticLog:
 
 
 def make_diagnostic_log() -> DiagnosticLog | None:
-    """Create + start the per-run diagnostic log under the config logs dir, banner written.
+    """Create + start the per-run diagnostic log under the config diagnostics dir, banner written.
 
     Returns ``None`` if the log can't be opened, so the app runs unobserved rather than
     failing to start. The filename is stamped once per process; tabs share the file for a
     single chronological story.
     """
-    from genericmud.config.worlds import config_dir  # local: avoid an import cycle at load
+    from genericmud.logpaths import diagnostic_log_dir  # local: avoid an import cycle at load
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     try:
-        diag = DiagnosticLog(config_dir() / "logs" / f"diagnostic-{stamp}.log")
+        diag = DiagnosticLog(diagnostic_log_dir() / f"diagnostic-{stamp}.log")
         diag.start()
     except OSError:
         return None

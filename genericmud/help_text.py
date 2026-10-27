@@ -284,4 +284,5 @@ F5                Refresh the values
 Automation menu   Manage per-world automation; list MUD variables; automation help
 Alt+Shift+L       Log this session to a file
 Alt+Shift+D       Speak the diagnostic log location and summary
+/logs             Where the log files are: world logs, and diagnostics
 """

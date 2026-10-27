@@ -113,17 +113,28 @@ def _prune_old_logs() -> None:
     """Delete the app's own diagnostic and crash logs from earlier runs that are past keeping
     (diaglog.prune_old_logs). Never raises: tidying up must not stop the app starting."""
     try:
-        from genericmud.config.worlds import config_dir
+        from genericmud.logpaths import diagnostic_log_dir
         from genericmud.session.diaglog import prune_old_logs
 
-        prune_old_logs(config_dir() / "logs")
+        # The app's own logs moved into their own folder (see logpaths); migration has already
+        # filed anything an older build left in the flat folder, so pruning looks there now.
+        prune_old_logs(diagnostic_log_dir())
     except Exception:  # noqa: BLE001 - best effort, like the sweeps above
         pass
 
 
 def main(argv: list[str] | None = None) -> None:
+    from genericmud.logpaths import migrate_legacy_logs
     from genericmud.session.crashlog import install_crash_handlers, mark_normal_exit
 
+    # Before either logger opens a file: logs written by an older build into the flat folder
+    # are filed into worlds/ or diagnostics/ first, so this run's files land where they belong
+    # and no legacy file is left mingling with them. Never raises, so a shared or read-only
+    # folder can't stop the launch.
+    try:
+        migrate_legacy_logs()
+    except Exception:  # noqa: BLE001 - housekeeping must never block startup
+        pass
     install_crash_handlers()  # earliest chokepoint: covers both UIs and an import-time wx fault
     _prune_old_logs()
     args = _parse_args(argv)
