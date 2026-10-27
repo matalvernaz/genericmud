@@ -26,7 +26,7 @@ export class Output {
     const atBottom = this._atBottom();
     const div = document.createElement("div");
     div.className = "line";
-    this._fill(div, message.text, message.links);
+    this._fill(div, message.text, message.links, message.images);
     this.element.appendChild(div);
     while (this.element.childElementCount > MAX_LINES) {
       this.element.removeChild(this.element.firstChild);
@@ -34,29 +34,58 @@ export class Output {
     if (atBottom) this.element.scrollTop = this.element.scrollHeight;
   }
 
-  // Plain text with an <a> over each link's words. The engine sends offsets into the text it
-  // already decided is text, so nothing is re-parsed here and no markup can leak.
-  _fill(div, text, links) {
-    if (!links || links.length === 0) {
+  // Plain text with an <a> over each link's words and an <img> where each image sat. The engine
+  // sends offsets into text it already decided is text, so nothing is re-parsed here and no
+  // markup can leak into the page.
+  _fill(div, text, links, images) {
+    const spans = (links || []).map(([start, end, command]) => ({
+      start, end, kind: "link", command,
+    }));
+    // An image is zero-width: it sits at a point in the text rather than covering words.
+    for (const [offset, url] of images || []) {
+      spans.push({ start: offset, end: offset, kind: "image", url });
+    }
+    if (spans.length === 0) {
       div.textContent = text;
       return;
     }
+    // Offset order; where a link and an image start together the link comes first, so the
+    // image sits at its edge rather than splitting the anchor.
+    spans.sort((a, b) => a.start - b.start || b.end - a.end);
     let at = 0;
-    for (const [start, end, command] of links) {
-      if (start > at) div.appendChild(document.createTextNode(text.slice(at, start)));
+    for (const span of spans) {
+      if (span.start > at) div.appendChild(document.createTextNode(text.slice(at, span.start)));
+      if (span.kind === "image") {
+        div.appendChild(this._image(span.url));
+        continue;
+      }
       const anchor = document.createElement("a");
       anchor.className = "mxp-link";
       anchor.href = "#";
-      const words = text.slice(start, end);
+      const words = text.slice(span.start, span.end);
       anchor.textContent = words;
       // The command is data, not the anchor's text: a substituted or rewritten line must not
       // be able to change what gets sent.
-      anchor.dataset.command = command;
+      anchor.dataset.command = span.command;
       anchor.dataset.words = words;
       div.appendChild(anchor);
-      at = end;
+      at = Math.max(at, span.end);
     }
     if (at < text.length) div.appendChild(document.createTextNode(text.slice(at)));
+  }
+
+  _image(url) {
+    const img = document.createElement("img");
+    img.className = "mxp-image";
+    img.src = url;
+    // Deliberately no alt attribute: an empty alt would hide the image from a screen reader
+    // entirely, and the point is that something visual was there. MXP gives an image no
+    // description to use, so "graphic" is the most this client can honestly say about it.
+    img.decoding = "async";
+    img.loading = "lazy";
+    img.referrerPolicy = "no-referrer";  // don't tell the MUD's web server where we came from
+    img.addEventListener("error", () => img.remove());
+    return img;
   }
 
   _atBottom() {

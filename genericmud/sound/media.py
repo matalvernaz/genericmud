@@ -24,7 +24,13 @@ from pathlib import Path
 from urllib.parse import quote, urlparse
 from urllib.request import Request
 
-from genericmud.safepath import confine, is_unsafe, resolve_media
+from genericmud.safepath import (
+    confine,
+    is_allowed_host,
+    is_unsafe,
+    resolve_media,
+    trusted_addresses,
+)
 
 # Formats the pygame mixer can play. Anything else is refused before a byte is written, so a
 # hostile server can't drop an .exe or .bat into the user's config folder.
@@ -82,16 +88,13 @@ def is_downloadable(name: str) -> bool:
 
 
 def _trusted(address: str) -> frozenset[ipaddress.IPv4Address | ipaddress.IPv6Address]:
-    """The non-public addresses a download may reach: the one the MUD session is connected
-    to, with the rest of loopback when that's loopback ("localhost" is 127.0.0.1 and ::1).
-    A host name trusts nothing: the MUD decides what its own name resolves to."""
-    try:
-        peer = ipaddress.ip_address(address)
-    except ValueError:
-        return frozenset()
-    if peer.is_loopback:
-        return frozenset({peer, ipaddress.ip_address("127.0.0.1"), ipaddress.ip_address("::1")})
-    return frozenset({peer})
+    """See :func:`genericmud.safepath.trusted_addresses` -- the addresses a download may reach."""
+    return trusted_addresses(address)
+
+
+def is_allowed_media_host(host: str, trusted_address: str = "") -> bool:
+    """Whether media may be fetched from ``host`` -- see :func:`safepath.is_allowed_host`."""
+    return is_allowed_host(host, trusted_address)
 
 
 def http_fetch(url: str, dest: Path, trusted_address: str = "") -> None:

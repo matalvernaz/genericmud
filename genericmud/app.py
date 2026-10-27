@@ -14,6 +14,7 @@ import re
 import time
 import traceback
 from collections.abc import Callable, Iterable
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -47,7 +48,7 @@ from genericmud.protocol import msdp
 from genericmud.protocol import telnet as T
 from genericmud.protocol.charset import AUTO, ServerTextCodec
 from genericmud.protocol.msp import SoundCue, parse_msp_line
-from genericmud.protocol.mxp import MxpParser
+from genericmud.protocol.mxp import IMAGE_MARK, MxpParser, resolve_image_url
 from genericmud.protocol.oob import OobMessage, ServerStatus, from_subnegotiation
 from genericmud.render.ansi import parse_ansi
 from genericmud.review.channels import ChannelReview
@@ -164,6 +165,25 @@ def _redact_secret(text: str, secret: str) -> str:
         return text
     pattern = re.compile(r"(?<!\S)" + re.escape(secret) + r"(?!\S)")
     return pattern.sub("***", text)
+
+
+def _strip_image_marks(text: str) -> tuple[str, list[int]]:
+    """``text`` without its inline-image markers, and where each marker sat once they're gone.
+
+    Kept separate from the parser because the offset is only knowable here: everything between
+    the parser and this point (MXP tags, MSP markers, ANSI codes, password redaction) rewrites
+    the text, so a position counted any earlier would point at the wrong place.
+    """
+    if IMAGE_MARK not in text:
+        return text, []
+    kept: list[str] = []
+    positions: list[int] = []
+    for char in text:
+        if char == IMAGE_MARK:
+            positions.append(len(kept))
+        else:
+            kept.append(char)
+    return "".join(kept), positions
 
 
 def _link_positions(text: str, links: list[tuple[str, str]]) -> list[tuple[int, int, str]]:
@@ -548,9 +568,13 @@ class EngineApp:
         # MXP: on unless this world turns it off. The parser strips every tag, so what
         # reaches the output is plain text whatever the server sends.
         self.mxp_enabled = mxp
+        # Where an <IMAGE> without a URL argument looks for its file. Most MUDs expect the
+        # client to have this configured, the same way MSP's U= expects a sounds location.
+        self.images_url = ""
         self._mxp = MxpParser()
         self._mxp_join = ""  # text held across lines by <NOBR> or an open <P>
         self._mxp_join_links = []  # links gathered in that held text, emitted with it
+        self._mxp_join_images = []  # ditto for images, whose markers ride in the text itself
         self._mxp_held_lines = 0  # how many lines that hold has swallowed so far
         # One deadline, not one per <P>: paragraphs do not nest and the stream is sequential,
         # so at most one hold is ever open. The token stops a stale timer from flushing a
@@ -664,6 +688,7 @@ class EngineApp:
         self.connect_method = world.connect_method
         self.post_connect_commands = world.post_connect_commands
         self.download_media = world.download_sounds
+        self.images_url = world.images_url
 
     def on_connect(self, world: str, *, socket_open: bool = True) -> ActivationResult | None:
         """The on-connect sequence: register with the hub, activate packs, arm login.
@@ -1300,7 +1325,9 @@ class EngineApp:
             self._emit_line(self._pending)
             self._pending = ""
 
-    def _mxp_feed(self, text: str) -> tuple[str, list[SoundCue], list[tuple[str, str]]]:
+    def _mxp_feed(
+        self, text: str
+    ) -> tuple[str, list[SoundCue], list[tuple[str, str]], list[tuple[str, str]]]:
         """Parse one line as MXP, returning plain text, its sound cues and its links.
 
         ``<NOBR>`` and an open ``<P>`` are the only MXP rules that span lines: both mean the
@@ -1314,11 +1341,14 @@ class EngineApp:
         the join simply restarts, and the parser's own paragraph state is untouched.
         """
         if not self.mxp_enabled:
-            return text, [], []
+            return text, [], [], []
         # The held text comes back already stripped of its tags, so a link seen while it was
         # being gathered has to be carried alongside it; the join is what brings them together.
+        # An image needs no such care: it left a marker in the text, which survives the join.
         links = self._mxp_join_links
         self._mxp_join_links = []
+        images = self._mxp_join_images
+        self._mxp_join_images = []
         if self._mxp_join:
             text = self._mxp_join + text
             self._mxp_join = ""
@@ -1326,9 +1356,10 @@ class EngineApp:
         for payload in outcome.replies:
             self._mxp_reply(payload)
         links.extend(outcome.links)
+        images.extend(outcome.images)
         if not outcome.join_next:
             self._release_mxp_hold()
-            return outcome.text, outcome.cues, links
+            return outcome.text, outcome.cues, links, images
         self._mxp_held_lines += 1
         if (
             self._mxp_held_lines >= _MXP_MAX_JOIN_LINES
@@ -1338,16 +1369,18 @@ class EngineApp:
             self._release_mxp_hold()
             if self._diag is not None:
                 self._diag.event("mxp.join_flushed", reason="size")
-            return held, outcome.cues, links
+            return held, outcome.cues, links, images
         self._mxp_join = outcome.text
         self._mxp_join_links = links  # for a deadline flush, which has no text to re-parse
+        self._mxp_join_images = images
         self._arm_mxp_deadline()
-        return "", outcome.cues, []
+        return "", outcome.cues, [], []
 
     def _release_mxp_hold(self) -> None:
         """Forget a hold, and any deadline waiting on it."""
         self._mxp_join = ""
         self._mxp_join_links = []
+        self._mxp_join_images = []
         self._mxp_held_lines = 0
         self._mxp_timer_armed = False
         self._mxp_timer_token += 1  # a timer already scheduled must now do nothing
@@ -1369,10 +1402,11 @@ class EngineApp:
             return
         held = self._mxp_join
         held_links = self._mxp_join_links
+        held_images = self._mxp_join_images
         self._release_mxp_hold()
         if self._diag is not None:
             self._diag.event("mxp.join_flushed", reason="timeout")
-        self._emit_parsed_line(held, links=held_links)
+        self._emit_parsed_line(held, links=held_links, images=held_images)
 
     def _mxp_reply(self, payload: str) -> None:
         """Answer ``<VERSION>``/``<SUPPORT>`` on a secure line, as the spec requires.
@@ -1390,15 +1424,16 @@ class EngineApp:
             pass  # a dead socket must not break the line that provoked the question
 
     def _emit_line(self, text: str) -> None:
-        # Strip MXP markup before anything reads it; links ride along with the text.
-        text, mxp_cues, links = self._mxp_feed(text)
-        self._emit_parsed_line(text, mxp_cues, links)
+        # Strip MXP markup before anything reads it; links and images ride along with the text.
+        text, mxp_cues, links, images = self._mxp_feed(text)
+        self._emit_parsed_line(text, mxp_cues, links, images)
 
     def _emit_parsed_line(
         self,
         text: str,
         mxp_cues: list[SoundCue] | None = None,
         links: list[tuple[str, str]] | None = None,
+        images: list[tuple[str, str]] | None = None,
     ) -> None:
         """Show and speak a line that has already been through the MXP parser.
 
@@ -1452,11 +1487,32 @@ class EngineApp:
             redacted = _redact_secret(plain, self._password_guard)
             if redacted != plain:
                 plain, spans = redacted, []  # the colours belonged to the text that's gone
-        if not plain.strip():
+        # Inline images: the parser left a marker wherever one sits, and only now is its offset
+        # knowable. An image whose address can't be worked out simply isn't there.
+        plain, marks = _strip_image_marks(plain)
+        if marks:
+            spans = [replace(span, text=span.text.replace(IMAGE_MARK, "")) for span in spans]
+            spans = [span for span in spans if span.text]
+        shown: list[tuple[int, str]] = []
+        for (file, base), offset in zip(images or [], marks, strict=False):
+            url = resolve_image_url(
+                file, base, self.images_url, self.media.trusted_address()
+            )
+            if url:
+                shown.append((offset, url))
+                if self._diag is not None:
+                    self._diag.event("mxp.image", file=file, url=url)
+        if not plain.strip() and not shown:
             return  # blank line: any sound cues already fired; don't show/speak "blank"
         for pack in self._mush_packs:
             pack.dispatch_line(plain)
-        line = Line(plain, spans=spans, links=list(links or []))
+        line_links = list(links or [])
+        # A text client has no way to show a picture, so an image also becomes a link: the
+        # same thing MUSHclient does with one (it turns <IMAGE> into a hyperlink), and the
+        # only form in which a picture can be reached without seeing it.
+        for _offset, url in shown:
+            line_links.append((url.rsplit("/", 1)[-1], url))
+        line = Line(plain, spans=spans, links=line_links)
         self.engine.process_line(line)  # may set line.channel and gag flags
         self._log(line.plain_text)  # full session log, including gagged-from-speech
         if self._login is not None and not self._login.done:
@@ -1474,7 +1530,7 @@ class EngineApp:
             if not line.plain_text.strip():
                 return
         policy = self.channels.policy(line.channel)
-        if policy.speak and not line.gagged and self.engine.line_speech:
+        if policy.speak and not line.gagged and self.engine.line_speech and line.plain_text.strip():
             self.voice.speak(
                 line.plain_text,
                 channel=(policy.voice or line.channel),
@@ -1495,6 +1551,7 @@ class EngineApp:
                         if line.substitute is None
                         else []
                     ),
+                    images=shown if line.substitute is None else [],
                 )
             )
 
@@ -2346,9 +2403,11 @@ class EngineApp:
         chosen = self.review.link()
         if chosen is None:
             # Several links and the word isn't in one: name them rather than guess, so one
-            # more Alt+Right lands on a word that picks the intended one.
+            # more Alt+Right lands on a word that picks the intended one. A link with no
+            # words of its own (an image, or an empty <SEND>) is named by what it does.
             named = "; ".join(
-                f"{number} {text}" for number, (text, _command) in enumerate(links, 1)
+                f"{number} {text or command}"
+                for number, (text, command) in enumerate(links, 1)
             )
             self._speak_review(f"{len(links)} links: {named}")
             return

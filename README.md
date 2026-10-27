@@ -71,9 +71,9 @@ choose the world, and press **Edit**; it applies the next time you open the
 world. A tab that's already open, reconnecting included, keeps the host, port,
 encoding and sounds folder it opened with.
 
-A world's details also hold its **command separator**, **logging** and **login**
-settings, described below. Changes to those apply straight away, even to an
-open tab.
+A world's details also hold its **command separator**, **logging**, **login**
+and **images address** settings, described below. Changes to those apply
+straight away, even to an open tab.
 
 ## Logging in automatically
 
@@ -465,6 +465,25 @@ Sounds and music play as many times as the MUD asks, and loop only when it says
 to. When the MUD gives a sound a caption, a description for players who can't
 hear it, the caption appears in the output in brackets, like `[A wolf howls]`,
 where the review keys can find it. It isn't spoken.
+
+### Pictures
+
+A MUD can put an image on a line — a map, a room picture, a shop's sign. MXP has
+no way to describe one, so there is nothing to read out: an image is a file name
+and a place on the line, and nothing else.
+
+In the **web UI** the picture is shown where the MUD put it. In the **text
+client** — which has nowhere to draw one — the image becomes a link instead, the
+same thing MUSHclient does with one: the file name is the link, and following it
+(Alt+Enter, or Enter in the output) opens the picture in your browser.
+
+Either way the MUD has to say where the file lives. Most MUDs send just a file
+name and expect the client to be configured with their images address: a world's
+details take it as **Images web address**. A MUD that names the address itself
+works with no setting at all — which is all the browser-only `--web` mode has,
+since it takes a host and a port rather than a saved world. Only `http` and
+`https` are ever followed, and never an address on your own network except the
+machine the MUD runs on.
 
 ## Sharing your setup
 

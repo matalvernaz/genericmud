@@ -24,15 +24,25 @@ def test_the_output_draws_real_links_from_offsets():
     assert 'anchor.className = "mxp-link"' in source
     assert 'anchor.href = "#"' in source
     # Built from the offsets the engine sent -- no markup is parsed in the renderer.
-    assert "text.slice(start, end)" in source
+    assert "text.slice(span.start, span.end)" in source
 
 
 def test_a_drawn_link_carries_its_command_as_data():
     # The command must not come from the anchor's own visible text, so a rewritten line cannot
     # change what gets sent.
     source = _read("output.js")
-    assert "anchor.dataset.command = command" in source
+    assert "anchor.dataset.command = span.command" in source
     assert "anchor.dataset.words" in source
+
+
+def test_an_image_is_drawn_as_a_graphic_with_no_alt_text():
+    # No alt attribute on purpose: an empty one would hide the picture from a screen reader,
+    # and MXP has no description to give it -- so "graphic" is all it can honestly say.
+    source = _read("output.js")
+    assert 'document.createElement("img")' in source
+    assert 'img.className = "mxp-image"' in source
+    assert "img.alt" not in source
+    assert "img.src = url" in source
 
 
 def test_activating_a_link_does_not_navigate_the_page():

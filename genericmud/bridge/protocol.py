@@ -42,12 +42,16 @@ def line(
     gagged: bool = False,
     display_when_gagged: bool = False,
     links: list[tuple[int, int, str]] | None = None,
+    images: list[tuple[int, str]] | None = None,
 ) -> dict[str, Any]:
     """One rendered line. ``links`` are (start, end, command) offsets into ``text``.
 
     Sent as offsets rather than as markup so the renderer builds real anchors from plain
     text -- the engine has already decided what is text and what is a link, and re-parsing
     markup in the renderer would be a second, divergent answer to that question.
+
+    ``images`` are (offset, url) for inline graphics whose address the player's world could
+    resolve. Only http/https arrives here: anything else is refused before it is sent.
     """
     return {
         "type": LINE,
@@ -56,6 +60,7 @@ def line(
         "gagged": gagged,
         "display_when_gagged": display_when_gagged,
         "links": [list(span) for span in (links or [])],
+        "images": [list(span) for span in (images or [])],
     }
 
 
