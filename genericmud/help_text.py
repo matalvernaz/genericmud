@@ -26,6 +26,9 @@ n), say hello, and help. Up and Down arrows step through what you've typed.
 A semicolon sends several commands at once, as in n;n;look; type it twice to
 send a real one. Each world can change the separator or turn it off in its
 details (Ctrl+O, then Edit), which also has its logging settings.
+A world's details hold its username and password too, kept in your computer's
+own credential store, plus how that login is sent and any commands to type once
+you're connected.
 Tab moves between the output box and the command box; typing while in the
 output box drops you back into the command box.
 

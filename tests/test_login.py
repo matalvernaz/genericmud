@@ -2,9 +2,18 @@
 
 from __future__ import annotations
 
+import keyring
+import pytest
+
 from genericmud.app import EngineApp
 from genericmud.protocol.telnet import DataReceived
-from genericmud.session.credentials import PlaintextCredentialStore
+from genericmud.session import credentials
+from genericmud.session.credentials import (
+    KeyringCredentialStore,
+    PlaintextCredentialStore,
+    migrate_plaintext_to_keyring,
+    open_credential_store,
+)
 from genericmud.session.login import AutoLogin
 from genericmud.voice.router import VoiceRouter
 from tests.helpers import RecordingBackend
@@ -385,3 +394,164 @@ def test_the_second_line_typed_while_hidden_mentions_escape_once():
     hints = [spoken for spoken in backend.spoken if "Escape" in spoken]
     assert len(hints) == 1
 
+
+
+# --- connect methods and after-connect commands -------------------------------
+
+
+def _app_with(store, *, method="automatic", commands=""):
+    """An engine for one world's login: no real timers, so the fallback can't fire."""
+    backend = RecordingBackend()
+    voice = VoiceRouter(backend, clock=lambda: 0.0)
+    sent: list[str] = []
+    app = EngineApp(
+        voice,
+        send=sent.append,
+        post=[].append,
+        credentials=store,
+        keymap={},
+        name="gw",
+        connect_method=method,
+        post_connect_commands=commands,
+        schedule=lambda _delay, _callback: None,
+    )
+    return app, sent
+
+
+def _store_with_login(tmp_path, username="hero", password="secret"):
+    store = PlaintextCredentialStore(tmp_path / "c.json")
+    store.set("gw", username, password)
+    return store
+
+
+def test_mush_method_sends_one_connect_line_then_the_commands(tmp_path):
+    # MUSHclient's MUSH/MOO habit: a single CONNECT command carrying both.
+    app, sent = _app_with(_store_with_login(tmp_path), method="mush", commands="look\nscore")
+    app.begin_login("gw")
+    assert sent == ["CONNECT hero secret", "look", "score"]
+
+
+def test_diku_method_sends_name_then_password_then_the_commands(tmp_path):
+    app, sent = _app_with(_store_with_login(tmp_path), method="diku", commands="who")
+    app.begin_login("gw")
+    assert sent == ["hero", "secret", "who"]
+
+
+def test_no_auto_connect_sends_the_commands_but_never_the_login(tmp_path):
+    # A stored login under "none" is deliberately ignored: that is what the mode means.
+    app, sent = _app_with(_store_with_login(tmp_path), method="none", commands="look")
+    app.begin_login("gw")
+    assert sent == ["look"]
+
+
+def test_automatic_login_holds_the_commands_until_the_password_is_away(tmp_path):
+    app, sent = _app_with(_store_with_login(tmp_path), commands="look")
+    app.begin_login("gw")
+    app.on_telnet_event(DataReceived(b"What is your name?\r\n"))
+    assert sent == ["hero"]  # the command must not go before the login finishes
+    app.on_telnet_event(DataReceived(b"Password:\r\n"))
+    assert sent == ["hero", "secret", "look"]
+
+
+def test_after_connect_commands_are_typed_once_per_connection(tmp_path):
+    app, sent = _app_with(_store_with_login(tmp_path), commands="look")
+    app.begin_login("gw")
+    app.on_telnet_event(DataReceived(b"What is your name?\r\n"))
+    app.on_telnet_event(DataReceived(b"Password:\r\n"))
+    app._send_post_connect()  # a fallback timer firing late must not repeat them
+    assert sent.count("look") == 1
+
+
+def test_a_reconnect_types_the_after_connect_commands_again(tmp_path):
+    # "Sent after connected" means every connection, which is what a world expects after a
+    # drop as much as on the first login.
+    app, sent = _app_with(_store_with_login(tmp_path), commands="look")
+    app.begin_login("gw")
+    app.on_telnet_event(DataReceived(b"What is your name?\r\n"))
+    app.on_telnet_event(DataReceived(b"Password:\r\n"))
+    app.after_reconnect()
+    app.on_telnet_event(DataReceived(b"What is your name?\r\n"))
+    app.on_telnet_event(DataReceived(b"Password:\r\n"))
+    assert sent.count("look") == 2
+
+
+def test_no_stored_login_still_sends_the_after_connect_commands(tmp_path):
+    app, sent = _app_with(PlaintextCredentialStore(tmp_path / "c.json"), commands="look")
+    app.begin_login("gw")
+    assert sent == ["look"]
+
+
+# --- the encrypted store -----------------------------------------------------
+
+
+class _MemoryKeyring(keyring.backend.KeyringBackend):
+    """A credential store in a dict. The suite must never touch the real one."""
+
+    priority = 1
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.entries: dict[tuple[str, str], str] = {}
+
+    def get_password(self, service, username):
+        return self.entries.get((service, username))
+
+    def set_password(self, service, username, password):
+        self.entries[(service, username)] = password
+
+    def delete_password(self, service, username):
+        if (service, username) not in self.entries:
+            raise keyring.errors.PasswordDeleteError(username)
+        del self.entries[(service, username)]
+
+
+@pytest.fixture
+def memory_keyring():
+    previous = keyring.get_keyring()
+    backend = _MemoryKeyring()
+    keyring.set_keyring(backend)
+    try:
+        yield backend
+    finally:
+        keyring.set_keyring(previous)
+
+
+def test_keyring_store_round_trip(memory_keyring):
+    store = KeyringCredentialStore()
+    assert store.get("gw") is None
+    store.set("gw", "hero", "secret")
+    assert store.get("gw") == ("hero", "secret")
+    assert memory_keyring.entries  # it really went through the backend
+    store.delete("gw")
+    assert store.get("gw") is None
+    store.delete("gw")  # deleting twice must not raise
+
+
+def test_login_migration_moves_the_plaintext_file_into_the_store(tmp_path, memory_keyring):
+    path = tmp_path / "credentials.json"
+    PlaintextCredentialStore(path).set("gw", "hero", "secret")
+    store = KeyringCredentialStore()
+    assert migrate_plaintext_to_keyring(path, store) == 1
+    assert store.get("gw") == ("hero", "secret")
+    assert not path.exists()  # the readable copy goes once it is safely moved
+
+
+def test_a_corrupt_plaintext_file_is_left_alone_not_half_migrated(tmp_path, memory_keyring):
+    path = tmp_path / "credentials.json"
+    path.write_text("{not json", encoding="utf-8")
+    assert migrate_plaintext_to_keyring(path, KeyringCredentialStore()) == 0
+    assert path.exists()  # nothing moved, so nothing deleted
+
+
+def test_no_credential_store_falls_back_and_says_why(tmp_path, monkeypatch):
+    # The reason reaches the speaker, so it has to be a sentence, not an exception repr.
+    monkeypatch.setattr(credentials, "_usable_keyring", lambda: (None, "no store here"))
+    store, reason = open_credential_store(tmp_path / "credentials.json")
+    assert isinstance(store, PlaintextCredentialStore)
+    assert reason == "no store here"
+
+
+def test_a_working_credential_store_is_preferred(tmp_path, memory_keyring):
+    store, reason = open_credential_store(tmp_path / "credentials.json")
+    assert isinstance(store, KeyringCredentialStore)
+    assert reason is None

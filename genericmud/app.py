@@ -30,7 +30,12 @@ from genericmud.automation.variables import VariableEntry, list_variables
 from genericmud.bridge import protocol
 from genericmud.completion import OutputWordIndex
 from genericmud.config.atomic import atomic_write_text
-from genericmud.config.worlds import config_dir
+from genericmud.config.worlds import (
+    DEFAULT_CONNECT_METHOD,
+    config_dir,
+    normalize_connect_method,
+    normalize_post_connect,
+)
 from genericmud.logpaths import diagnostic_log_dir, log_count, world_log_dir
 from genericmud.mapping import RoomMap, load_map, save_map, spoken_count
 from genericmud.model.buffer import Buffer, Line
@@ -92,6 +97,10 @@ _STATE_SAVE_DELAY_SECONDS = 2.0  # a pack's SaveState is written this soon after
 # in a session (changing a password in-game) only WONT ECHO or Escape ends the hiding.
 _LOGIN_PHASE_SECONDS = 300.0
 _HIDDEN_INPUT_TIMEOUT_SECONDS = 60.0
+# How long an automatic login waits for a login prompt before the world's after-connect
+# commands are typed anyway. A MUD that asks sends its prompt within a second or two; this
+# only exists so a MUD that never asks can't hold those commands for the whole session.
+_POST_CONNECT_FALLBACK_SECONDS = 30.0
 # Transport statuses that mean the socket went away or was replaced (transport/connection.py).
 _SOCKET_CHANGES = (
     "disconnected",
@@ -367,6 +376,8 @@ class EngineApp:
         diag: DiagnosticLog | None = None,
         suppress_reconnect: Callable[[], None] | None = None,
         encoding: str = AUTO,
+        connect_method: str = DEFAULT_CONNECT_METHOD,
+        post_connect_commands: str = "",
         other_worlds: Callable[[], Iterable[str]] | None = None,
         clock: Callable[[], float] | None = None,
         withdraw_option: Callable[[int], None] | None = None,
@@ -469,6 +480,11 @@ class EngineApp:
         self.download_media = True  # fetch the sounds a MUD offers (the world's choice)
         self.credentials = credentials
         self._login: AutoLogin | None = None
+        # How this world logs in, and what it types once the connection is up (both come from
+        # the world file; the username and password themselves come from the credential store).
+        self.connect_method = normalize_connect_method(connect_method)
+        self.post_connect_commands = normalize_post_connect(post_connect_commands)
+        self._post_connect_sent = False  # per connection: a reconnect types them again
         self._walk: SafeWalk | None = None
         self._user_aliases: dict[str, str] = {}  # interactively-made aliases: pattern -> command
         self._user_triggers: dict[str, str] = {}
@@ -1042,16 +1058,47 @@ class EngineApp:
             pass  # a state write must never break session close
 
     def begin_login(self, world: str) -> None:
-        """Arm auto-login for ``world`` if credentials are stored for it."""
+        """Start this connection's login, and arrange the after-connect commands.
+
+        Four methods (``config.worlds.CONNECT_METHODS``). "automatic" answers the MUD's own
+        prompts, which is what this client has always done and the only mode that suits a
+        MUD which asks; "mush" and "diku" type the login blind, for MUDs that never ask;
+        "none" sends no credentials at all. Whatever the method, the world's after-connect
+        commands go out once the login is finished -- or at once, when there is no login to
+        wait for.
+        """
         self._login_phase_started = self._clock()  # a fresh connection means fresh prompts
         self._login = None
-        if self.credentials is None:
-            return
-        creds = self.credentials.get(world)
-        if creds is None:
+        self._post_connect_sent = False  # a reconnect types them again
+        creds = self.credentials.get(world) if self.credentials is not None else None
+        if creds is None or self.connect_method == "none":
+            # Nothing to wait for. A stored login under "none" is deliberately ignored --
+            # that is what "no auto-connect" means.
+            self._send_post_connect()
             return
         username, password = creds
+        if self.connect_method == "mush":
+            self._send_for_login(f"CONNECT {username} {password}")  # MUSH/MOO's one line
+            self._send_post_connect()
+            return
+        if self.connect_method == "diku":
+            self._send_for_login(username)  # Diku's name, then password, on their own lines
+            self._send_for_login(password)
+            self._send_post_connect()
+            return
         self._login = AutoLogin(username, password, self._send_for_login)
+        # A MUD that never shows a prompt would otherwise hold the after-connect commands
+        # for the whole session. The send is idempotent, so this is harmless when it is quick.
+        self._schedule(_POST_CONNECT_FALLBACK_SECONDS, self._send_post_connect)
+
+    def _send_post_connect(self) -> None:
+        """Type the world's after-connect commands, once per connection."""
+        if self._post_connect_sent:
+            return
+        self._post_connect_sent = True
+        for command in self.post_connect_commands.split("\n"):
+            if command:
+                self._send(command)  # straight to the wire: these are for the MUD, not /commands
 
     def _send_for_login(self, text: str) -> None:
         """Auto-login's typing. On a slow link its password goes out before the WILL ECHO
@@ -1211,6 +1258,10 @@ class EngineApp:
         self._log(line.plain_text)  # full session log, including gagged-from-speech
         if self._login is not None and not self._login.done:
             self._login.feed(line.plain_text)  # answer name/password prompts
+            if self._login.done:
+                # The password is away (or the wait gave up): what the world asked to type
+                # once connected goes now.
+                self._send_post_connect()
         if self._walk is not None and self._walk.active:
             self._walk.on_line(line.plain_text)  # halt the walk if a step was blocked
         if line.substitute is not None:

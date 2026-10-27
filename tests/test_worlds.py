@@ -132,3 +132,48 @@ def test_downloading_the_muds_sounds_is_on_unless_a_world_turns_it_off(tmp_path)
     assert "download_sounds = false" in path.read_text(encoding="utf-8")
     assert load_worlds(path) == worlds
     assert World("New", "n.example", 23).download_sounds
+
+
+def test_connect_method_and_after_connect_commands_round_trip(tmp_path):
+    path = tmp_path / "worlds.toml"
+    worlds = [
+        World("Diku", "d.example", 23, connect_method="diku", post_connect_commands="look\nscore"),
+        World("Plain", "p.example", 23),
+    ]
+    save_worlds(worlds, path)
+    text = path.read_text(encoding="utf-8")
+    assert 'connect_method = "diku"' in text
+    assert 'post_connect_commands = ["look", "score"]' in text
+    assert "connect_method" not in text.split('[[world]]')[-1]  # defaults stay out of the file
+    assert load_worlds(path) == worlds
+
+
+def test_an_unknown_connect_method_falls_back_to_automatic(tmp_path):
+    # A hand-edited or future world file must not break a session's login.
+    path = tmp_path / "worlds.toml"
+    path.write_text(
+        '[[world]]\nname = "Odd"\nhost = "o.example"\nport = 23\nconnect_method = "mxp"\n',
+        encoding="utf-8",
+    )
+    assert load_worlds(path)[0].connect_method == "automatic"
+
+
+def test_after_connect_commands_are_one_per_line_with_blanks_dropped(tmp_path):
+    path = tmp_path / "worlds.toml"
+    world = World(
+        "Multi", "m.example", 23, post_connect_commands="  look  \n\n\t\nscore\n"
+    )
+    save_worlds([world], path)
+    loaded = load_worlds(path)[0]
+    assert loaded.post_connect_commands == "look\nscore"
+
+
+def test_after_connect_commands_read_a_hand_written_multiline_string(tmp_path):
+    # The world file may be hand-edited, so a plain string is accepted as well as an array.
+    path = tmp_path / "worlds.toml"
+    path.write_text(
+        '[[world]]\nname = "Hand"\nhost = "h.example"\nport = 23\n'
+        'post_connect_commands = """look\nscore"""\n',
+        encoding="utf-8",
+    )
+    assert load_worlds(path)[0].post_connect_commands == "look\nscore"
