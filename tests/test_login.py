@@ -612,3 +612,26 @@ def test_a_blind_login_is_never_typed_into_a_closed_socket(tmp_path):
     socket_open["value"] = True  # the transport has connected
     app.after_connect()
     assert sent == ["CONNECT hero secret", "look"]
+
+
+def test_an_echoed_password_is_hidden_from_the_output(tmp_path):
+    # A blind login goes out before the server has switched echo off, so a server that echoes
+    # what it reads sends the password straight back. It must never reach the output box, the
+    # screen reader or the session log.
+    app, _sent = _app_with(_store_with_login(tmp_path), method="diku")
+    app.begin_login("gw")
+    app.after_connect()
+    app.on_telnet_event(DataReceived(b"Password: secret\r\n"))
+    assert app.buffer.lines()[-1].plain_text == "Password: ***"
+
+
+def test_the_redaction_matches_whole_words_only():
+    from genericmud.app import _redact_secret
+
+    assert _redact_secret("Password: hunter2", "hunter2") == "Password: ***"
+    assert _redact_secret("CONNECT hero hunter2", "hunter2") == "CONNECT hero ***"
+    # A one-character password must not redact half the output.
+    assert _redact_secret("a whole line of it", "a") == "*** whole line of it"
+    # Part of a word is not the password.
+    assert _redact_secret("hunter22 and hunter2x", "hunter2") == "hunter22 and hunter2x"
+    assert _redact_secret("nothing to do", "") == "nothing to do"
