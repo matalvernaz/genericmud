@@ -1480,6 +1480,27 @@ def test_the_sounds_folder_says_what_blank_means(frame):
         dialog.Destroy()
 
 
+def test_the_world_dialog_prefills_saves_and_moves_a_stored_login(frame, tmp_path):
+    from genericmud.config.worlds import World
+    from genericmud.session.credentials import PlaintextCredentialStore
+    from genericmud.ui.wx_app import WorldDialog
+
+    store = PlaintextCredentialStore(tmp_path / "c.json")
+    store.set("Old", "hero", "secret")
+    dialog = WorldDialog(frame, World("Old", "h.example", 4000), credentials=store)
+    try:
+        _accept(dialog)  # EndModal on a dialog that was never shown
+        # Pre-filled rather than blank, so leaving it alone can't mean "forget my password".
+        assert dialog._username.GetValue() == "hero"
+        assert dialog._password_value() == "secret"
+        dialog._name.SetValue("New")  # a rename must move the login with the world
+        dialog._on_ok(wx.CommandEvent())
+        assert store.get("New") == ("hero", "secret")
+        assert store.get("Old") is None
+    finally:
+        dialog.Destroy()
+
+
 def test_a_world_dialog_note_comes_first_and_labels_no_control(frame):
     # NVDA reads a dialog's text that labels no control as the dialog opens.
     from genericmud.ui.wx_app import WorldDialog
@@ -1535,3 +1556,43 @@ def test_installing_a_pack_with_its_own_sounds_says_the_folder_can_stay_blank(
     finally:
         main.Destroy()
         loop.close()
+
+
+def test_revealing_the_password_keeps_what_was_typed(frame, tmp_path):
+    from genericmud.config.worlds import World
+    from genericmud.ui.wx_app import WorldDialog
+
+    dialog = WorldDialog(frame, World("W", "h.example", 4000))
+    try:
+        assert dialog._password.IsShown() and not dialog._password_plain.IsShown()
+        dialog._password.SetValue("hunter2")
+        dialog._reveal.SetValue(True)
+        dialog._on_reveal(wx.CommandEvent())
+        assert dialog._password_plain.IsShown() and not dialog._password.IsShown()
+        assert dialog._password_value() == "hunter2"
+        # Typing while revealed, then hiding again, must keep what was typed.
+        dialog._password_plain.SetValue("hunter3")
+        dialog._reveal.SetValue(False)
+        dialog._on_reveal(wx.CommandEvent())
+        assert dialog._password_value() == "hunter3"
+    finally:
+        dialog.Destroy()
+
+
+def test_clearing_both_login_fields_forgets_the_stored_login(frame, tmp_path):
+    from genericmud.config.worlds import World
+    from genericmud.session.credentials import PlaintextCredentialStore
+    from genericmud.ui.wx_app import WorldDialog
+
+    store = PlaintextCredentialStore(tmp_path / "c.json")
+    store.set("Gone", "hero", "secret")
+    dialog = WorldDialog(frame, World("Gone", "h.example", 4000), credentials=store)
+    try:
+        _accept(dialog)
+        dialog._username.SetValue("")
+        dialog._password.SetValue("")
+        dialog._password_plain.SetValue("")
+        dialog._on_ok(wx.CommandEvent())
+        assert store.get("Gone") is None  # blank means forget, not "keep the old one"
+    finally:
+        dialog.Destroy()

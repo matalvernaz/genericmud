@@ -23,6 +23,10 @@ dependencies = [
   "regex>=2024.0",
   # Updating packs from their git repositories (git's own protocol, file by file).
   "dulwich>=1.2.19",
+  # Login details live in the OS credential store (Windows Credential Manager, macOS
+  # Keychain, Secret Service) so they are encrypted at rest with no master password to
+  # type. Core rather than an extra: a world's login is not an optional feature.
+  "keyring>=25",
 ]
 
 # A source/pip install gets a `genericmud` command on every platform (Windows/macOS/Linux).

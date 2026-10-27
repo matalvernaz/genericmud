@@ -71,8 +71,34 @@ choose the world, and press **Edit**; it applies the next time you open the
 world. A tab that's already open, reconnecting included, keeps the host, port,
 encoding and sounds folder it opened with.
 
-A world's details also hold its **command separator** and **logging** settings,
-described below. Changes to those apply straight away, even to an open tab.
+A world's details also hold its **command separator**, **logging** and **login**
+settings, described below. Changes to those apply straight away, even to an
+open tab.
+
+## Logging in automatically
+
+A world's details (Ctrl+O, choose the world, Edit) take a **username** and a
+**password**, which are kept in your computer's own credential store — the
+Windows Credential Manager, the macOS Keychain, or the Secret Service on Linux.
+They are encrypted there with your own login, so there is no master password to
+type and nothing readable sitting among genericMud's files. The field starts
+masked; **Reveal password** shows it, and it is off every time the dialog opens.
+On a machine with no usable credential store, genericMud falls back to the
+plaintext `credentials.json` and says so out loud when it starts.
+
+**Connect** chooses how the login is sent:
+
+| Choice | What it sends |
+|---|---|
+| Automatic | Answers the MUD's own name and password prompts. Works with almost everything, and never sends the password before the username |
+| No auto-connect | Nothing. You log in yourself |
+| MUSH/MOO | The single command `CONNECT name password` |
+| Diku | The name, then the password, each on its own line |
+
+**Sent after connecting** takes commands, one per line, typed as soon as the
+connection is up — or, when a login is configured, the moment that login
+finishes. A reconnect types them again. For example, `look` and `score` on two
+lines get you oriented each time you connect.
 
 Next time, press **Ctrl+O** to pick the world from your saved list; that dialog
 can also edit a saved world or start a new one. **Ctrl+D** disconnects and
