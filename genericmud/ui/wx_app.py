@@ -4843,6 +4843,7 @@ def _world_from_args(args) -> World | None:
     return World(
         name=args.host, host=args.host, port=args.port, tls=args.tls,
         sounds=args.sounds, encoding=getattr(args, "encoding", AUTO),
+        images_url=getattr(args, "images", "") or "",
     )
 
 

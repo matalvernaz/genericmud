@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import argparse
 
-from genericmud.config.worlds import DEFAULT_PORT, parse_port
+from genericmud.config.worlds import DEFAULT_PORT, normalize_images_url, parse_port
 from genericmud.protocol.charset import AUTO, normalize_encoding
 
 
@@ -34,6 +34,21 @@ def _encoding_arg(value: str) -> str:
     return encoding
 
 
+def _images_arg(value: str) -> str:
+    """The web address a MUD's pictures live under, checked at the command line.
+
+    Only a web address, for the same reason the saved-world setting only keeps one: it is
+    loaded by the renderer or opened in the browser, and neither should be pointed anywhere a
+    MUD (or a typo) chooses.
+    """
+    images = normalize_images_url(value)
+    if not images:
+        raise argparse.ArgumentTypeError(
+            f"unsupported images address {value!r}; try http://mud.example/images/"
+        )
+    return images
+
+
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="genericmud")
     parser.add_argument("host", nargs="?", default=None)
@@ -43,6 +58,10 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "--encoding", type=_encoding_arg, default=AUTO,
         help="the MUD's character encoding, e.g. utf-8, cp1251, koi8-r (default: auto)",
+    )
+    parser.add_argument(
+        "--images", type=_images_arg, default=None,
+        help="web address the MUD's pictures live under, for an <IMAGE> that names none",
     )
     parser.add_argument("--web", action="store_true", help="use the web UI instead of native wx")
     return parser.parse_args(argv)

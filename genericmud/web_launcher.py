@@ -73,6 +73,9 @@ def run(args) -> None:
                 encoding=getattr(args, "encoding", AUTO),
             )
             connection.text_codec = app.codec  # commands go out in the world's encoding too
+            # This mode has no saved world to keep the pictures address in, so it comes from
+            # the command line, exactly as --sounds and --encoding do.
+            app.images_url = getattr(args, "images", "") or ""
             holder["app"] = app
             connection._on_event = app.on_telnet_event
             # Without this, a disconnect (connection._status) goes nowhere and the browser/screen
