@@ -6,6 +6,31 @@ import ast
 from pathlib import Path
 
 
+def test_tab_keys_come_from_the_keymap_but_are_run_by_the_window():
+    # The binding has to be editable like every other key, so it is read from the keymap; the
+    # work has to happen in the window, because the engine serves one world and cannot see the
+    # tabs. So the panel must divert `tab:` actions before the engine is handed the key.
+    source = (
+        Path(__file__).resolve().parents[1] / "genericmud/ui/wx_app.py"
+    ).read_text(encoding="utf-8")
+    handler = source.split("def _dispatch_bound_combo", 1)[1].split("def _send_command", 1)[0]
+    assert 'action.startswith("tab:")' in handler
+    assert "handle_tab_action" in handler
+    assert handler.index("handle_tab_action") < handler.index('{"type": "key"')
+
+
+def test_both_ways_of_changing_tabs_say_where_you_landed():
+    # Ctrl+Tab goes through _switch_session, and so does Alt+<number>; the announcement lives
+    # there so the two cannot drift apart.
+    source = (
+        Path(__file__).resolve().parents[1] / "genericmud/ui/wx_app.py"
+    ).read_text(encoding="utf-8")
+    switch = source.split("def _switch_session", 1)[1].split("def handle_tab_action", 1)[0]
+    assert "_announce_tab(index)" in switch
+    select = source.split("def _select_tab", 1)[1].split("def _announce_tab", 1)[0]
+    assert "_announce_tab(index)" in select
+
+
 def test_new_world_and_saved_connect_use_distinct_dialogs_and_commands():
     source = (
         Path(__file__).resolve().parents[1] / "genericmud/ui/wx_app.py"

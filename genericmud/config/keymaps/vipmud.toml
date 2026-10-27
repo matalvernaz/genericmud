@@ -43,6 +43,21 @@
 # Spell the current review line (or the newest line) character by character.
 "alt+shift+enter" = "review:spell_line"
 
+# Switch worlds by the order their tabs were opened: Alt+1 is the first tab, Alt+0 the
+# tenth. The window announces the world it switched to, and Ctrl+Tab announces too.
+# These are window-side actions, so they work whatever tab you're typing in.
+"alt+1" = "tab:select:1"
+"alt+2" = "tab:select:2"
+"alt+3" = "tab:select:3"
+"alt+4" = "tab:select:4"
+"alt+5" = "tab:select:5"
+"alt+6" = "tab:select:6"
+"alt+7" = "tab:select:7"
+"alt+8" = "tab:select:8"
+"alt+9" = "tab:select:9"
+# Past where VIPMud's own tab keys stop, as Ctrl+0 is for recall: Alt+0 is the tenth tab.
+"alt+0" = "tab:select:10"
+
 # Channel browsing: cycle the channels your triggers route chat to, scroll
 # within one, and recall its recent messages -- a parallel layer to the Alt
 # review keys, on Ctrl+Alt.

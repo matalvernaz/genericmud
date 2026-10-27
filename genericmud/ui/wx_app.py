@@ -908,6 +908,16 @@ class SessionPanel(wx.Panel):
         so the panic keys (F11 stops speech, Shift+F11 stops sound) and every other
         bound action work even while the reader is focused in the output.
         """
+        if combo and combo not in _PASSTHROUGH_COMBOS:
+            # Tab switching is the window's, not this world's: the engine serves one MUD and
+            # has no idea which tabs are open. The binding still comes from the keymap, so
+            # these keys are rebindable like every other one.
+            action = self._keymap.get(combo)
+            if action is not None and action.startswith("tab:"):
+                frame = wx.GetTopLevelParent(self)
+                handle = getattr(frame, "handle_tab_action", None)
+                if handle is not None and handle(action):
+                    return True
         if (
             combo
             and combo not in _PASSTHROUGH_COMBOS
@@ -3798,11 +3808,57 @@ class GenericMudFrame(wx.Frame):
         event.Skip()
 
     def _switch_session(self, index: int) -> None:
+        """Show tab ``index``, and say which world it is when that actually changes it."""
+        moved = index != self.book.GetSelection()
         self.book.ChangeSelection(index)  # ChangeSelection: no page-changed event to handle
         self._update_active()
         self._update_focus()
-        # Focus the new page's command box; NVDA reads its name, announcing the session.
+        # Focus the new page's command box; on its own that is not enough to announce the
+        # session, since the control keeps focus from tab to tab and a silent focus move says
+        # nothing. So it is spoken too, which is also what makes Ctrl+Tab audible.
         self.book.GetPage(index).input.SetFocus()
+        if moved:
+            self._announce_tab(index)
+
+    def handle_tab_action(self, action: str) -> bool:
+        """Do a window-side keymap action ("tab:select:3"); False when it isn't one of ours.
+
+        Called by a session panel for a combo the keymap binds to a ``tab:`` action, before
+        the engine gets a chance to swallow or mis-send it.
+        """
+        namespace, _, rest = action.partition(":")
+        if namespace != "tab":
+            return False
+        verb, _, argument = rest.partition(":")
+        if verb == "select":
+            try:
+                number = int(argument)
+            except ValueError:
+                return True  # a mistyped keymap entry: swallowed, not typed at the MUD
+            self._select_tab(number)
+        return True
+
+    def _select_tab(self, number: int) -> None:
+        """Switch to world ``number``, counting from the order the tabs were opened."""
+        count = self.book.GetPageCount()
+        if count == 0:
+            self.announce("No worlds are open.")
+            return
+        if not 1 <= number <= count:
+            self.announce(f"Only {count} world{'s' if count != 1 else ''} open.")
+            return
+        index = number - 1
+        if index == self.book.GetSelection():
+            # They asked where they are, so say it even though nothing moved.
+            self._announce_tab(index)
+            return
+        self._switch_session(index)
+
+    def _announce_tab(self, index: int) -> None:
+        """Say which world is in front now, and which tab it is of how many."""
+        count = self.book.GetPageCount()
+        name = self.book.GetPage(index).world.name
+        self.announce(f"{name}, tab {index + 1} of {count}")
 
     def open_session(self, world: World) -> None:
         panel = SessionPanel(

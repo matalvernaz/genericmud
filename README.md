@@ -105,10 +105,12 @@ on almost any MUD. A few conveniences in the command box:
 ## More than one MUD at once
 
 **Ctrl+N** opens another new world and **Ctrl+O** another saved one, each in its
-own tab. **Ctrl+Tab** and **Ctrl+Shift+Tab** switch between them. Only the tab
-you're on speaks; the others stay quiet but keep running — triggers still fire
-and sounds still play, so you miss nothing. To reach across, `/to` sends a
-command to another tab by its world name: `/to alter aeon look`.
+own tab. **Ctrl+Tab** and **Ctrl+Shift+Tab** switch between them and say which
+world you landed in; **Alt+1** through **Alt+9** (and **Alt+0** for the tenth) go
+straight to a tab, counting in the order you opened them. Only the tab you're on
+speaks; the others stay quiet but keep running — triggers still fire and sounds
+still play, so you miss nothing. To reach across, `/to` sends a command to another
+tab by its world name: `/to alter aeon look`.
 
 ## Making it talk the way you want
 
@@ -419,7 +421,8 @@ View, **Alt+H** Help.
 | Ctrl+O | Connect to a saved world |
 | Ctrl+D | Disconnect, or reconnect a disconnected tab |
 | Ctrl+W | Close this tab |
-| Ctrl+Tab / Ctrl+Shift+Tab | Next / previous session |
+| Ctrl+Tab / Ctrl+Shift+Tab | Next / previous session (says which one) |
+| Alt+1..9 / Alt+0 | Switch to that world, in the order the tabs were opened |
 | Ctrl+Q | Exit |
 | Enter | Send the command line |
 | Up / Down | Command history |
