@@ -31,9 +31,13 @@ output box drops you back into the command box.
 
 More than one MUD:
 Ctrl+N opens another new world and Ctrl+O opens another saved world, each in
-its own tab. Ctrl+Tab switches tabs. Only the tab you're on speaks — the
-others keep playing quietly, triggers and all. View menu, World name in the
-window title, puts the world you're in into the window's title.
+its own tab. Ctrl+Tab switches tabs and says which world you landed in, and
+Alt+1 to Alt+0 go straight to the first to tenth tab, in the order you opened
+them, unless the world's soundpack or your own hotkeys use those keys. On a Mac
+they're left free, since Option and a number types characters there. Only the
+tab you're on speaks — the others keep playing quietly, triggers and all. View
+menu, World name in the window title, puts the world you're in into the
+window's title.
 
 Making it talk your way:
 Ctrl+Shift+F is follow mode: when you move rooms, speech skips straight to the
@@ -216,8 +220,9 @@ Ctrl+N            Create and connect to a new world
 Ctrl+O            Connect to a saved world
 Ctrl+D            Disconnect, or reconnect a disconnected tab
 Ctrl+W            Close this tab
-Ctrl+Tab          Next session
+Ctrl+Tab          Next session (says which one)
 Ctrl+Shift+Tab    Previous session
+Alt+1 to Alt+0    Switch to that world, in the order the tabs were opened
 Ctrl+Q            Exit
 
 Typing:
