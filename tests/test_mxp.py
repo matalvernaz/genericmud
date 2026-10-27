@@ -102,15 +102,17 @@ def test_version_and_support_are_answered():
     assert version.replies == ["<VERSION MXP=1.0 CLIENT=genericMud VERSION=9.9>"]
     style = _feed(SECURE + "<version 3>")
     assert "STYLE=3" in style.replies[0]
-    support = _feed(SECURE + "<support image br>")
-    assert support.replies == ["<SUPPORTS -IMAGE +BR>"]
+    support = _feed(SECURE + "<support image frame>")
+    # An image is offered (as a picture in the web UI, as a link in the text client); a frame
+    # is a window model this client doesn't have, and claiming it would invite one.
+    assert support.replies == ["<SUPPORTS +IMAGE -FRAME>"]
 
 
 def test_support_with_no_arguments_lists_what_this_client_does():
     out = _feed(SECURE + "<support>")
     assert out.replies[0].startswith("<SUPPORTS ")
     assert "+BR" in out.replies[0] and "+SOUND" in out.replies[0]
-    assert "-IMAGE" not in out.replies[0]
+    assert "+IMAGE" in out.replies[0]
 
 
 def test_entities_expand_but_never_become_tags():

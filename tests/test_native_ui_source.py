@@ -64,6 +64,17 @@ def test_new_world_and_saved_connect_use_distinct_dialogs_and_commands():
     assert '"&Connect to Saved World...\\tCtrl+O"' in source
 
 
+def test_the_world_dialog_offers_an_images_address():
+    # Where an <IMAGE> with no address of its own looks; the field is per world, like the
+    # sounds folder, because it belongs to one MUD's web space.
+    source = (
+        Path(__file__).resolve().parents[1] / "genericmud/ui/wx_app.py"
+    ).read_text(encoding="utf-8")
+    assert '"&Images web address:"' in source
+    assert "self._images_url.SetValue(initial.images_url)" in source
+    assert "images_url=self._images_url.GetValue().strip()" in source
+
+
 def test_find_shortcuts_remain_scoped_to_the_output_control():
     source = (
         Path(__file__).resolve().parents[1] / "genericmud/ui/wx_app.py"

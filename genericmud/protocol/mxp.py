@@ -25,18 +25,27 @@ given that servers only see a benefit once nothing leaks:
 * an unclosed tag is forgotten at the newline (open tags) or on a reset (all).
 
 What this client acts on: line breaks (``<BR>``, ``<SBR>``, ``<P>``, ``<NOBR>``),
-``<SOUND>``/``<MUSIC>`` cues, and the ``<VERSION>``/``<SUPPORT>`` handshake.
-Everything else is parsed, stripped and ignored -- including ``<SEND>``/``<A>``
-links, which are recorded so a later window can make them reachable without a
-mouse, but not acted on here.
+``<SOUND>``/``<MUSIC>`` cues, ``<IMAGE>``/``<IMG>`` (recorded so a window can show one, and a
+text client can at least offer it as a link), and the ``<VERSION>``/``<SUPPORT>`` handshake.
+Everything else is parsed, stripped and ignored -- including ``<SEND>``/``<A>`` links, which
+are recorded so a later window can make them reachable without a mouse, but not acted on
+here.
 """
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from urllib.parse import urlparse
 
 from genericmud.protocol.msp import SoundCue, _parse_cue
+from genericmud.safepath import is_allowed_host, is_unsafe
+
+# Where an inline image sits in the text. The parser cannot report a character offset (the ANSI,
+# MSP and redaction passes that follow all rewrite the text), so an image leaves this marker
+# behind and the engine turns it into an offset once the line is finished. The marker is never
+# spoken, logged or shown: it is stripped out before the line exists.
+IMAGE_MARK = "\uf8ff"
 
 # The line-mode escape. Servers send it as decimal text, and it can appear more than
 # once on a line (lock a mode, then mark this line).
@@ -68,7 +77,8 @@ _OPEN_TAGS = frozenset(
 _KNOWN_TAGS = _OPEN_TAGS | frozenset(
     {
         "send", "a", "expire", "version", "support", "sound", "music", "gauge", "stat",
-        "frame", "frameset", "dest", "destination", "user", "password", "image", "filter",
+        "frame", "frameset", "dest", "destination", "user", "password", "image", "img",
+        "filter",
         "relocate", "script", "tag", "var", "welcome", "h1", "h2", "h3", "h4", "h5", "h6",
         "hr", "small", "tt",
     }
@@ -98,6 +108,11 @@ class MxpOutcome:
     replies: list[str] = field(default_factory=list)
     # (displayed text, command) for every link seen, for a window that can reach them.
     links: list[tuple[str, str]] = field(default_factory=list)
+    # (file name, base URL) for each inline image, in the order they appeared, with an
+    # IMAGE_MARK left in the text where each one goes. Resolving a file name to a real
+    # address needs the world's own setting, so that is the caller's job, not the
+    # parser's.
+    images: list[tuple[str, str]] = field(default_factory=list)
     # <NOBR>: the caller must join the next line onto this one instead of breaking.
     no_break: bool = False
     # The same instruction, plus an open <P>: either way the next line belongs on this one.
@@ -152,16 +167,17 @@ class MxpParser:
         """Parse one line from the MUD. ``line`` has no newline; the caller joins."""
         line = self._apply_modes(line)
         if self._mode == MODE_LOCKED:
-            return self._finish(line, [], [], [])
+            return self._finish(line, [], [], [], [])
 
         cues: list[SoundCue] = []
         replies: list[str] = []
         links: list[tuple[str, str]] = []
+        images: list[tuple[str, str]] = []
         # Tags first, entities second. &lt; exists precisely to write a literal "<", so
         # expanding entities before parsing tags would turn it into one and eat it.
-        text = self._parse_tags(line, cues, replies, links)
+        text = self._parse_tags(line, cues, replies, links, images)
         text = self._expand_entities(text)
-        return self._finish(text, cues, replies, links)
+        return self._finish(text, cues, replies, links, images)
 
     def _finish(
         self,
@@ -169,6 +185,7 @@ class MxpParser:
         cues: list[SoundCue],
         replies: list[str],
         links: list[tuple[str, str]],
+        images: list[tuple[str, str]],
     ) -> MxpOutcome:
         """Apply the one spacing rule that outlives a line.
 
@@ -183,6 +200,7 @@ class MxpParser:
             cues=cues,
             replies=replies,
             links=links,
+            images=images,
             no_break=no_break,
             # <NOBR> is one line's instruction; an open <P> lasts until </P>.
             join_next=no_break or self._paragraph,
@@ -206,6 +224,7 @@ class MxpParser:
         cues: list[SoundCue],
         replies: list[str],
         links: list[tuple[str, str]],
+        images: list[tuple[str, str]],
     ) -> str:
         """Remove every tag, acting on the few that mean something here."""
         out: list[str] = []
@@ -231,7 +250,9 @@ class MxpParser:
             if name == "!":
                 continue  # <!ELEMENT>, <!ENTITY>, <!ATTLIST>: definitions, not output
             if name in _OPEN_TAGS or secure_ok:
-                self._act(name, match.group("attrs"), closing, cues, replies, out, links)
+                self._act(
+                    name, match.group("attrs"), closing, cues, replies, out, links, images,
+                )
             # A secure tag on an open line is dropped without action, exactly as the
             # security rule requires; its text stays, which is the safe half.
             if name in ("send", "a") and not closing and secure_ok:
@@ -239,7 +260,10 @@ class MxpParser:
             elif name in ("send", "a") and closing and pending_link is not None:
                 index, command = pending_link
                 if command:
-                    links.append(("".join(out[index:]), command))
+                    # An image inside a link leaves a marker where it sits; that is not words,
+                    # so it must not become the link's name.
+                    words = "".join(out[index:]).replace(IMAGE_MARK, "")
+                    links.append((words, command))
                 pending_link = None
         out.append(text[position:])
         return "".join(out)
@@ -253,6 +277,7 @@ class MxpParser:
         replies: list[str],
         out: list[str],
         links: list[tuple[str, str]],
+        images: list[tuple[str, str]],
     ) -> None:
         """Do the handful of things this client acts on."""
         if name in ("br", "sbr"):
@@ -265,6 +290,13 @@ class MxpParser:
             cue = _sound_cue(name, attrs)
             if cue is not None:
                 cues.append(cue)
+        elif name in ("image", "img") and not closing:
+            # Reachable only on a secure line: an image is exactly the "large graphics" the
+            # spec says a player must not be able to force onto another player's client.
+            image = _image_attrs(attrs)
+            if image is not None:
+                images.append(image)
+                out.append(IMAGE_MARK)  # where it sits; the engine turns this into an offset
         elif name == "version" and not closing:
             replies.append(self._version_reply(attrs))
         elif name == "support" and not closing:
@@ -299,6 +331,7 @@ def _support_reply(attrs: str) -> str:
     # one: advertising a tag it did nothing with would invite servers to send it for nothing.
     supported = {
         "br", "sbr", "p", "nobr", "sound", "music", "version", "support", "send", "a",
+        "image",
     }
     asked = attrs.replace("*", "").lower().split()
     if not asked:
@@ -349,6 +382,55 @@ def _tokens(attrs: str) -> list[str]:
         out.append(attrs[index:end])
         index = end
     return out
+
+
+def _image_attrs(attrs: str) -> tuple[str, str] | None:
+    """(file name, base URL) from an ``<IMAGE>``/``<IMG>`` tag, or None if it names no file.
+
+    The spec's own example is ``<IMAGE fname="mypic.gif" url="http://myserver.com/images/">``,
+    and arguments may be named or positional in either case, so both are accepted. Every other
+    argument (size, alignment, ISMAP) is visual and is not kept: an image map's coordinates are
+    something a keyboard can't produce, and the image itself is offered as a link instead.
+    """
+    named: dict[str, str] = {}
+    positional: list[str] = []
+    for token in _tokens(attrs):
+        if "=" in token and token[0] not in "\"'":
+            key, value = token.split("=", 1)
+            named[key.upper()] = _unquote(value)
+        else:
+            positional.append(_unquote(token))
+    name = named.get("FNAME") or (positional[0] if positional else "")
+    if not name:
+        return None
+    base = named.get("URL") or (positional[1] if len(positional) > 1 else "")
+    return (name, base)
+
+
+def resolve_image_url(file: str, base: str, fallback: str, trusted: str = "") -> str:
+    """The address of an inline image, or "" when this client can't say where it lives.
+
+    The spec builds the address by appending the file name to the tag's ``URL`` argument. Most
+    MUDs leave ``URL`` out and expect the client to have an images location configured -- the
+    same assumption MSP's ``U=`` makes for sounds -- so the world's own setting stands in for it.
+
+    Only ``http``/``https`` is ever returned. An ``<img src>`` or a browser launch pointed at
+    anything else is not a choice a MUD gets to make, and a file name that tries to be a path
+    (absolute, drive-qualified, ``..``) is refused rather than cleaned up. ``trusted`` is the
+    address the MUD session is on, which is the one non-public host a picture may come from --
+    a MUD running on the player's own machine can serve its own images.
+    """
+    name = file.strip().replace("\\", "/")
+    if not name or is_unsafe(name):
+        return ""
+    if name.lower().startswith(("http://", "https://")):
+        url = name  # an absolute address in FName: legal for MSP, and http(s) only, same rule
+    else:
+        root = (base or fallback).strip()
+        if not root.lower().startswith(("http://", "https://")):
+            return ""
+        url = root.rstrip("/") + "/" + name.lstrip("/")
+    return url if is_allowed_host(urlparse(url).hostname or "", trusted) else ""
 
 
 def _sound_cue(kind: str, attrs: str) -> SoundCue | None:

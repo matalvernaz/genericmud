@@ -11,6 +11,7 @@ VIPMud #file, log names) can share one check.
 
 from __future__ import annotations
 
+import ipaddress
 import os
 import re
 import unicodedata
@@ -52,6 +53,52 @@ def is_traversal(name: str) -> bool:
 def has_drive(name: str) -> bool:
     """True for a Windows drive-qualified path (``C:...``)."""
     return bool(name) and _DRIVE_RE.match(name) is not None
+
+
+def trusted_addresses(address: str) -> frozenset[ipaddress.IPv4Address | ipaddress.IPv6Address]:
+    """The non-public addresses a fetch may reach on a MUD's say-so: the MUD's own address, and
+    the rest of loopback when that one is loopback ("localhost" is 127.0.0.1 and ::1).
+
+    A host *name* trusts nothing here: the MUD decides what its own name resolves to.
+    """
+    try:
+        peer = ipaddress.ip_address(address)
+    except ValueError:
+        return frozenset()
+    if peer.is_loopback:
+        return frozenset({peer, ipaddress.ip_address("127.0.0.1"), ipaddress.ip_address("::1")})
+    return frozenset({peer})
+
+
+def is_allowed_host(host: str, trusted_address: str = "") -> bool:
+    """Whether a server-supplied address may be fetched from: public, or the MUD's own machine.
+
+    Needed for anything the renderer loads itself -- an inline image is fetched by the browser,
+    so the downloader's SSRF check never runs for it. This applies the same rule by hand, to the
+    host as written.
+
+    A *host name* is taken on trust, because judging it means resolving it here and again when
+    the page loads. What this stops is the cheap case: an address that is private, loopback or
+    link-local in its own text, which is what a MUD would use to point a player's browser at
+    their router.
+    """
+    name = host.strip().strip("[]")
+    if not name:
+        return False
+    try:
+        address = ipaddress.ip_address(name)
+    except ValueError:
+        return True  # a host name: nothing to judge without resolving it
+    if address in trusted_addresses(trusted_address):
+        return True
+    return not (
+        address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_reserved
+        or address.is_multicast
+        or address.is_unspecified
+    )
 
 
 def is_absolute(name: str) -> bool:
