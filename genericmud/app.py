@@ -102,6 +102,12 @@ _HIDDEN_INPUT_TIMEOUT_SECONDS = 60.0
 # commands are typed anyway. A MUD that asks sends its prompt within a second or two; this
 # only exists so a MUD that never asks can't hold those commands for the whole session.
 _POST_CONNECT_FALLBACK_SECONDS = 30.0
+# How much text an MXP <P> may hold before it is emitted anyway. A paragraph is meant to
+# join a room description's worth of lines, not to buffer a session: past this the client
+# says what it has and starts again, so a server that never closes <P> costs nobody their
+# memory or their speech.
+_MXP_MAX_JOIN_CHARS = 4000
+_MXP_MAX_JOIN_LINES = 50
 # Transport statuses that mean the socket went away or was replaced (transport/connection.py).
 _SOCKET_CHANGES = (
     "disconnected",
@@ -515,6 +521,7 @@ class EngineApp:
         self.mxp_enabled = mxp
         self._mxp = MxpParser()
         self._mxp_join = ""  # text held across lines by <NOBR> or an open <P>
+        self._mxp_held_lines = 0  # how many lines that hold has swallowed so far
         self._walk: SafeWalk | None = None
         self._user_aliases: dict[str, str] = {}  # interactively-made aliases: pattern -> command
         self._user_triggers: dict[str, str] = {}
@@ -1264,6 +1271,11 @@ class EngineApp:
         ``<NOBR>`` and an open ``<P>`` are the only MXP rules that span lines: both mean the
         next line belongs on this one, so the text is held rather than emitted. Everything
         else is decided within the line.
+
+        The hold is bounded. A ``<P>`` that is never closed would otherwise keep growing and
+        keep the user in silence for as long as it lasted, so once enough has been gathered
+        the paragraph is emitted in one piece and the stream carries on. Nothing is dropped:
+        the join simply restarts, and the parser's own paragraph state is untouched.
         """
         if not self.mxp_enabled:
             return text, []
@@ -1273,10 +1285,20 @@ class EngineApp:
         outcome = self._mxp.feed(text)
         for payload in outcome.replies:
             self._mxp_reply(payload)
-        if outcome.join_next:
-            self._mxp_join = outcome.text
-            return "", outcome.cues
-        return outcome.text, outcome.cues
+        if not outcome.join_next:
+            self._mxp_held_lines = 0
+            return outcome.text, outcome.cues
+        self._mxp_held_lines += 1
+        if (
+            self._mxp_held_lines >= _MXP_MAX_JOIN_LINES
+            or len(outcome.text) >= _MXP_MAX_JOIN_CHARS
+        ):
+            held, self._mxp_join, self._mxp_held_lines = outcome.text, "", 0
+            if self._diag is not None:
+                self._diag.event("mxp.join_flushed", lines="capped")
+            return held, outcome.cues
+        self._mxp_join = outcome.text
+        return "", outcome.cues
 
     def _mxp_reply(self, payload: str) -> None:
         """Answer ``<VERSION>``/``<SUPPORT>`` on a secure line, as the spec requires.
@@ -2391,3 +2413,4 @@ class EngineApp:
             self._speak_system(f"logging to {path.name}")
         else:
             self._post(protocol.echo(f"* Logging to {path.name}"))
+
