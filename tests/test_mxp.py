@@ -135,3 +135,11 @@ def test_a_locked_mode_sticks_and_a_reset_ends_it():
 
 def test_secure_line_wrapper_is_the_form_the_spec_asks_for():
     assert MxpParser.secure_line("<VERSION>") == ESC + "[1z<VERSION>\n"
+
+
+def test_user_and_password_are_only_recorded_on_a_secure_line():
+    # These tags make the client type a login, so they must never come from a line a player
+    # can write into (which is what an open line is).
+    secure = MxpParser().feed(SECURE + "<user><password>")
+    assert secure.login == ["user", "password"]
+    assert MxpParser().feed("<user><password>").login == []

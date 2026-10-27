@@ -1188,6 +1188,7 @@ class EngineApp:
         self._pending_login = []
         self._password_guard = ""  # only once a password is actually going out
         self._post_connect_sent = False  # a reconnect types them again
+        self._mxp_login_sent: set[str] = set()  # which of USER/PASSWORD this link has
         creds = self.credentials.get(world) if self.credentials is not None else None
         if creds is None or self.connect_method == "none":
             # Nothing to send. A stored login under "none" is deliberately ignored -- that is
@@ -1195,6 +1196,10 @@ class EngineApp:
             return
         username, password = creds
         self._password_guard = password  # so a server that echoes it can't say it back
+        if self.connect_method == "mxp":
+            # The MUD asks over MXP, so nothing is typed until it does. If it never asks,
+            # nothing is sent at all -- that is what "let the MUD ask" has to mean.
+            return
         if self.connect_method == "mush":
             self._pending_login = [f"CONNECT {username} {password}"]  # MUSH/MOO's one line
         elif self.connect_method == "diku":
@@ -1211,10 +1216,10 @@ class EngineApp:
         for line in self._pending_login:
             self._send_for_login(line)
         self._pending_login = []
-        if self._login is not None:
-            # A MUD that never shows a login prompt would otherwise hold the after-connect
+        if self._login is not None or self.connect_method == "mxp":
+            # A MUD that never asks for the login would otherwise hold the after-connect
             # commands for the whole session. The send is idempotent, so this is harmless
-            # when the prompt arrives quickly.
+            # when the request arrives quickly.
             self._schedule(_POST_CONNECT_FALLBACK_SECONDS, self._send_post_connect)
         else:
             # No prompt to wait for, so nothing is pending between the login and the commands.
@@ -1379,6 +1384,8 @@ class EngineApp:
         outcome = self._mxp.feed(text)
         for payload in outcome.replies:
             self._mxp_reply(payload)
+        for request in outcome.login:
+            self._mxp_login(request)
         links.extend(outcome.links)
         images.extend(outcome.images)
         joined = held + outcome.text
@@ -1428,6 +1435,25 @@ class EngineApp:
         if self._diag is not None:
             self._diag.event("mxp.join_flushed", reason="timeout")
         self._emit_parsed_line(held, links=held_links, images=held_images)
+
+    def _mxp_login(self, request: str) -> None:
+        """The MUD asked for the login over MXP: answer once, and only if told to.
+
+        Strict on purpose. Only the "mxp" connect method answers, so a player who chose a
+        different method never gets a login sent by a route they did not choose; and each of
+        USER and PASSWORD is answered at most once per connection, so a repeated request
+        cannot make the client type the password twice.
+        """
+        if self.connect_method != "mxp" or request in self._mxp_login_sent:
+            return
+        creds = self.credentials.get(self.name) if self.credentials is not None else None
+        if creds is None:
+            return
+        username, password = creds
+        self._mxp_login_sent.add(request)
+        self._send_for_login(username if request == "user" else password)
+        if request == "password":
+            self._send_post_connect()  # the login is done, so what follows can go
 
     def _mxp_reply(self, payload: str) -> None:
         """Answer ``<VERSION>``/``<SUPPORT>`` on a secure line, as the spec requires.
