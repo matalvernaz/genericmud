@@ -31,6 +31,11 @@ class Line:
     # A pack's replacement (VIPMud #Sub), shown and spoken instead once every trigger has
     # seen the line the MUD sent.
     substitute: str | None = None
+    # (displayed text, command) for each MXP link on this line, so review can follow one
+    # without a mouse. Keeping them here rather than in a session-wide list means a link
+    # stays with the line it came from: reading back through the scrollback still finds it,
+    # and no expiry bookkeeping can leave an entry pointing at the wrong message.
+    links: list[tuple[str, str]] = field(default_factory=list)
 
 
 class Buffer:

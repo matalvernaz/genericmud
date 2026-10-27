@@ -295,7 +295,11 @@ def _support_reply(attrs: str) -> str:
     Only the tags this client does something with are advertised. Claiming support for
     the rest would invite servers to send what is then thrown away.
     """
-    supported = {"br", "sbr", "p", "nobr", "sound", "music", "version", "support"}
+    # "send"/"a" are here because the client can now follow a link, not because it ignores
+    # one: advertising a tag it did nothing with would invite servers to send it for nothing.
+    supported = {
+        "br", "sbr", "p", "nobr", "sound", "music", "version", "support", "send", "a",
+    }
     asked = attrs.replace("*", "").lower().split()
     if not asked:
         return "<SUPPORTS " + " ".join(f"+{name.upper()}" for name in sorted(supported)) + ">"

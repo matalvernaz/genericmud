@@ -176,6 +176,13 @@ always in the output box.
   **Alt+Shift+Left/Right** by character; **Alt+Home/End** jump to the oldest or
   newest line.
 - **Alt+Shift+Enter** spells the current line out character by character.
+- **Alt+Enter** follows the link on the line you're reading. For MUDs that send
+  MXP links (an exit or an item that does something when clicked), this is the
+  keyboard form of clicking it: the command is sent as if you'd typed it. When a
+  line carries several links, **Alt+Left/Right** into the word you want first —
+  the cursor's word picks the link — and if the cursor isn't inside one, the
+  links are read out rather than guessed. While the output box has focus, plain
+  **Enter** does the same thing.
 - **Alt+T** repeats the last tell; **Alt+C** the last chat line.
 - **Ctrl+F** searches the output, and **F3** / **Shift+F3** find the next and
   previous match. These work while the output box has focus.
@@ -503,6 +510,7 @@ View, **Alt+H** Help.
 | Alt+Shift+Left / Right | Review character by character |
 | Alt+Home / Alt+End | Oldest / newest line |
 | Alt+Shift+Enter | Spell the current line |
+| Alt+Enter | Follow the link on this line (Enter does it too in the output) |
 | Alt+T / Alt+C | Last tell / last chat |
 | Ctrl+F | Find in the output (while the output has focus) |
 | F3 / Shift+F3 | Find next / previous |

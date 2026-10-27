@@ -131,6 +131,10 @@ _MSDP_ROOM_VARS = frozenset(
 # reload (which clears user_rules.SOURCE) can't silently delete them.
 INTERACTIVE_SOURCE = "user-interactive"
 
+# An <A HREF> link is opened, never typed at the MUD: only these schemes are followed, so a
+# MUD can't send the platform off to launch a local application through the shell.
+_LINK_URL_SCHEMES = ("http://", "https://")
+
 _REVIEW_VERBS = frozenset(
     {
         "prev_line", "next_line", "prev_word", "next_word", "prev_char", "next_char",
@@ -524,6 +528,7 @@ class EngineApp:
         self.mxp_enabled = mxp
         self._mxp = MxpParser()
         self._mxp_join = ""  # text held across lines by <NOBR> or an open <P>
+        self._mxp_join_links = []  # links gathered in that held text, emitted with it
         self._mxp_held_lines = 0  # how many lines that hold has swallowed so far
         # One deadline, not one per <P>: paragraphs do not nest and the stream is sequential,
         # so at most one hold is ever open. The token stops a stale timer from flushing a
@@ -1273,12 +1278,13 @@ class EngineApp:
             self._emit_line(self._pending)
             self._pending = ""
 
-    def _mxp_feed(self, text: str) -> tuple[str, list[SoundCue]]:
-        """Parse one line as MXP, returning plain text and any sound cues it carried.
+    def _mxp_feed(self, text: str) -> tuple[str, list[SoundCue], list[tuple[str, str]]]:
+        """Parse one line as MXP, returning plain text, its sound cues and its links.
 
         ``<NOBR>`` and an open ``<P>`` are the only MXP rules that span lines: both mean the
         next line belongs on this one, so the text is held rather than emitted. Everything
-        else is decided within the line.
+        else is decided within the line. Links are held with the text they came from, or a
+        link tagged on a swallowed line would point at a paragraph that doesn't contain it.
 
         The hold is bounded. A ``<P>`` that is never closed would otherwise keep growing and
         keep the user in silence for as long as it lasted, so once enough has been gathered
@@ -1286,16 +1292,21 @@ class EngineApp:
         the join simply restarts, and the parser's own paragraph state is untouched.
         """
         if not self.mxp_enabled:
-            return text, []
+            return text, [], []
+        # The held text comes back already stripped of its tags, so a link seen while it was
+        # being gathered has to be carried alongside it; the join is what brings them together.
+        links = self._mxp_join_links
+        self._mxp_join_links = []
         if self._mxp_join:
             text = self._mxp_join + text
             self._mxp_join = ""
         outcome = self._mxp.feed(text)
         for payload in outcome.replies:
             self._mxp_reply(payload)
+        links.extend(outcome.links)
         if not outcome.join_next:
             self._release_mxp_hold()
-            return outcome.text, outcome.cues
+            return outcome.text, outcome.cues, links
         self._mxp_held_lines += 1
         if (
             self._mxp_held_lines >= _MXP_MAX_JOIN_LINES
@@ -1305,14 +1316,16 @@ class EngineApp:
             self._release_mxp_hold()
             if self._diag is not None:
                 self._diag.event("mxp.join_flushed", reason="size")
-            return held, outcome.cues
+            return held, outcome.cues, links
         self._mxp_join = outcome.text
+        self._mxp_join_links = links  # for a deadline flush, which has no text to re-parse
         self._arm_mxp_deadline()
-        return "", outcome.cues
+        return "", outcome.cues, []
 
     def _release_mxp_hold(self) -> None:
         """Forget a hold, and any deadline waiting on it."""
         self._mxp_join = ""
+        self._mxp_join_links = []
         self._mxp_held_lines = 0
         self._mxp_timer_armed = False
         self._mxp_timer_token += 1  # a timer already scheduled must now do nothing
@@ -1333,10 +1346,11 @@ class EngineApp:
         if token != self._mxp_timer_token or not self._mxp_join or self._closed:
             return
         held = self._mxp_join
+        held_links = self._mxp_join_links
         self._release_mxp_hold()
         if self._diag is not None:
             self._diag.event("mxp.join_flushed", reason="timeout")
-        self._emit_parsed_line(held)
+        self._emit_parsed_line(held, links=held_links)
 
     def _mxp_reply(self, payload: str) -> None:
         """Answer ``<VERSION>``/``<SUPPORT>`` on a secure line, as the spec requires.
@@ -1354,10 +1368,16 @@ class EngineApp:
             pass  # a dead socket must not break the line that provoked the question
 
     def _emit_line(self, text: str) -> None:
-        text, mxp_cues = self._mxp_feed(text)  # strip MXP markup before anything reads it
-        self._emit_parsed_line(text, mxp_cues)
+        # Strip MXP markup before anything reads it; links ride along with the text.
+        text, mxp_cues, links = self._mxp_feed(text)
+        self._emit_parsed_line(text, mxp_cues, links)
 
-    def _emit_parsed_line(self, text: str, mxp_cues: list[SoundCue] | None = None) -> None:
+    def _emit_parsed_line(
+        self,
+        text: str,
+        mxp_cues: list[SoundCue] | None = None,
+        links: list[tuple[str, str]] | None = None,
+    ) -> None:
         """Show and speak a line that has already been through the MXP parser.
 
         Kept separate because the deadline flushes a held paragraph: sending that text back
@@ -1414,7 +1434,7 @@ class EngineApp:
             return  # blank line: any sound cues already fired; don't show/speak "blank"
         for pack in self._mush_packs:
             pack.dispatch_line(plain)
-        line = Line(plain, spans=spans)
+        line = Line(plain, spans=spans, links=list(links or []))
         self.engine.process_line(line)  # may set line.channel and gag flags
         self._log(line.plain_text)  # full session log, including gagged-from-speech
         if self._login is not None and not self._login.done:
@@ -2211,10 +2231,13 @@ class EngineApp:
 
     def _handle_key(self, combo: str) -> None:
         action = self.keymap.get(combo)
-        if action is None:
+        if action is None and ":" not in combo:
             self.engine.press_key(combo)  # user-defined macro
             return
-        namespace, _, argument = action.partition(":")
+        # A renderer control with a meaning of its own for a key (Enter in the output box,
+        # where there is nothing to send) passes the action itself. Keymap combos never
+        # contain a colon and actions always do, so the two can't be confused.
+        namespace, _, argument = (action or combo).partition(":")
         if namespace == "tab":
             # Switching tabs is the window's job, and the window does it before the key gets
             # here. What reaches the engine is a key the world's soundpack or the player's own
@@ -2228,6 +2251,8 @@ class EngineApp:
             n = _parse_count(count)
             if n is not None:
                 self._speak_review(self.review.recall(n, channel=channel or None))
+        elif namespace == "review" and argument == "link":
+            self._activate_link()
         elif namespace == "review" and argument in _REVIEW_VERBS:
             if not self.review.active:
                 self.review.enter()
@@ -2267,6 +2292,50 @@ class EngineApp:
             f"world logs in {worlds} ({_files(log_count(worlds))}); "
             f"diagnostics in {diagnostics} ({_files(log_count(diagnostics))})"
         )
+
+    def _activate_link(self) -> None:
+        """Follow the MXP link under the review cursor.
+
+        The mouse version of this is "click the words"; the keyboard version is the same
+        gesture one level down -- the review cursor's word picks the link, and on a line
+        with a single link anywhere on it counts. Nothing is remembered between presses:
+        the link lives on its line, so reading back through the scrollback still follows
+        the right one.
+        """
+        if not self.review.active:
+            self.review.enter()  # nothing reviewed yet, so act on the newest line
+        links = self.review.links()
+        if not links:
+            self._speak_review("no link on this line")
+            return
+        chosen = self.review.link()
+        if chosen is None:
+            # Several links and the word isn't in one: name them rather than guess, so one
+            # more Alt+Right lands on a word that picks the intended one.
+            named = "; ".join(
+                f"{number} {text}" for number, (text, _command) in enumerate(links, 1)
+            )
+            self._speak_review(f"{len(links)} links: {named}")
+            return
+        text, command = chosen
+        command = command.strip()
+        if self._diag is not None:
+            self._diag.event("mxp.link", text=text, command=command)
+        if command.lower().startswith(_LINK_URL_SCHEMES):
+            self._open_link(command)
+            return
+        # A link is the MUD's text, not the player's, so it may not run a client command:
+        # a MUD could otherwise tag any word with <SEND HREF="/quit"> and end the session.
+        self._dispatch_command(command, allow_client=False)
+        self._speak_system(f"{text}: {command}")
+
+    def _open_link(self, url: str) -> None:
+        """Open an <A HREF> link in the browser, announcing it because focus moves."""
+        window = self.pack_window
+        if window is None or not window.open_url(url):
+            self._speak_system("no browser to open that link")
+            return
+        self._speak_system(f"opening {url}")
 
     def _diag_where(self) -> None:
         """Speak the diagnostic log path + a one-line summary (often names the failure)."""

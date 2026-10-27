@@ -84,6 +84,26 @@ def test_find_caret_mapping_stays_in_native_units():
     assert "self.output.XYToPosition(0, line)" in source
 
 
+def test_enter_in_the_output_follows_the_link_under_the_review_cursor():
+    # Plain Enter can't be a keymap combo: _key_combo keeps it as typing, or the command box
+    # would stop sending. So the output control, where there is nothing to send, dispatches
+    # the action itself.
+    source = (
+        Path(__file__).resolve().parents[1] / "genericmud/ui/wx_app.py"
+    ).read_text(encoding="utf-8")
+    handler = source.split("def _on_output_key", 1)[1].split("def _open_find", 1)[0]
+    assert "wx.WXK_RETURN" in handler
+    assert '"key": "review:link"' in handler
+
+
+def test_the_panic_and_review_keys_still_reach_the_output_control():
+    source = (
+        Path(__file__).resolve().parents[1] / "genericmud/ui/wx_app.py"
+    ).read_text(encoding="utf-8")
+    handler = source.split("def _on_output_key", 1)[1].split("def _open_find", 1)[0]
+    assert "self._dispatch_bound_combo(_key_combo(event))" in handler
+
+
 def test_output_caret_survives_appends_while_find_dialog_is_open():
     # While the modal Find dialog holds focus, arriving output must not yank the
     # underlying insertion point: _keep_caret_on_focus promises the search runs from
