@@ -773,13 +773,16 @@ def test_editing_a_world_changes_its_open_tab_at_once(frame, monkeypatch):
         edited = World(
             "W", "new.example", 4000, encoding="cp1251", sounds="C:/sounds",
             command_separator="|", log_commands=False, echo_input=True, download_sounds=False,
-            connect_method="prompts", post_connect_commands="look\nscore",
+            connect_method="prompts", post_connect_commands="look\nscore", mxp=False,
         )
         panel.apply_world_settings(edited)
         loop.run_until_complete(asyncio.sleep(0.01))
         assert panel.app.command_separator == "|"
         assert panel.app.log_commands is False
         assert panel.app.echo_input is True
+        # MXP is parsed engine-side, so turning it off reaches the running tab rather than
+        # waiting for a reconnect.
+        assert panel.app.mxp_enabled is False
         assert panel.app.download_media is False
         # A reconnect from this tab reads the login settings again, so an edit has to land in
         # the running session rather than only in the world file.

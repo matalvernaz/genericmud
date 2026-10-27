@@ -688,6 +688,9 @@ class EngineApp:
         self.connect_method = world.connect_method
         self.post_connect_commands = world.post_connect_commands
         self.download_media = world.download_sounds
+        # MXP is parsed here, not by the window, so switching it off for a world that is already
+        # open can take effect at once: no reconnect needed to stop seeing its markup.
+        self.mxp_enabled = world.mxp
         self.images_url = world.images_url
 
     def on_connect(self, world: str, *, socket_open: bool = True) -> ActivationResult | None:
