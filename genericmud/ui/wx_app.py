@@ -1043,7 +1043,9 @@ class SessionPanel(wx.Panel):
 
     def _apply_active(self, active: bool) -> None:  # loop thread
         if self._voice is not None:
-            self._voice.set_muted(not active)  # only the foreground MUD self-voices
+            # Who may speak is the window's call (see _update_active): the world in front, or
+            # every open world when the player asks to hear them all.
+            self._voice.set_muted(not active)
             if not active:
                 # Muting gates only FUTURE lines; without this, speech already queued in the
                 # async backend keeps talking over the session the user just switched to.
@@ -3727,6 +3729,12 @@ class GenericMudFrame(wx.Frame):
             "Stay quiet while another window has focus; triggers and sounds keep running",
         )
         self._bg_silence_item.Check(self._prefs.background_silence)
+        # The tab-level twin of background silence: nine worlds open, one of them in front.
+        self._other_worlds_item = view_menu.AppendCheckItem(
+            wx.ID_ANY, "Silence &other worlds",
+            "Only the world you're looking at speaks; off lets every open world speak",
+        )
+        self._other_worlds_item.Check(self._prefs.silence_other_worlds)
         self._numpad_item = view_menu.AppendCheckItem(
             wx.ID_ANY, "&Numpad compass walking",
             "Numpad walks: 8/2/4/6 and diagonals, 5 or 0 look, period scans, minus up, plus down",
@@ -3775,6 +3783,7 @@ class GenericMudFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, lambda _e: self.Close(), quit_item)
         self.Bind(wx.EVT_MENU, self._on_toggle_self_voice, self._self_voice_item)
         self.Bind(wx.EVT_MENU, self._on_toggle_bg_silence, self._bg_silence_item)
+        self.Bind(wx.EVT_MENU, self._on_toggle_other_worlds, self._other_worlds_item)
         self.Bind(wx.EVT_MENU, self._on_toggle_numpad, self._numpad_item)
 
         self.book = wx.Simplebook(self)  # no tab strip -> nothing in the keyboard Tab order
@@ -3862,6 +3871,15 @@ class GenericMudFrame(wx.Frame):
         self.announce(
             "Background silence on. genericMud stays quiet while you're in another window."
             if self._prefs.background_silence else "Background silence off."
+        )
+
+    def _on_toggle_other_worlds(self, _event: wx.CommandEvent) -> None:
+        self._save_pref("silence_other_worlds", self._other_worlds_item.IsChecked())
+        self._update_active()
+        self.announce(
+            "Silencing other worlds. Only the world you're looking at speaks."
+            if self._prefs.silence_other_worlds
+            else "Every open world speaks now."
         )
 
     def _on_toggle_numpad(self, _event: wx.CommandEvent) -> None:
@@ -4453,8 +4471,13 @@ class GenericMudFrame(wx.Frame):
         # Background silence treats the whole app losing focus like a background tab:
         # self-voice mutes but triggers and sounds keep running.
         audible = self._app_focused or not self._prefs.background_silence
+        # Silence other worlds is the per-tab half of the same idea: with nine worlds open,
+        # only the one in front speaks unless the player asks for all of them. Each of them
+        # still obeys self-voice and background silence, so the two settings compose.
+        every_world = not self._prefs.silence_other_worlds
         for i in range(self.book.GetPageCount()):
-            self.book.GetPage(i).set_active(i == selected and self._self_voice and audible)
+            speaks = (i == selected or every_world) and self._self_voice and audible
+            self.book.GetPage(i).set_active(speaks)
 
 
 def _world_from_args(args) -> World | None:

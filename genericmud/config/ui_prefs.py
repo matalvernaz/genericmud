@@ -6,6 +6,9 @@ once and expects to survive a restart:
 
 * ``background_silence`` -- stay quiet while another window has focus
   (triggers and sounds keep running; speech resumes on return).
+* ``silence_other_worlds`` -- only the world you're looking at speaks. Off lets
+  every open world speak, so nine worlds sound like nine worlds rather than one
+  and eight silences.
 * ``numpad_compass`` -- numpad walks (8/2/4/6 + diagonals, 5/0 look, . scan,
   minus up, plus down). Off for NVDA desktop-layout users who keep the numpad
   for object review.
@@ -27,6 +30,7 @@ from genericmud.config.worlds import config_dir
 @dataclass
 class UiPrefs:
     background_silence: bool = False
+    silence_other_worlds: bool = True
     numpad_compass: bool = True
     autoretype: bool = False
     follow_mode: bool = False

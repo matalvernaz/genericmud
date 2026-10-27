@@ -119,6 +119,10 @@ command to another tab by its world name: `/to alter aeon look`.
 - **View menu → Background silence.** genericMud stays quiet while you're in
   another window (sounds and triggers keep running), and picks up again when you
   come back.
+- **View menu → Silence other worlds.** On by default: only the world you're
+  looking at speaks. Turn it off and every open world speaks, so with nine worlds
+  open you hear all nine instead of one — each of them still respects background
+  silence and Ctrl+M.
 - **Ctrl+M** turns self-voice off entirely so you can read the output box with
   your screen reader's own commands instead.
 - **Esc** or **F11** shuts the voice up right now. **Shift+F11** stops every
