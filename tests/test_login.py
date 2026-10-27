@@ -439,12 +439,25 @@ def test_mush_method_sends_one_connect_line_then_the_commands(tmp_path):
     # MUSHclient's MUSH/MOO habit: a single CONNECT command carrying both.
     app, sent = _app_with(_store_with_login(tmp_path), method="mush", commands="look\nscore")
     app.begin_login("gw")
+    app.after_connect()
     assert sent == ["CONNECT hero secret", "look", "score"]
+
+
+def test_a_blind_login_waits_for_the_socket_to_open(tmp_path):
+    # on_connect runs before the transport connects, so anything typed at begin_login time
+    # went into a socket that did not exist yet: _send raised ConnectionError and the line
+    # vanished without a word. Every up-front login has to wait for the socket.
+    app, sent = _app_with(_store_with_login(tmp_path), method="mush", commands="look")
+    app.begin_login("gw")
+    assert sent == []  # nothing may leave before the connection is up
+    app.after_connect()
+    assert sent == ["CONNECT hero secret", "look"]
 
 
 def test_diku_method_sends_name_then_password_then_the_commands(tmp_path):
     app, sent = _app_with(_store_with_login(tmp_path), method="diku", commands="who")
     app.begin_login("gw")
+    app.after_connect()
     assert sent == ["hero", "secret", "who"]
 
 
@@ -452,6 +465,7 @@ def test_no_auto_connect_sends_the_commands_but_never_the_login(tmp_path):
     # A stored login under "none" is deliberately ignored: that is what the mode means.
     app, sent = _app_with(_store_with_login(tmp_path), method="none", commands="look")
     app.begin_login("gw")
+    app.after_connect()
     assert sent == ["look"]
 
 
@@ -489,6 +503,7 @@ def test_a_reconnect_types_the_after_connect_commands_again(tmp_path):
 def test_no_stored_login_still_sends_the_after_connect_commands(tmp_path):
     app, sent = _app_with(PlaintextCredentialStore(tmp_path / "c.json"), commands="look")
     app.begin_login("gw")
+    app.after_connect()  # no login to wait for, so the commands go as soon as it is up
     assert sent == ["look"]
 
 
@@ -566,3 +581,34 @@ def test_a_working_credential_store_is_preferred(tmp_path, memory_keyring):
     store, reason = open_credential_store(tmp_path / "credentials.json")
     assert isinstance(store, KeyringCredentialStore)
     assert reason is None
+
+
+def test_a_blind_login_is_never_typed_into_a_closed_socket(tmp_path):
+    # The real transport raises ConnectionError from send_line until connect() has run, and
+    # the window swallows that, so a login typed too early vanishes without a word. This
+    # fake refuses in exactly the same way: anything sent before after_connect() is a bug.
+    sent: list[str] = []
+    socket_open = {"value": False}
+
+    def send(text: str) -> None:
+        if not socket_open["value"]:
+            raise ConnectionError("not connected")
+        sent.append(text)
+
+    voice = VoiceRouter(RecordingBackend(), clock=lambda: 0.0)
+    app = EngineApp(
+        voice,
+        send=send,
+        post=[].append,
+        credentials=_store_with_login(tmp_path),
+        keymap={},
+        name="gw",
+        connect_method="mush",
+        post_connect_commands="look",
+        schedule=lambda _delay, _callback: None,
+    )
+    app.begin_login("gw")  # on_connect time: the socket is not open yet
+    assert sent == []
+    socket_open["value"] = True  # the transport has connected
+    app.after_connect()
+    assert sent == ["CONNECT hero secret", "look"]

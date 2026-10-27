@@ -485,6 +485,9 @@ class EngineApp:
         self.connect_method = normalize_connect_method(connect_method)
         self.post_connect_commands = normalize_post_connect(post_connect_commands)
         self._post_connect_sent = False  # per connection: a reconnect types them again
+        # Login lines to type the moment the socket is up (MUSH/MOO and Diku). Queued rather
+        # than sent because on_connect runs before the transport has connected.
+        self._pending_login: list[str] = []
         self._walk: SafeWalk | None = None
         self._user_aliases: dict[str, str] = {}  # interactively-made aliases: pattern -> command
         self._user_triggers: dict[str, str] = {}
@@ -1058,38 +1061,51 @@ class EngineApp:
             pass  # a state write must never break session close
 
     def begin_login(self, world: str) -> None:
-        """Start this connection's login, and arrange the after-connect commands.
+        """Decide how this connection logs in. Sends nothing: the socket may not exist yet.
+
+        ``on_connect`` runs *before* the transport connects, because the packs have to be
+        armed before the first bytes arrive. A blind login typed here would therefore go
+        nowhere -- _send raises ConnectionError and the line is dropped in silence -- so the
+        up-front lines are queued, and :meth:`after_connect` types them once the socket is up.
 
         Four methods (``config.worlds.CONNECT_METHODS``). "prompts" answers the MUD's own
-        prompts, which is what this client has always done and the only mode that suits a
-        MUD which asks; "mush" and "diku" type the login blind, for MUDs that never ask;
-        "none" sends no credentials at all. Whatever the method, the world's after-connect
-        commands go out once the login is finished -- or at once, when there is no login to
-        wait for.
+        prompts; "mush" and "diku" type the login blind, for MUDs that never ask; "none"
+        sends no credentials at all.
         """
         self._login_phase_started = self._clock()  # a fresh connection means fresh prompts
         self._login = None
+        self._pending_login = []
         self._post_connect_sent = False  # a reconnect types them again
         creds = self.credentials.get(world) if self.credentials is not None else None
         if creds is None or self.connect_method == "none":
-            # Nothing to wait for. A stored login under "none" is deliberately ignored --
-            # that is what "no auto-connect" means.
-            self._send_post_connect()
+            # Nothing to send. A stored login under "none" is deliberately ignored -- that is
+            # what "no auto-connect" means.
             return
         username, password = creds
         if self.connect_method == "mush":
-            self._send_for_login(f"CONNECT {username} {password}")  # MUSH/MOO's one line
+            self._pending_login = [f"CONNECT {username} {password}"]  # MUSH/MOO's one line
+        elif self.connect_method == "diku":
+            self._pending_login = [username, password]  # Diku's name, then password
+        else:
+            self._login = AutoLogin(username, password, self._send_for_login)
+
+    def after_connect(self) -> None:
+        """The socket is up: type this world's up-front login, then its commands.
+
+        Both reconnect paths reach this through :meth:`after_reconnect`; a first connection
+        reaches it from the window, which is the only place that knows the transport opened.
+        """
+        for line in self._pending_login:
+            self._send_for_login(line)
+        self._pending_login = []
+        if self._login is not None:
+            # A MUD that never shows a login prompt would otherwise hold the after-connect
+            # commands for the whole session. The send is idempotent, so this is harmless
+            # when the prompt arrives quickly.
+            self._schedule(_POST_CONNECT_FALLBACK_SECONDS, self._send_post_connect)
+        else:
+            # No prompt to wait for, so nothing is pending between the login and the commands.
             self._send_post_connect()
-            return
-        if self.connect_method == "diku":
-            self._send_for_login(username)  # Diku's name, then password, on their own lines
-            self._send_for_login(password)
-            self._send_post_connect()
-            return
-        self._login = AutoLogin(username, password, self._send_for_login)
-        # A MUD that never shows a prompt would otherwise hold the after-connect commands
-        # for the whole session. The send is idempotent, so this is harmless when it is quick.
-        self._schedule(_POST_CONNECT_FALLBACK_SECONDS, self._send_post_connect)
 
     def _send_post_connect(self) -> None:
         """Type the world's after-connect commands, once per connection."""
@@ -2196,6 +2212,9 @@ class EngineApp:
         # A fresh socket means fresh login prompts; the old AutoLogin is marked done, so
         # re-arm it or a reconnect strands the user at the login screen.
         self.begin_login(self.name)
+        # The socket is live here (both reconnect paths call this only after connect()), so
+        # this is where a blind login and the after-connect commands actually go out.
+        self.after_connect()
 
     def on_connection_status(self, message: str) -> None:
         """Surface a transport status line (reconnecting, reconnected) to the user.

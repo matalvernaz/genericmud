@@ -414,6 +414,9 @@ class SessionPanel(wx.Panel):
             await self._connection.connect(self.world.host, self.world.port, tls=self.world.tls)
             if self._diag is not None:
                 self._diag.event("connect.ok", host=self.world.host)
+            # First, before anything else can queue up: the socket is finally open, so a
+            # blind login (MUSH/MOO, Diku) and the after-connect commands can be typed.
+            self.app.after_connect()
             self._post(protocol.echo(f"* Connected to {self.world.name}"))
             # Speak it too: connect failure and reconnect both speak, so success staying
             # echo-only was inconsistent and left a quiet MUD's first moment ambiguous.
