@@ -137,6 +137,21 @@ def _files(count: int) -> str:
     return f"{count} file" if count == 1 else f"{count} files"
 
 
+def _redact_secret(text: str, secret: str) -> str:
+    """``text`` with ``secret`` taken out of it, as a whole whitespace-separated token.
+
+    A server that echoes what it reads will send a blind login straight back -- MUSH/MOO's
+    "CONNECT hero hunter2", or a "Password: hunter2" for Diku -- and that line would be
+    spoken and shown, and written to the session log. Matching whole tokens rather than any
+    substring keeps a one-character password from redacting half the output, while still
+    catching both shapes.
+    """
+    if not secret:
+        return text
+    pattern = re.compile(r"(?<!\S)" + re.escape(secret) + r"(?!\S)")
+    return pattern.sub("***", text)
+
+
 def _parse_count(text: str) -> int | None:
     """A recall count from a keymap action, or None if it isn't a number.
 
@@ -488,6 +503,8 @@ class EngineApp:
         # Login lines to type the moment the socket is up (MUSH/MOO and Diku). Queued rather
         # than sent because on_connect runs before the transport has connected.
         self._pending_login: list[str] = []
+        # The password to strip out of anything incoming, while it is in play (see _handle_line).
+        self._password_guard = ""
         self._walk: SafeWalk | None = None
         self._user_aliases: dict[str, str] = {}  # interactively-made aliases: pattern -> command
         self._user_triggers: dict[str, str] = {}
@@ -1075,6 +1092,7 @@ class EngineApp:
         self._login_phase_started = self._clock()  # a fresh connection means fresh prompts
         self._login = None
         self._pending_login = []
+        self._password_guard = ""  # only once a password is actually going out
         self._post_connect_sent = False  # a reconnect types them again
         creds = self.credentials.get(world) if self.credentials is not None else None
         if creds is None or self.connect_method == "none":
@@ -1082,6 +1100,7 @@ class EngineApp:
             # what "no auto-connect" means.
             return
         username, password = creds
+        self._password_guard = password  # so a server that echoes it can't say it back
         if self.connect_method == "mush":
             self._pending_login = [f"CONNECT {username} {password}"]  # MUSH/MOO's one line
         elif self.connect_method == "diku":
@@ -1265,6 +1284,13 @@ class EngineApp:
                 )
         spans = parse_ansi(text)
         plain = "".join(span.text for span in spans)
+        if self._password_guard:
+            # A blind login is typed before the server has switched echo off, so a server
+            # that echoes what it reads sends the password back. It must not reach the
+            # output box, the screen reader, the session log or a soundpack.
+            redacted = _redact_secret(plain, self._password_guard)
+            if redacted != plain:
+                plain, spans = redacted, []  # the colours belonged to the text that's gone
         if not plain.strip():
             return  # blank line: any sound cues already fired; don't show/speak "blank"
         for pack in self._mush_packs:
