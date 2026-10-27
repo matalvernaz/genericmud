@@ -110,6 +110,10 @@ you're on speaks; the others stay quiet but keep running — triggers still fire
 and sounds still play, so you miss nothing. To reach across, `/to` sends a
 command to another tab by its world name: `/to alter aeon look`.
 
+The window title can name the world you're in — **View → World name in the window
+title** — so Alt+Tab and the taskbar read as `genericMud - [Shards of Valdrenne]`
+rather than just `genericMud`. It's off until you ask for it.
+
 ## Making it talk the way you want
 
 - **Ctrl+Shift+F — follow mode.** When you move to a new room, speech cuts

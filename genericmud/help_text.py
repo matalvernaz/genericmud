@@ -32,7 +32,8 @@ output box drops you back into the command box.
 More than one MUD:
 Ctrl+N opens another new world and Ctrl+O opens another saved world, each in
 its own tab. Ctrl+Tab switches tabs. Only the tab you're on speaks — the
-others keep playing quietly, triggers and all.
+others keep playing quietly, triggers and all. View menu, World name in the
+window title, puts the world you're in into the window's title.
 
 Making it talk your way:
 Ctrl+Shift+F is follow mode: when you move rooms, speech skips straight to the

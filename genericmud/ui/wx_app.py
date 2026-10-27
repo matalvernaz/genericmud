@@ -3651,9 +3651,17 @@ class UpdateProgressDialog(wx.Dialog):
         self._status("Cancelling. This takes effect at the next download step.")
 
 
+_APP_NAME = "genericMud"
+# The window title when the world is shown, kept close to MUSHclient's own
+# ("MUSHclient - [Penworthy]") so the name sits where someone coming from there looks for it.
+# One line to change if the app name should come last instead, which puts the changing part of
+# the title first when a screen reader reads it out.
+_TITLE_FORMAT = "{app} - [{world}]"
+
+
 class GenericMudFrame(wx.Frame):
     def __init__(self, loop: asyncio.AbstractEventLoop, keymap: dict):
-        super().__init__(None, title="genericMud", size=(900, 600))
+        super().__init__(None, title=_APP_NAME, size=(900, 600))
         self._loop = loop
         self._keymap = keymap
         self._packs = PackStore(config_dir() / "soundpacks")
@@ -3732,6 +3740,13 @@ class GenericMudFrame(wx.Frame):
             "Numpad walks: 8/2/4/6 and diagonals, 5 or 0 look, period scans, minus up, plus down",
         )
         self._numpad_item.Check(self._prefs.numpad_compass)
+        # Off by default: most people don't want their window renamed under them, and
+        # MUSHclient's own title is opt-in in the same way.
+        self._title_world_item = view_menu.AppendCheckItem(
+            wx.ID_ANY, "World &name in the window title",
+            "Call the window after the world you're in, as MUSHclient does",
+        )
+        self._title_world_item.Check(self._prefs.title_shows_world)
         menubar.Append(view_menu, "&View")
 
         help_menu = wx.Menu()
@@ -3776,6 +3791,7 @@ class GenericMudFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, self._on_toggle_self_voice, self._self_voice_item)
         self.Bind(wx.EVT_MENU, self._on_toggle_bg_silence, self._bg_silence_item)
         self.Bind(wx.EVT_MENU, self._on_toggle_numpad, self._numpad_item)
+        self.Bind(wx.EVT_MENU, self._on_toggle_title_world, self._title_world_item)
 
         self.book = wx.Simplebook(self)  # no tab strip -> nothing in the keyboard Tab order
         self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)  # Ctrl+Tab cycles sessions
@@ -3855,6 +3871,10 @@ class GenericMudFrame(wx.Frame):
         selected = self.book.GetSelection()
         for index in range(self.book.GetPageCount()):
             self.book.GetPage(index).set_focused(in_front and index == selected)
+        # The window's own label follows the world in front, so it is refreshed here with the
+        # pack events: this runs on every switch, open and close, which is exactly when it can
+        # change.
+        self._update_title()
 
     def _on_toggle_bg_silence(self, _event: wx.CommandEvent) -> None:
         self._save_pref("background_silence", self._bg_silence_item.IsChecked())
@@ -3908,11 +3928,13 @@ class GenericMudFrame(wx.Frame):
 
     def _apply_to_open_tabs(self, name: str, world: World) -> None:
         """An edited world's command stacking and logging take effect in its open tabs at
-        once; the rest (host, encoding, sounds) when it next connects."""
+        once; the rest (host, encoding, sounds) when it next connects. A rename lands in the
+        window title straight away too."""
         for index in range(self.book.GetPageCount()):
             panel = self.book.GetPage(index)
             if isinstance(panel, SessionPanel) and panel.world.name.casefold() == name.casefold():
                 panel.apply_world_settings(world)
+        self._update_title()
 
     def _save_world(self, world: World, *, replacing: str | None = None) -> bool:
         existing = load_worlds()
@@ -4147,6 +4169,29 @@ class GenericMudFrame(wx.Frame):
         if index == wx.NOT_FOUND or not self.book.GetPageCount():
             return None
         return self.book.GetPage(index).world.name
+
+    def _window_title(self) -> str:
+        """What the window should be called: the world in front, or just the app.
+
+        Asked of the window rather than remembered, so it can't drift from which tab is
+        actually selected.
+        """
+        name = self._active_world_name()
+        if name and self._prefs.title_shows_world:
+            return _TITLE_FORMAT.format(app=_APP_NAME, world=name)
+        return _APP_NAME
+
+    def _update_title(self) -> None:
+        self.SetTitle(self._window_title())
+
+    def _on_toggle_title_world(self, _event: wx.CommandEvent) -> None:
+        self._save_pref("title_shows_world", self._title_world_item.IsChecked())
+        self._update_title()
+        self.announce(
+            "The window title names the world you're in."
+            if self._prefs.title_shows_world
+            else "The window title is just genericMud."
+        )
 
     def announce(self, text: str) -> None:
         """Speak a UI status update through the screen reader (the app's self-voice)."""

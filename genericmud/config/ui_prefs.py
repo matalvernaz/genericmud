@@ -12,6 +12,9 @@ once and expects to survive a restart:
 * ``autoretype`` -- Enter on an empty input resends the last command.
 * ``follow_mode`` -- speech interrupts on room movement, not on every line.
 * ``interrupt_mode`` -- every incoming line interrupts instead of queueing.
+* ``title_shows_world`` -- call the window after the world in front, as MUSHclient
+  does ("genericMud - [Penworthy]") instead of just "genericMud". Off by default,
+  because renaming someone's window is not a change to spring on them.
 """
 
 from __future__ import annotations
@@ -31,6 +34,7 @@ class UiPrefs:
     autoretype: bool = False
     follow_mode: bool = False
     interrupt_mode: bool = False
+    title_shows_world: bool = False
 
 
 def prefs_path() -> Path:
