@@ -773,6 +773,7 @@ def test_editing_a_world_changes_its_open_tab_at_once(frame, monkeypatch):
         edited = World(
             "W", "new.example", 4000, encoding="cp1251", sounds="C:/sounds",
             command_separator="|", log_commands=False, echo_input=True, download_sounds=False,
+            connect_method="prompts", post_connect_commands="look\nscore",
         )
         panel.apply_world_settings(edited)
         loop.run_until_complete(asyncio.sleep(0.01))
@@ -780,6 +781,10 @@ def test_editing_a_world_changes_its_open_tab_at_once(frame, monkeypatch):
         assert panel.app.log_commands is False
         assert panel.app.echo_input is True
         assert panel.app.download_media is False
+        # A reconnect from this tab reads the login settings again, so an edit has to land in
+        # the running session rather than only in the world file.
+        assert panel.app.connect_method == "prompts"
+        assert panel.app.post_connect_commands == "look\nscore"
         # How the tab connects stays as it opened until the world is opened again, so a
         # reconnect (Ctrl+D) can't mix a new host with the old encoding and sounds.
         assert (panel.world.host, panel.world.port) == ("w.example", 23)
