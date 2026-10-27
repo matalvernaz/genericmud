@@ -19,9 +19,33 @@ def test_open_formatting_tags_are_stripped_from_the_text():
     assert out.text == "bold and italic and under"
 
 
-def test_an_unknown_tag_is_stripped_rather_than_shown():
-    out = _feed("<someFutureTag attr=1>text</someFutureTag>")
-    assert out.text == "text"
+def test_an_unknown_tag_is_only_markup_where_markup_was_promised():
+    # On a secure line the MUD has said the line is tagged, so unknown tags go.
+    assert _feed(SECURE + "<someFutureTag attr=1>text</someFutureTag>").text == "text"
+    # On an open line anything unrecognised is more likely a player's own words, so it
+    # stays: deleting text out of chat is worse than showing a stray tag.
+    assert _feed("<someFutureTag attr=1>text</someFutureTag>").text == (
+        "<someFutureTag attr=1>text</someFutureTag>"
+    )
+
+
+def test_ordinary_text_with_angle_brackets_survives():
+    # The reported worry: a MUD that had nothing to do with MXP must read exactly as before.
+    for line in (
+        "HP 45 < 50, you feel weak",
+        "You say, 'I <3 this MUD'",
+        "Type <build> to construct the wall",
+        "a < b > c",
+        "5 > 3",
+        "<not closed",
+    ):
+        assert _feed(line).text == line
+
+
+def test_a_player_quoting_an_open_tag_keeps_the_visible_words():
+    # Even a tag this client knows is only formatting, so the words it wrapped are what
+    # matters; nothing is deleted from the text either way.
+    assert _feed("You say, 'use <b>bold</b> here'").text == "You say, 'use bold here'"
 
 
 def test_br_breaks_the_line():
