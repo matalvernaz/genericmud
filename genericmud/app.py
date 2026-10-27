@@ -166,6 +166,28 @@ def _redact_secret(text: str, secret: str) -> str:
     return pattern.sub("***", text)
 
 
+def _link_positions(text: str, links: list[tuple[str, str]]) -> list[tuple[int, int, str]]:
+    """Where each link's words sit inside the finished line, as (start, end, command).
+
+    The parser reports a link by its words, not by position, because everything between the
+    parser and here (ANSI, MSP, redaction) rewrites the text. Searching forward from the
+    previous link keeps a word that appears twice ("a fountain by a fountain") pointing at the
+    right occurrence, in the order the MUD sent them. A link whose words are gone -- a pack
+    substituted the line -- is dropped: a wrong position would make the wrong words clickable.
+    """
+    spans: list[tuple[int, int, str]] = []
+    cursor = 0
+    for words, command in links:
+        if not words:
+            continue
+        start = text.find(words, cursor)
+        if start < 0:
+            continue
+        cursor = start + len(words)
+        spans.append((start, cursor, command))
+    return spans
+
+
 def _parse_count(text: str) -> int | None:
     """A recall count from a keymap action, or None if it isn't a number.
 
@@ -1466,6 +1488,13 @@ class EngineApp:
                     line.plain_text,
                     gagged=line.gagged,
                     display_when_gagged=line.display_when_gagged,
+                    # Positions are only meaningful for the words the MUD sent; a substituted
+                    # line shows a pack's own text, so it gets none.
+                    links=(
+                        _link_positions(line.plain_text, line.links)
+                        if line.substitute is None
+                        else []
+                    ),
                 )
             )
 
@@ -1823,6 +1852,12 @@ class EngineApp:
                 self._dispatch_command(command)
         elif kind == protocol.KEY:
             self._handle_key(message.get("key", ""))
+        elif kind == protocol.LINK:
+            # The web renderer drew a real anchor and the player activated it. Only the
+            # command comes back: what it may do is decided here, not in the renderer.
+            self._follow_link(
+                str(message.get("text", "")), str(message.get("command", ""))
+            )
         elif kind == protocol.CLIENT_ERROR:
             self._handle_client_error(message)
         elif kind == protocol.FIND:
@@ -2317,8 +2352,13 @@ class EngineApp:
             )
             self._speak_review(f"{len(links)} links: {named}")
             return
-        text, command = chosen
+        self._follow_link(*chosen)
+
+    def _follow_link(self, text: str, command: str) -> None:
+        """Do what a link asks, whoever asked it: the review cursor or a click in the browser."""
         command = command.strip()
+        if not command:
+            return
         if self._diag is not None:
             self._diag.event("mxp.link", text=text, command=command)
         if command.lower().startswith(_LINK_URL_SCHEMES):
@@ -2327,14 +2367,19 @@ class EngineApp:
         # A link is the MUD's text, not the player's, so it may not run a client command:
         # a MUD could otherwise tag any word with <SEND HREF="/quit"> and end the session.
         self._dispatch_command(command, allow_client=False)
-        self._speak_system(f"{text}: {command}")
+        self._speak_system(f"{text}: {command}" if text else f"link: {command}")
 
     def _open_link(self, url: str) -> None:
         """Open an <A HREF> link in the browser, announcing it because focus moves."""
         window = self.pack_window
-        if window is None or not window.open_url(url):
-            self._speak_system("no browser to open that link")
-            return
+        if window is not None:
+            if not window.open_url(url):
+                self._speak_system("no browser to open that link")
+                return
+        else:
+            # Nothing native to ask: the web UI runs inside a browser, so the renderer opens
+            # the tab. Only the schemes checked by the caller ever reach here.
+            self._post(protocol.open_url(url))
         self._speak_system(f"opening {url}")
 
     def _diag_where(self) -> None:

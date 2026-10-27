@@ -7,7 +7,8 @@ presses one key, and on a line carrying several links the cursor's word picks wh
 
 from __future__ import annotations
 
-from genericmud.app import EngineApp
+from genericmud.app import EngineApp, _link_positions
+from genericmud.bridge import protocol
 from genericmud.config.keymap import load_keymap
 from genericmud.model.buffer import Buffer, Line
 from genericmud.protocol.mxp import MxpParser
@@ -33,18 +34,24 @@ class FakeWindow:
         return self._opens
 
 
-def _app(*, window=None):
+def _build(*, window=None):
     backend = RecordingBackend()
     voice = VoiceRouter(backend, clock=lambda: 0.0)
     sent: list[str] = []
+    posted: list[dict] = []
     app = EngineApp(
         voice,
         send=sent.append,
-        post=[].append,
+        post=posted.append,
         keymap=load_keymap("vipmud"),
     )
     # A front end with a window sets this; without it there is nothing to open a URL with.
     app.pack_window = window
+    return app, sent, backend, posted
+
+
+def _app(*, window=None):
+    app, sent, backend, _posted = _build(window=window)
     return app, sent, backend
 
 
@@ -199,11 +206,26 @@ def test_only_web_schemes_are_opened():
     assert sent == ["file:///C:/Windows/System32/calc.exe"]
 
 
-def test_a_link_with_no_browser_to_open_it_says_so():
-    app, sent, backend = _app()  # no window: headless, as in the tests and the web UI
+def test_a_url_link_opens_through_the_renderer_when_there_is_no_window():
+    # The web UI runs inside a browser, so it has no native window to ask: the page opens the
+    # tab instead, and the command is still never typed at the MUD.
+    app, sent, backend, posted = _build()
     _say(app, SECURE + '<a href="https://example.com">here</a>')
     _press(app)
     assert sent == []
+    assert [m for m in posted if m.get("type") == protocol.OPEN_URL] == [
+        {"type": protocol.OPEN_URL, "url": "https://example.com"}
+    ]
+    assert backend.spoken[-1] == "opening https://example.com"
+
+
+def test_a_window_that_refuses_the_url_says_so_instead():
+    window = FakeWindow(opens=False)
+    app, sent, backend, posted = _build(window=window)
+    _say(app, SECURE + '<a href="https://example.com">here</a>')
+    _press(app)
+    assert sent == []
+    assert [m for m in posted if m.get("type") == protocol.OPEN_URL] == []
     assert backend.spoken[-1] == "no browser to open that link"
 
 
@@ -245,3 +267,73 @@ def test_the_cursor_matches_the_word_inside_a_multi_word_link():
 
 def test_the_keymap_binds_the_follow_key():
     assert load_keymap("vipmud").get("alt+enter") == "review:link"
+
+
+# --- the web renderer's real links -------------------------------------------
+
+
+def _line_message(posted: list[dict]) -> dict:
+    lines = [message for message in posted if message.get("type") == protocol.LINE]
+    assert lines, "no line message was posted"
+    return lines[-1]
+
+
+def test_the_line_message_carries_link_positions():
+    # The renderer draws anchors from plain offsets, so it never sees markup and never has to
+    # decide for itself what is a link.
+    app, _sent, _backend, posted = _build()
+    _say(app, SECURE + 'You see a <send href="drink fountain">fountain</send> here.')
+    message = _line_message(posted)
+    assert message["text"] == "You see a fountain here."
+    assert message["links"] == [[10, 18, "drink fountain"]]
+
+
+def test_two_links_keep_the_order_the_mud_sent_them():
+    app, _sent, _backend, posted = _build()
+    _say(app, SECURE + '<send href="first">a</send> <send href="second">a</send> again')
+    assert _line_message(posted)["links"] == [[0, 1, "first"], [2, 3, "second"]]
+
+
+def test_a_line_without_links_sends_none():
+    app, _sent, _backend, posted = _build()
+    _say(app, "An ordinary line.")
+    assert _line_message(posted)["links"] == []
+
+
+def test_a_link_whose_words_are_gone_gets_no_position():
+    # What a pack substitution leaves behind: guessing a position would make the wrong words
+    # clickable, so the link is dropped from the rendering rather than misplaced.
+    assert _link_positions("a pack's own text", [("fountain", "drink fountain")]) == []
+
+
+def test_a_clicked_link_sends_its_command():
+    app, sent, _backend, _posted = _build()
+    app.on_ws_message(
+        {"type": protocol.LINK, "text": "fountain", "command": "drink fountain"}
+    )
+    assert sent == ["drink fountain"]
+
+
+def test_a_clicked_link_may_not_run_a_client_command():
+    # The renderer only reports the click; the decision stays here, where it also covers the
+    # review-cursor path.
+    app, sent, _backend, _posted = _build()
+    app.on_ws_message({"type": protocol.LINK, "text": "fine", "command": "/quit"})
+    assert sent == ["/quit"]
+    assert app._closed is False  # type: ignore[attr-defined]
+
+
+def test_a_clicked_url_link_opens_the_browser():
+    window = FakeWindow()
+    app, sent, _backend, _posted = _build(window=window)
+    app.on_ws_message(
+        {"type": protocol.LINK, "text": "map", "command": "https://example.com/page"}
+    )
+    assert window.urls == ["https://example.com/page"]
+    assert sent == []
+
+
+def test_a_clicked_link_with_no_command_does_nothing():
+    app, sent, _backend, _posted = _build()
+    app.on_ws_message({"type": protocol.LINK, "text": "x", "command": "   "})
+    assert sent == []

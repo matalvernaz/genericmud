@@ -183,6 +183,9 @@ always in the output box.
   the cursor's word picks the link — and if the cursor isn't inside one, the
   links are read out rather than guessed. While the output box has focus, plain
   **Enter** does the same thing.
+- In the **web UI** those links are real links in the page as well, so they can be
+  focused and activated like any other link, in addition to the keys above. A link
+  to a web page opens in a new tab.
 - **Alt+T** repeats the last tell; **Alt+C** the last chat line.
 - **Ctrl+F** searches the output, and **F3** / **Shift+F3** find the next and
   previous match. These work while the output box has focus.

@@ -29,6 +29,10 @@ main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
   word-break: break-word;
 }
 #output .line { line-height: 1.35; }
+/* An MXP link: visibly a link, and focus must be unmistakable, since the words themselves
+   carry no other hint that they are one. */
+#output a.mxp-link { color: #4ea1ff; text-decoration: underline; }
+#output a.mxp-link:focus { outline: 2px solid #4ea1ff; outline-offset: 1px; }
 
 .input-row { display: flex; border-top: 1px solid #333; }
 #input {

@@ -15,7 +15,11 @@ const inputEl = document.getElementById("input");
 const statusEl = document.getElementById("status");
 const announceEl = document.getElementById("sr-announce");
 
-const output = new Output(outputEl);
+// A link in the output is activated by the renderer and decided by the engine, which owns the
+// policy (no client commands, web URLs only). `bridge` is reached lazily for the same reason
+// `audio`'s error callback is: it only fires on a later click, by which point it is assigned.
+const output = new Output(outputEl, (text, command) =>
+  bridge.send({ type: "link", text, command }));
 // onError reaches `bridge` lazily: it only fires on a later sound failure, by which
 // point the const below is assigned. Errors land in the engine's diagnostic trace.
 const audio = new Audio((e) =>
@@ -39,6 +43,9 @@ const handlers = {
   connected: (m) => { announceEl.textContent = `Connected to ${m.world || "server"}`; },
   disconnected: () => { announceEl.textContent = "Disconnected"; },
   input_masked: (m) => input.setMasked(m.masked),
+  // A link to a web page, when there is no native window to hand it to. noopener/noreferrer
+  // keep the opened page from reaching back into the game tab.
+  open_url: (m) => window.open(m.url, "_blank", "noopener,noreferrer"),
 };
 
 const bridge = new Bridge(port, handlers);
