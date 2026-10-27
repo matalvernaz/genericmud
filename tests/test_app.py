@@ -623,3 +623,35 @@ def test_mxp_sound_cues_are_taken_out_of_the_text():
     app, _sent, _raw = _mxp_app()
     app.on_telnet_event(DataReceived(b'\x1b[1z<sound "oof.wav">x\r\n'))
     assert app.buffer.lines()[-1].plain_text == "x"
+
+
+def test_an_unclosed_paragraph_is_flushed_rather_than_held_for_ever():
+    # <P> joins lines, but a server that never closes it must not hold the session in
+    # silence; the cap emits what it has and starts again, losing nothing.
+    app, _sent, _raw = _mxp_app()
+    app.on_telnet_event(DataReceived(b"\x1b[1z<P>\r\n"))
+    for index in range(80):
+        app.on_telnet_event(DataReceived(f"line {index} \r\n".encode()))
+    shown = [line.plain_text for line in app.buffer.lines()]
+    # One emitted line is the proof: without the cap everything would still be held.
+    assert shown, "nothing was emitted before the paragraph closed"
+    # Closing the paragraph releases whatever is still held, so nothing is lost.
+    app.on_telnet_event(DataReceived(b"</P>\r\n"))
+    joined = "".join(line.plain_text for line in app.buffer.lines())
+    for index in (0, 40, 79):
+        assert f"line {index} " in joined  # nothing was dropped on the way through
+
+
+def test_a_paragraph_is_capped_by_size_as_well_as_line_count():
+    app, _sent, _raw = _mxp_app()
+    app.on_telnet_event(DataReceived(b"\x1b[1z<P>\r\n"))
+    for _ in range(12):
+        app.on_telnet_event(DataReceived((b"x" * 900) + b"\r\n"))
+    shown = [line.plain_text for line in app.buffer.lines()]
+    assert shown, "the paragraph was never emitted"
+    assert len(shown) > 1, "the hold was never capped"
+    assert max(len(line) for line in shown) <= 4000 + 900  # bounded, not one huge string
+    app.on_telnet_event(DataReceived(b"</P>\r\n"))
+    assert sum(len(line.plain_text) for line in app.buffer.lines()) == 12 * 900  # none lost
+
+
