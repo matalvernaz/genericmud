@@ -655,3 +655,41 @@ def test_a_paragraph_is_capped_by_size_as_well_as_line_count():
     assert sum(len(line.plain_text) for line in app.buffer.lines()) == 12 * 900  # none lost
 
 
+
+
+def _mxp_app_with_timers(**kwargs):
+    """An MXP session whose scheduled callbacks are captured instead of run."""
+    timers: list = []
+    app, sent, raw = _mxp_app(schedule=lambda _delay, callback: timers.append(callback), **kwargs)
+    return app, sent, raw, timers
+
+
+def test_a_paragraph_held_too_long_is_spoken_on_the_deadline():
+    # Size caps bound the text, not the wait: a server sending a line every 45 seconds would
+    # reach the line cap after half an hour of silence, so there is a deadline as well.
+    app, _sent, _raw, timers = _mxp_app_with_timers()
+    app.on_telnet_event(DataReceived(b"\x1b[1z<P>\r\n"))
+    app.on_telnet_event(DataReceived(b"waiting line\r\n"))
+    assert not app.buffer.lines()  # held, as a paragraph should be
+    timers[0]()  # the deadline passes
+    assert app.buffer.lines()[-1].plain_text == "waiting line"
+
+
+def test_one_deadline_covers_a_whole_paragraph():
+    # The deadline is armed on the first held line, not on every one.
+    app, _sent, _raw, timers = _mxp_app_with_timers()
+    app.on_telnet_event(DataReceived(b"\x1b[1z<P>\r\n"))
+    for index in range(5):
+        app.on_telnet_event(DataReceived(f"line {index} \r\n".encode()))
+    assert len(timers) == 1
+
+
+def test_a_deadline_that_fires_after_the_paragraph_closed_does_nothing():
+    app, _sent, _raw, timers = _mxp_app_with_timers()
+    app.on_telnet_event(DataReceived(b"\x1b[1z<P>\r\n"))
+    app.on_telnet_event(DataReceived(b"whole paragraph\r\n"))
+    app.on_telnet_event(DataReceived(b"</P>\r\n"))
+    shown = [line.plain_text for line in app.buffer.lines()]
+    assert shown[-1] == "whole paragraph"
+    timers[0]()  # a stale deadline must not repeat it, or emit an empty line
+    assert [line.plain_text for line in app.buffer.lines()] == shown
