@@ -1596,3 +1596,16 @@ def test_clearing_both_login_fields_forgets_the_stored_login(frame, tmp_path):
         assert store.get("Gone") is None  # blank means forget, not "keep the old one"
     finally:
         dialog.Destroy()
+
+
+def test_a_new_world_starts_on_no_auto_connect(frame):
+    # With the login boxes empty there is nothing to send, so a new world must not offer to
+    # send one; Automatic is a deliberate switch once a login has been stored.
+    from genericmud.ui.wx_app import WorldDialog
+
+    dialog = WorldDialog(frame)
+    try:
+        chosen = dialog._connect.GetStringSelection()
+        assert chosen.startswith("No auto-connect")
+    finally:
+        dialog.Destroy()

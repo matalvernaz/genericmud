@@ -1060,7 +1060,7 @@ class EngineApp:
     def begin_login(self, world: str) -> None:
         """Start this connection's login, and arrange the after-connect commands.
 
-        Four methods (``config.worlds.CONNECT_METHODS``). "automatic" answers the MUD's own
+        Four methods (``config.worlds.CONNECT_METHODS``). "prompts" answers the MUD's own
         prompts, which is what this client has always done and the only mode that suits a
         MUD which asks; "mush" and "diku" type the login blind, for MUDs that never ask;
         "none" sends no credentials at all. Whatever the method, the world's after-connect

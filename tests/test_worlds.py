@@ -148,14 +148,15 @@ def test_connect_method_and_after_connect_commands_round_trip(tmp_path):
     assert load_worlds(path) == worlds
 
 
-def test_an_unknown_connect_method_falls_back_to_automatic(tmp_path):
-    # A hand-edited or future world file must not break a session's login.
+def test_an_unknown_connect_method_falls_back_to_no_auto_connect(tmp_path):
+    # A hand-edited or future world file must not make a session log in by some method the
+    # player never chose.
     path = tmp_path / "worlds.toml"
     path.write_text(
         '[[world]]\nname = "Odd"\nhost = "o.example"\nport = 23\nconnect_method = "mxp"\n',
         encoding="utf-8",
     )
-    assert load_worlds(path)[0].connect_method == "automatic"
+    assert load_worlds(path)[0].connect_method == "none"
 
 
 def test_after_connect_commands_are_one_per_line_with_blanks_dropped(tmp_path):
@@ -177,3 +178,12 @@ def test_after_connect_commands_read_a_hand_written_multiline_string(tmp_path):
         encoding="utf-8",
     )
     assert load_worlds(path)[0].post_connect_commands == "look\nscore"
+
+
+def test_a_world_file_without_the_setting_does_not_log_in(tmp_path):
+    # Absent means no auto-connect: with no login stored there is nothing to send, and
+    # nothing in the UI ever wrote a credential before this setting existed, so no world can
+    # be relying on the old behaviour.
+    path = tmp_path / "worlds.toml"
+    path.write_text('[[world]]\nname = "Old"\nhost = "o.example"\nport = 23\n', encoding="utf-8")
+    assert load_worlds(path)[0].connect_method == "none"
