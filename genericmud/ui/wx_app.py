@@ -44,6 +44,7 @@ from genericmud.config.ui_prefs import UiPrefs, load_ui_prefs, save_ui_prefs
 from genericmud.config.update_prefs import is_snoozed, load_prefs, save_prefs, snooze_timestamp
 from genericmud.config.world_files import migrate_world_files
 from genericmud.config.worlds import (
+    DEFAULT_CONNECT_METHOD,
     DEFAULT_PORT,
     DEFAULT_SEPARATOR,
     LOG_FILES,
@@ -1454,8 +1455,8 @@ _LOG_FILE_LABELS = ("A new file each session", "One file per day", "One file for
 # In the order CONNECT_METHODS visits them, so the value and its label stay together.
 # MXP is absent because genericMud doesn't parse MXP yet (see config/worlds.py).
 _CONNECT_LABELS = (
-    ("automatic", "Automatic — answer the MUD's login prompts"),
     ("none", "No auto-connect — send no login"),
+    ("prompts", "Answer the MUD's prompts — name, then password when asked"),
     ("mush", "MUSH/MOO — send CONNECT name password"),
     ("diku", "Diku — send name, then password"),
 )
@@ -1595,7 +1596,12 @@ class WorldDialog(wx.Dialog):
         grid.Add(wx.StaticText(self, label="&Connect:"), 0, wx.ALIGN_CENTER_VERTICAL)
         self._connect = wx.Choice(self, choices=[label for _value, label in _CONNECT_LABELS])
         self._connect.SetName("Connect")
-        self._connect.SetSelection(0)
+        # The list starts on the default, so Down arrow walks away from it rather than back
+        # to it: with the login boxes empty there is nothing to send, and a world that
+        # promised to log in and then didn't would be worse than one that never offered.
+        self._connect.SetSelection(
+            [value for value, _label in _CONNECT_LABELS].index(DEFAULT_CONNECT_METHOD)
+        )
         grid.Add(self._connect, 1, wx.EXPAND)
         grid.Add(
             wx.StaticText(self, label="Sent after &connecting, one command per line:"),

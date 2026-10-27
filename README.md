@@ -86,12 +86,14 @@ masked; **Reveal password** shows it, and it is off every time the dialog opens.
 On a machine with no usable credential store, genericMud falls back to the
 plaintext `credentials.json` and says so out loud when it starts.
 
-**Connect** chooses how the login is sent:
+**Connect** chooses how the login is sent, and a world starts on No auto-connect:
+with the boxes empty there is nothing to send, and no login method should be
+applied that you didn't choose. Pick the one your MUD expects.
 
 | Choice | What it sends |
 |---|---|
-| Automatic | Answers the MUD's own name and password prompts. Works with almost everything, and never sends the password before the username |
 | No auto-connect | Nothing. You log in yourself |
+| Answer the MUD's prompts | The name when asked, then the password once the MUD asks for it. Works with almost everything, and never sends the password before the username |
 | MUSH/MOO | The single command `CONNECT name password` |
 | Diku | The name, then the password, each on its own line |
 

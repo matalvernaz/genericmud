@@ -99,7 +99,16 @@ def _app(store):
     backend = RecordingBackend()
     voice = VoiceRouter(backend, clock=lambda: 0.0)
     sent: list[str] = []
-    app = EngineApp(voice, send=sent.append, post=[].append, credentials=store, keymap={})
+    # These tests are about answering prompts, which is no longer what a world does by
+    # default -- a world now has to be told to log in at all.
+    app = EngineApp(
+        voice,
+        send=sent.append,
+        post=[].append,
+        credentials=store,
+        keymap={},
+        connect_method="prompts",
+    )
     return app, sent
 
 
@@ -376,7 +385,9 @@ def test_an_auto_login_password_sent_before_the_prompt_hides_still_gets_the_minu
 
     store = PlaintextCredentialStore(tmp_path / "c.json")
     store.set("gw", "hero", "secret")
-    app, clock, sent, _backend, withdrawn = _timed_app(credentials=store, name="gw")
+    app, clock, sent, _backend, withdrawn = _timed_app(
+        credentials=store, name="gw", connect_method="prompts"
+    )
     app.begin_login("gw")
     app.on_telnet_event(DataReceived(b"What is your name?\r\n"))
     app.on_telnet_event(DataReceived(b"Password:\r\n"))
@@ -399,7 +410,7 @@ def test_the_second_line_typed_while_hidden_mentions_escape_once():
 # --- connect methods and after-connect commands -------------------------------
 
 
-def _app_with(store, *, method="automatic", commands=""):
+def _app_with(store, *, method="prompts", commands=""):
     """An engine for one world's login: no real timers, so the fallback can't fire."""
     backend = RecordingBackend()
     voice = VoiceRouter(backend, clock=lambda: 0.0)
@@ -444,7 +455,7 @@ def test_no_auto_connect_sends_the_commands_but_never_the_login(tmp_path):
     assert sent == ["look"]
 
 
-def test_automatic_login_holds_the_commands_until_the_password_is_away(tmp_path):
+def test_prompt_login_holds_the_commands_until_the_password_is_away(tmp_path):
     app, sent = _app_with(_store_with_login(tmp_path), commands="look")
     app.begin_login("gw")
     app.on_telnet_event(DataReceived(b"What is your name?\r\n"))

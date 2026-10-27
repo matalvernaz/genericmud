@@ -23,14 +23,18 @@ CLIENT_COMMAND_PREFIX = "/"
 # How a world names its log files: a new file each session (the original behaviour), one per
 # day, or one for the world. Each appends.
 LOG_FILES = ("session", "day", "world")
-# How a stored username and password are sent. "automatic" answers the MUD's own prompts,
-# which is what genericMud has always done and the only mode that suits a MUD which asks.
-# The rest are MUSHclient's habits, for MUDs that expect the login typed blind.
-# MXP is deliberately absent: the client does not parse MXP yet (see protocol/telnet.py and
-# connection.py), so a MXP login could not be sent without advertising a protocol whose
+# How a stored username and password are sent. "prompts" answers the MUD's own prompts --
+# named that way rather than "automatic", which would promise detection of the right method
+# that it does not do. The rest are MUSHclient's habits, for MUDs that expect the login typed
+# blind. MXP is deliberately absent: the client does not parse MXP yet (see protocol/telnet.py
+# and connection.py), so a MXP login could not be sent without advertising a protocol whose
 # markup would then leak into the output.
-CONNECT_METHODS = ("automatic", "none", "mush", "diku")
-DEFAULT_CONNECT_METHOD = "automatic"
+CONNECT_METHODS = ("none", "prompts", "mush", "diku")
+# What an absent setting means, and what a new world starts on. "none" for both: with no
+# login stored there is nothing to send, so a world that offered to log in and then did
+# nothing would be worse than one that never offered. It also keeps the setting honest --
+# nobody gets a login method they didn't choose.
+DEFAULT_CONNECT_METHOD = "none"
 
 
 @dataclass
@@ -102,7 +106,7 @@ def normalize_log_files(value: object) -> str:
 
 
 def normalize_connect_method(value: object) -> str:
-    """One of CONNECT_METHODS; anything else answers the MUD's own prompts."""
+    """One of CONNECT_METHODS; anything else means no auto-connect."""
     return value if value in CONNECT_METHODS else DEFAULT_CONNECT_METHOD
 
 
