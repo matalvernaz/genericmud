@@ -1076,7 +1076,7 @@ class SessionPanel(wx.Panel):
             self.app.on_focus_changed(focused)
 
     def apply_world_settings(self, world: World) -> None:  # UI thread
-        """Take a world's edited command stacking, logging, echo, login and sound downloads now. How
+        """Take a world's edited stacking, logging, echo, login, MXP and sound downloads now. How
         the tab connects (host, port, TLS, encoding, sounds) stays as it opened, so a reconnect
         from this tab doesn't reach a new host with the old encoding; those apply when the world
         is opened again."""
@@ -1090,6 +1090,7 @@ class SessionPanel(wx.Panel):
             echo_input=world.echo_input,
             connect_method=world.connect_method,
             post_connect_commands=world.post_connect_commands,
+            mxp=world.mxp,
             download_sounds=world.download_sounds,
         )
         if self.app is not None:
