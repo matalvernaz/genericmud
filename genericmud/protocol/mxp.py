@@ -100,6 +100,8 @@ class MxpOutcome:
     links: list[tuple[str, str]] = field(default_factory=list)
     # <NOBR>: the caller must join the next line onto this one instead of breaking.
     no_break: bool = False
+    # The same instruction, plus an open <P>: either way the next line belongs on this one.
+    join_next: bool = False
 
 
 class MxpParser:
@@ -177,7 +179,13 @@ class MxpParser:
         no_break = self._nobr
         self._nobr = False
         return MxpOutcome(
-            text=text, cues=cues, replies=replies, links=links, no_break=no_break
+            text=text,
+            cues=cues,
+            replies=replies,
+            links=links,
+            no_break=no_break,
+            # <NOBR> is one line's instruction; an open <P> lasts until </P>.
+            join_next=no_break or self._paragraph,
         )
 
     # --- the pieces ----------------------------------------------------------

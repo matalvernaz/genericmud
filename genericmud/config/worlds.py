@@ -69,6 +69,10 @@ class World:
     # Fetch the sounds a MUD offers to download (MSP U=, GMCP Client.Media). The MSP spec has
     # clients let the player switch that off.
     download_sounds: bool = True
+    # Understand MXP markup. On by default because the parser strips every tag, so a server
+    # sending MXP reads as ordinary text; off is the escape hatch for a server that sends
+    # something this parser gets wrong.
+    mxp: bool = True
 
     def __post_init__(self) -> None:
         self.encoding = normalize_encoding(self.encoding)
@@ -202,6 +206,7 @@ def load_worlds(path: Path | None = None) -> list[World]:
                 post_connect_commands=normalize_post_connect(
                     entry.get("post_connect_commands")
                 ),
+                mxp=entry.get("mxp") is not False,
             )
         )
     return worlds
@@ -248,6 +253,8 @@ def save_worlds(worlds: list[World], path: Path | None = None) -> None:
         if post_connect:  # an array, so a command with a quote in it needs no escaping
             items = ", ".join(_quote(line) for line in post_connect.split("\n"))
             lines.append(f"post_connect_commands = [{items}]")
+        if not world.mxp:
+            lines.append("mxp = false")
         blocks.append("\n".join(lines))
     atomic_write_text(target, "\n\n".join(blocks) + "\n")
 
@@ -277,3 +284,4 @@ def _quote(value: str) -> str:
             out.append(char)
     out.append('"')
     return "".join(out)
+
