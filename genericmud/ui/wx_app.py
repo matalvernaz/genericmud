@@ -1025,10 +1025,10 @@ class SessionPanel(wx.Panel):
             self.app.on_focus_changed(focused)
 
     def apply_world_settings(self, world: World) -> None:  # UI thread
-        """Take a world's edited command stacking, logging and sound downloads now. How the
-        tab connects (host, port, TLS, encoding, sounds) stays as it opened, so a reconnect from
-        this tab doesn't reach a new host with the old encoding; those apply when the world is
-        opened again."""
+        """Take a world's edited command stacking, logging, echo and sound downloads now. How
+        the tab connects (host, port, TLS, encoding, sounds) stays as it opened, so a reconnect
+        from this tab doesn't reach a new host with the old encoding; those apply when the world
+        is opened again."""
         self.world = replace(
             self.world,
             command_stacking=world.command_stacking,
@@ -1036,6 +1036,7 @@ class SessionPanel(wx.Panel):
             log_automatically=world.log_automatically,
             log_files=world.log_files,
             log_commands=world.log_commands,
+            echo_input=world.echo_input,
             download_sounds=world.download_sounds,
         )
         if self.app is not None:
@@ -1516,6 +1517,12 @@ class WorldDialog(wx.Dialog):
         self._log_commands.SetName("Log what you type (passwords stay hidden)")
         self._log_commands.SetValue(True)
         grid.Add(self._log_commands, 1, wx.EXPAND)
+        # Next to the log switch but deliberately separate: showing a command in the output and
+        # writing it to the log are two different wants (MUSHclient splits them too).
+        grid.Add((0, 0))
+        self._echo_input = wx.CheckBox(self, label="Echo &input in the output")
+        self._echo_input.SetName("Echo input in the output")
+        grid.Add(self._echo_input, 1, wx.EXPAND)
 
         self._save: wx.CheckBox | None = None
         if show_save:
@@ -1563,6 +1570,7 @@ class WorldDialog(wx.Dialog):
             self._log_automatically.SetValue(initial.log_automatically)
             self._log_files.SetSelection(LOG_FILES.index(initial.log_files))
             self._log_commands.SetValue(initial.log_commands)
+            self._echo_input.SetValue(initial.echo_input)
             self._download_sounds.SetValue(initial.download_sounds)
         if lock_name:
             self._name.Enable(False)
@@ -1613,6 +1621,7 @@ class WorldDialog(wx.Dialog):
             log_automatically=self._log_automatically.GetValue(),
             log_files=LOG_FILES[self._log_files.GetSelection()],
             log_commands=self._log_commands.GetValue(),
+            echo_input=self._echo_input.GetValue(),
             download_sounds=self._download_sounds.GetValue(),
         )
         self.EndModal(wx.ID_OK)

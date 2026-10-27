@@ -244,3 +244,14 @@ def test_no_button_label_doubles_an_ampersand():
     ]
     assert labels, "found no button labels: the check looks in the wrong place"
     assert not [label for label in labels if "&&" in label]
+
+
+def test_the_world_dialog_has_an_echo_input_switch():
+    # Separate from logging on purpose: showing a command and writing it to a file are two
+    # different wants, so each has its own box.
+    source = (
+        Path(__file__).resolve().parents[1] / "genericmud/ui/wx_app.py"
+    ).read_text(encoding="utf-8")
+    assert '"Echo &input in the output"' in source
+    assert "self._echo_input.SetValue(initial.echo_input)" in source
+    assert "echo_input=self._echo_input.GetValue()" in source
