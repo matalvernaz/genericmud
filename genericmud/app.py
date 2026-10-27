@@ -108,6 +108,9 @@ _POST_CONNECT_FALLBACK_SECONDS = 30.0
 # memory or their speech.
 _MXP_MAX_JOIN_CHARS = 4000
 _MXP_MAX_JOIN_LINES = 50
+# ...and how long it may hold them. A server sending one line every 45 seconds would reach
+# the line cap after half an hour of silence, so size alone does not bound latency.
+_MXP_MAX_JOIN_SECONDS = 30.0
 # Transport statuses that mean the socket went away or was replaced (transport/connection.py).
 _SOCKET_CHANGES = (
     "disconnected",
@@ -522,6 +525,11 @@ class EngineApp:
         self._mxp = MxpParser()
         self._mxp_join = ""  # text held across lines by <NOBR> or an open <P>
         self._mxp_held_lines = 0  # how many lines that hold has swallowed so far
+        # One deadline, not one per <P>: paragraphs do not nest and the stream is sequential,
+        # so at most one hold is ever open. The token stops a stale timer from flushing a
+        # paragraph that has since ended and been replaced.
+        self._mxp_timer_armed = False
+        self._mxp_timer_token = 0
         self._walk: SafeWalk | None = None
         self._user_aliases: dict[str, str] = {}  # interactively-made aliases: pattern -> command
         self._user_triggers: dict[str, str] = {}
@@ -1286,19 +1294,49 @@ class EngineApp:
         for payload in outcome.replies:
             self._mxp_reply(payload)
         if not outcome.join_next:
-            self._mxp_held_lines = 0
+            self._release_mxp_hold()
             return outcome.text, outcome.cues
         self._mxp_held_lines += 1
         if (
             self._mxp_held_lines >= _MXP_MAX_JOIN_LINES
             or len(outcome.text) >= _MXP_MAX_JOIN_CHARS
         ):
-            held, self._mxp_join, self._mxp_held_lines = outcome.text, "", 0
+            held = outcome.text
+            self._release_mxp_hold()
             if self._diag is not None:
-                self._diag.event("mxp.join_flushed", lines="capped")
+                self._diag.event("mxp.join_flushed", reason="size")
             return held, outcome.cues
         self._mxp_join = outcome.text
+        self._arm_mxp_deadline()
         return "", outcome.cues
+
+    def _release_mxp_hold(self) -> None:
+        """Forget a hold, and any deadline waiting on it."""
+        self._mxp_join = ""
+        self._mxp_held_lines = 0
+        self._mxp_timer_armed = False
+        self._mxp_timer_token += 1  # a timer already scheduled must now do nothing
+
+    def _arm_mxp_deadline(self) -> None:
+        """Start the clock on a hold, once, however many lines it swallows."""
+        if self._mxp_timer_armed:
+            return
+        self._mxp_timer_armed = True
+        self._mxp_timer_token += 1
+        token = self._mxp_timer_token
+        self._schedule(
+            _MXP_MAX_JOIN_SECONDS, lambda: self._mxp_deadline_reached(token)
+        )
+
+    def _mxp_deadline_reached(self, token: int) -> None:
+        """Say what a long-held paragraph has so far, rather than leave the user in silence."""
+        if token != self._mxp_timer_token or not self._mxp_join or self._closed:
+            return
+        held = self._mxp_join
+        self._release_mxp_hold()
+        if self._diag is not None:
+            self._diag.event("mxp.join_flushed", reason="timeout")
+        self._emit_parsed_line(held)
 
     def _mxp_reply(self, payload: str) -> None:
         """Answer ``<VERSION>``/``<SUPPORT>`` on a secure line, as the spec requires.
@@ -1317,8 +1355,17 @@ class EngineApp:
 
     def _emit_line(self, text: str) -> None:
         text, mxp_cues = self._mxp_feed(text)  # strip MXP markup before anything reads it
+        self._emit_parsed_line(text, mxp_cues)
+
+    def _emit_parsed_line(self, text: str, mxp_cues: list[SoundCue] | None = None) -> None:
+        """Show and speak a line that has already been through the MXP parser.
+
+        Kept separate because the deadline flushes a held paragraph: sending that text back
+        through :meth:`_emit_line` would feed it to the parser again, find the paragraph still
+        open, and hold it a second time -- the flush would emit nothing at all.
+        """
         text, cues = parse_msp_line(text)  # strip MSP markers before colour parsing
-        for cue in [*mxp_cues, *cues]:
+        for cue in [*(mxp_cues or []), *cues]:
             channel = MUSIC_CATEGORY if cue.kind == "music" else DEFAULT_CATEGORY
             if cue.is_stop:
                 if cue.url:  # the spec's way to set where later cues download from
@@ -2413,4 +2460,5 @@ class EngineApp:
             self._speak_system(f"logging to {path.name}")
         else:
             self._post(protocol.echo(f"* Logging to {path.name}"))
+
 
