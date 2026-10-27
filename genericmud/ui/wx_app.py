@@ -383,6 +383,7 @@ class SessionPanel(wx.Panel):
             encoding=self.world.encoding,
             connect_method=self.world.connect_method,
             post_connect_commands=self.world.post_connect_commands,
+            mxp=self.world.mxp,
             other_worlds=lambda: [world.name for world in load_worlds()],
         )
         self.app.on_focus_changed(self._focused)  # what the window said before this existed
@@ -1540,6 +1541,10 @@ class WorldDialog(wx.Dialog):
         self._download_sounds.SetName("Download sounds the MUD offers")
         self._download_sounds.SetValue(True)
         grid.Add(self._download_sounds, 1, wx.EXPAND)
+        self._mxp = wx.CheckBox(self, label="Understand M&XP markup")
+        self._mxp.SetName("Understand MXP markup")
+        self._mxp.SetValue(True)
+        grid.Add(self._mxp, 1, wx.EXPAND)
 
         grid.Add((0, 0))
         self._tls = wx.CheckBox(self, label="Use &TLS")
@@ -1693,6 +1698,7 @@ class WorldDialog(wx.Dialog):
                 self._username.SetValue(stored[0])
                 self._password.SetValue(stored[1])
                 self._password_plain.SetValue(stored[1])
+            self._mxp.SetValue(initial.mxp)
         if lock_name:
             self._name.Enable(False)
             self._host.SetFocus()
@@ -1746,6 +1752,7 @@ class WorldDialog(wx.Dialog):
             download_sounds=self._download_sounds.GetValue(),
             connect_method=_CONNECT_LABELS[self._connect.GetSelection()][0],
             post_connect_commands=self._post_connect.GetValue(),
+            mxp=self._mxp.GetValue(),
         )
         try:
             self._store_credentials(self._world)
@@ -4847,3 +4854,5 @@ def run(args, recovery=None) -> None:
 def _run_loop(loop: asyncio.AbstractEventLoop) -> None:
     asyncio.set_event_loop(loop)
     loop.run_forever()
+
+

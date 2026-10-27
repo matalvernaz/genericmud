@@ -46,7 +46,8 @@ from genericmud.packs.setup import GitUpdateResult
 from genericmud.protocol import msdp
 from genericmud.protocol import telnet as T
 from genericmud.protocol.charset import AUTO, ServerTextCodec
-from genericmud.protocol.msp import parse_msp_line
+from genericmud.protocol.msp import SoundCue, parse_msp_line
+from genericmud.protocol.mxp import MxpParser
 from genericmud.protocol.oob import OobMessage, ServerStatus, from_subnegotiation
 from genericmud.render.ansi import parse_ansi
 from genericmud.review.channels import ChannelReview
@@ -393,6 +394,7 @@ class EngineApp:
         encoding: str = AUTO,
         connect_method: str = DEFAULT_CONNECT_METHOD,
         post_connect_commands: str = "",
+        mxp: bool = True,
         other_worlds: Callable[[], Iterable[str]] | None = None,
         clock: Callable[[], float] | None = None,
         withdraw_option: Callable[[int], None] | None = None,
@@ -405,6 +407,9 @@ class EngineApp:
         self.pack_updates: PackUpdates | None = None
         self._world_packs: list[str] = []  # the packs enabled for this session's world
         self._send = send or (lambda _text: None)
+        # Kept here as well as on the pack host: MXP's replies (<VERSION>, <SUPPORTS>) are
+        # raw bytes rather than a line, and this is the only place that needs to send one.
+        self._raw_send = send_raw
         self._post = post or (lambda _message: None)
         # Wired by the UI to the transport; the engine only knows the server said goodbye.
         self._suppress_reconnect = suppress_reconnect or (lambda: None)
@@ -505,6 +510,11 @@ class EngineApp:
         self._pending_login: list[str] = []
         # The password to strip out of anything incoming, while it is in play (see _handle_line).
         self._password_guard = ""
+        # MXP: on unless this world turns it off. The parser strips every tag, so what
+        # reaches the output is plain text whatever the server sends.
+        self.mxp_enabled = mxp
+        self._mxp = MxpParser()
+        self._mxp_join = ""  # text held across lines by <NOBR> or an open <P>
         self._walk: SafeWalk | None = None
         self._user_aliases: dict[str, str] = {}  # interactively-made aliases: pattern -> command
         self._user_triggers: dict[str, str] = {}
@@ -1248,9 +1258,45 @@ class EngineApp:
             self._emit_line(self._pending)
             self._pending = ""
 
+    def _mxp_feed(self, text: str) -> tuple[str, list[SoundCue]]:
+        """Parse one line as MXP, returning plain text and any sound cues it carried.
+
+        ``<NOBR>`` and an open ``<P>`` are the only MXP rules that span lines: both mean the
+        next line belongs on this one, so the text is held rather than emitted. Everything
+        else is decided within the line.
+        """
+        if not self.mxp_enabled:
+            return text, []
+        if self._mxp_join:
+            text = self._mxp_join + text
+            self._mxp_join = ""
+        outcome = self._mxp.feed(text)
+        for payload in outcome.replies:
+            self._mxp_reply(payload)
+        if outcome.join_next:
+            self._mxp_join = outcome.text
+            return "", outcome.cues
+        return outcome.text, outcome.cues
+
+    def _mxp_reply(self, payload: str) -> None:
+        """Answer ``<VERSION>``/``<SUPPORT>`` on a secure line, as the spec requires.
+
+        The secure line (``ESC[1z``) is how the MUD tells a client reply from something a
+        player typed, so it is not optional.
+        """
+        if self._diag is not None:
+            self._diag.event("mxp.reply", payload=payload)
+        if self._raw_send is None:
+            return  # headless: nothing to answer on, and the diag event records it
+        try:
+            self._raw_send(MxpParser.secure_line(payload).encode("utf-8"))
+        except (OSError, ConnectionError):
+            pass  # a dead socket must not break the line that provoked the question
+
     def _emit_line(self, text: str) -> None:
+        text, mxp_cues = self._mxp_feed(text)  # strip MXP markup before anything reads it
         text, cues = parse_msp_line(text)  # strip MSP markers before colour parsing
-        for cue in cues:
+        for cue in [*mxp_cues, *cues]:
             channel = MUSIC_CATEGORY if cue.kind == "music" else DEFAULT_CATEGORY
             if cue.is_stop:
                 if cue.url:  # the spec's way to set where later cues download from

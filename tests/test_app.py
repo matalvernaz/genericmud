@@ -568,3 +568,58 @@ def test_what_the_player_sends_is_never_parsed_as_markup():
     app, _backend, sent, _posted = _app()
     app.on_ws_message({"type": "input", "text": "say <b>hi</b> and <build> this"})
     assert sent == ["say <b>hi</b> and <build> this"]
+
+
+# --- MXP wiring --------------------------------------------------------------
+
+
+def _mxp_app(**kwargs):
+    backend = RecordingBackend()
+    voice = VoiceRouter(backend, clock=lambda: 0.0)
+    sent: list[str] = []
+    raw: list[bytes] = []
+    app = EngineApp(
+        voice,
+        send=sent.append,
+        send_raw=raw.append,
+        post=[].append,
+        keymap=load_keymap("vipmud"),
+        **kwargs,
+    )
+    return app, sent, raw
+
+
+def test_mxp_markup_never_reaches_the_output():
+    app, _sent, _raw = _mxp_app()
+    app.on_telnet_event(DataReceived(b"\x1b[1z<b>Bold</b> and <i>italic</i>\r\n"))
+    assert app.buffer.lines()[-1].plain_text == "Bold and italic"
+
+
+def test_mxp_version_question_is_answered_on_a_secure_line():
+    # The secure prefix is how the MUD tells a client reply from something a player typed.
+    app, _sent, raw = _mxp_app()
+    app.on_telnet_event(DataReceived(b"\x1b[1z<version>\r\n"))
+    assert raw, "no reply was sent"
+    assert raw[-1].startswith(b"\x1b[1z<VERSION ")
+    assert raw[-1].endswith(b">\n")
+
+
+def test_a_world_can_turn_mxp_off():
+    app, _sent, _raw = _mxp_app(mxp=False)
+    app.on_telnet_event(DataReceived(b"<b>Bold</b>\r\n"))
+    assert app.buffer.lines()[-1].plain_text == "<b>Bold</b>"
+
+
+def test_nobr_joins_the_next_line_instead_of_breaking():
+    app, _sent, _raw = _mxp_app()
+    app.on_telnet_event(DataReceived(b"first part<NOBR>\r\n"))
+    app.on_telnet_event(DataReceived(b"second part\r\n"))
+    assert app.buffer.lines()[-1].plain_text == "first partsecond part"
+
+
+def test_mxp_sound_cues_are_taken_out_of_the_text():
+    # The cue goes down the same path as MSP's (test_sound_bus covers the playing itself);
+    # what matters here is that an MXP sound tag never shows up as words.
+    app, _sent, _raw = _mxp_app()
+    app.on_telnet_event(DataReceived(b'\x1b[1z<sound "oof.wav">x\r\n'))
+    assert app.buffer.lines()[-1].plain_text == "x"

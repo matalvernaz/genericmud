@@ -114,10 +114,13 @@ def test_mtts_declares_a_screen_reader():
     assert MTTS_BITS & MTTS_SCREEN_READER
 
 
-def test_refuses_mxp_until_it_is_parsed():
+def test_accepts_mxp_now_that_it_is_parsed():
+    # It was refused on purpose while nothing parsed it, because servers then sent markup
+    # that reached the output as literal tags. protocol/mxp.py strips every tag, which is
+    # what makes accepting it safe.
     sent = _negotiate(Negotiation(T.WILL, T.OPT_MXP))
-    assert bytes([T.IAC, T.DONT, T.OPT_MXP]) in sent
-    assert bytes([T.IAC, T.DO, T.OPT_MXP]) not in sent
+    assert bytes([T.IAC, T.DO, T.OPT_MXP]) in sent
+    assert bytes([T.IAC, T.DONT, T.OPT_MXP]) not in sent
 
 
 def test_refuses_unknown_options():
