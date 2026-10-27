@@ -252,6 +252,7 @@ Ctrl+Alt+Left / Right    Previous / next channel
 Ctrl+Alt+Up / Down       Scroll within the current channel
 Ctrl+Alt+Shift+Left / Right   Word by word in the channel line
 Ctrl+Alt+1 to 9          Recent messages on the current channel
+Ctrl+Alt+0               The tenth message back, as Ctrl+0 is for the main output
 
 Walking:
 .3n2e             Speedwalk (3 north, 2 east)

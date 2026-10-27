@@ -143,8 +143,8 @@ always in the output box.
 **Chat channels** get their own history. When your triggers route lines to
 channels (tells, gossip, auction...), **Ctrl+Alt+Left/Right** cycle between
 those channels, **Ctrl+Alt+Up/Down** scroll within the one you're on, and
-**Ctrl+Alt+1 through 9** read its recent messages — all without touching the
-main output.
+**Ctrl+Alt+1 through 9** read its recent messages, with **Ctrl+Alt+0** for the
+tenth — all without touching the main output.
 
 **Alt+Shift+L** starts and stops writing everything to a log file, if you want a
 transcript to read later. In a world's details you can have it log automatically
