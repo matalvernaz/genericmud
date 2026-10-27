@@ -168,3 +168,35 @@ class ReviewCursor:
         if len(self._buffer) == 0:
             return ""
         return self._buffer[self._index()].plain_text
+
+    # --- MXP links ---
+
+    def links(self) -> list[tuple[str, str]]:
+        """(displayed text, command) for each MXP link on the current line."""
+        if len(self._buffer) == 0:
+            return []
+        return list(self._buffer[self._index()].links)
+
+    def link(self) -> tuple[str, str] | None:
+        """The link the cursor's word sits in, or the line's only link, or ``None``.
+
+        Matching on the word is what makes a line carrying several links usable from the
+        keyboard: the reader walks to a word with Alt+Right (the same way a mouse follows
+        the word under its pointer) and presses the follow key. Where the word belongs to
+        no link, a line with exactly one link still follows it -- so the plain "act on this
+        line" gesture works -- and with several the caller names them instead of guessing.
+        """
+        links = self.links()
+        if not links:
+            return None
+        word = _word_key(self.current_word())
+        if word:
+            for text, command in links:
+                if word in _word_key(text):
+                    return (text, command)
+        return links[0] if len(links) == 1 else None
+
+
+def _word_key(text: str) -> str:
+    """Letters and digits only, lowercased, so "north," and "North" both match "north"."""
+    return "".join(ch for ch in text.lower() if ch.isalnum())

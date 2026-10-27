@@ -766,7 +766,7 @@ class SessionPanel(wx.Panel):
     # --- find (output only) ---
 
     def _on_output_key(self, event: wx.KeyEvent) -> None:
-        """Find keys, live only while the output has focus: Ctrl+F, F3, Shift+F3."""
+        """Find keys and link following, live only while the output has focus."""
         code = event.GetKeyCode()
         if (
             code == ord("F")
@@ -778,6 +778,22 @@ class SessionPanel(wx.Panel):
             return
         if code == wx.WXK_F3 and not event.ControlDown() and not event.AltDown():
             self._find_again(reverse=event.ShiftDown())
+            return
+        if (
+            code in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER)
+            and not event.ControlDown()
+            and not event.AltDown()
+            and not event.ShiftDown()
+        ):
+            # Reading the output: there is nothing to send from here, so Enter follows the
+            # link on the line the reader is on -- the keyboard form of clicking the words.
+            # The action is sent directly because the keymap has no plain "enter": _key_combo
+            # keeps it as typing, or it would stop the command box sending anything.
+            if self.app is not None:
+                self._loop.call_soon_threadsafe(
+                    self.app.on_ws_message,
+                    {"type": protocol.KEY, "key": "review:link"},
+                )
             return
         # Route bound keymap combos here too, so the panic keys and other macros work while
         # the reader is in the output. Plain arrows/typing return no combo (see _key_combo),
