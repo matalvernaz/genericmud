@@ -61,6 +61,18 @@ _OPEN_TAGS = frozenset(
     }
 )
 
+# Every tag this client knows by name. A construct that is NOT in here is only treated as
+# markup on a secure line, where the MUD has promised the line is tagged; on an open line it
+# is left as text, because that is where a player's own words come from ("say I <build>
+# things") and deleting them would be worse than showing a stray tag.
+_KNOWN_TAGS = _OPEN_TAGS | frozenset(
+    {
+        "send", "a", "expire", "version", "support", "sound", "music", "gauge", "stat",
+        "frame", "frameset", "dest", "destination", "user", "password", "image", "filter",
+        "relocate", "script", "tag", "var", "welcome", "h1", "h2", "h3", "h4", "h5", "h6",
+        "hr", "small", "tt",
+    }
+)
 # The named entities MXP inherits from HTML. Anything else is left alone: the server may
 # have defined it with <!ENTITY>, and inventing a value would be worse than showing it.
 _ENTITIES = {
@@ -193,12 +205,21 @@ class MxpParser:
         # The text of a <SEND>/<A> link, so it can be paired with its command.
         pending_link: tuple[int, str] | None = None
         for match in _TAG_RE.finditer(text):
-            out.append(text[position:match.start()])
-            position = match.end()
             name = match.group("name").lower()
             closing = bool(match.group("closing"))
             secure_ok = self._mode == MODE_SECURE or self._temp_secure
             self._temp_secure = False
+            if (
+                self._mode != MODE_SECURE
+                and name not in _KNOWN_TAGS
+                and name != "!"
+            ):
+                # Not markup this client knows, on a line where the MUD only promised open
+                # tags. That is most likely a player's own words ("say I <build> things"),
+                # so it stays as text rather than being quietly deleted.
+                continue
+            out.append(text[position:match.start()])
+            position = match.end()
             if name == "!":
                 continue  # <!ELEMENT>, <!ENTITY>, <!ATTLIST>: definitions, not output
             if name in _OPEN_TAGS or secure_ok:

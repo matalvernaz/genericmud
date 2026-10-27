@@ -560,3 +560,11 @@ def test_soundpacks_split_their_own_way_whatever_the_world_says():
     VipMudPack(ScriptApi(app.engine, source="vip")).load_source("#alias go {n;s}")
     app.on_ws_message({"type": "input", "text": "go"})
     assert sent == ["n", "s"]
+
+
+def test_what_the_player_sends_is_never_parsed_as_markup():
+    # MXP is an inbound protocol: whatever the player types goes to the MUD exactly as
+    # typed, angle brackets and all. Nothing in the outbound path touches the MXP parser.
+    app, _backend, sent, _posted = _app()
+    app.on_ws_message({"type": "input", "text": "say <b>hi</b> and <build> this"})
+    assert sent == ["say <b>hi</b> and <build> this"]
