@@ -22,6 +22,9 @@ CONNECTED = "connected"
 DISCONNECTED = "disconnected"
 FIND_RESULT = "find_result"  # outcome of a FIND, so the renderer can follow with its caret
 INPUT_MASKED = "input_masked"  # the server is hiding typed input (a password prompt)
+# Engine -> renderer: open this URL. Used where there is no native window to ask (the web UI
+# runs inside the browser), so the resource is opened by the page rather than by the engine.
+OPEN_URL = "open_url"
 
 # Renderer -> engine
 INPUT = "input"
@@ -30,17 +33,29 @@ CONNECT = "connect"
 DISCONNECT = "disconnect"
 CLIENT_ERROR = "client_error"  # renderer reporting a failure (e.g. Web Audio load/decode)
 FIND = "find"  # search the scrollback buffer; the engine owns the search, the renderer follows
+LINK = "link"  # the player activated an MXP link the renderer drew; the engine decides what it does
 
 
 def line(
-    text: str, channel: str = "main", gagged: bool = False, display_when_gagged: bool = False
+    text: str,
+    channel: str = "main",
+    gagged: bool = False,
+    display_when_gagged: bool = False,
+    links: list[tuple[int, int, str]] | None = None,
 ) -> dict[str, Any]:
+    """One rendered line. ``links`` are (start, end, command) offsets into ``text``.
+
+    Sent as offsets rather than as markup so the renderer builds real anchors from plain
+    text -- the engine has already decided what is text and what is a link, and re-parsing
+    markup in the renderer would be a second, divergent answer to that question.
+    """
     return {
         "type": LINE,
         "text": text,
         "channel": channel,
         "gagged": gagged,
         "display_when_gagged": display_when_gagged,
+        "links": [list(span) for span in (links or [])],
     }
 
 
@@ -68,6 +83,10 @@ def echo(text: str, channel: str = "main") -> dict[str, Any]:
 
 def review(text: str) -> dict[str, Any]:
     return {"type": REVIEW, "text": text}
+
+
+def open_url(url: str) -> dict[str, Any]:
+    return {"type": OPEN_URL, "url": url}
 
 
 def find(
