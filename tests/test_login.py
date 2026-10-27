@@ -700,3 +700,44 @@ def test_the_redaction_matches_whole_words_only():
     # Part of a word is not the password.
     assert _redact_secret("hunter22 and hunter2x", "hunter2") == "hunter22 and hunter2x"
     assert _redact_secret("nothing to do", "") == "nothing to do"
+
+
+def test_mxp_login_answers_when_the_mud_asks(tmp_path):
+    # The fifth method: nothing goes until the MUD requests it over MXP.
+    app, sent = _app_with(_store_with_login(tmp_path), method="mxp")
+    app.begin_login("gw")
+    app.after_connect()
+    assert sent == []  # nothing until asked
+    app.on_telnet_event(DataReceived(b"\x1b[1z<user>\r\n"))
+    app.on_telnet_event(DataReceived(b"\x1b[1z<password>\r\n"))
+    assert sent == ["hero", "secret"]
+
+
+def test_mxp_login_is_ignored_by_the_other_methods(tmp_path):
+    # Strict on purpose: a method the player did not choose must never type the login.
+    for method in ("none", "prompts"):
+        app, sent = _app_with(_store_with_login(tmp_path), method=method)
+        app.begin_login("gw")
+        app.after_connect()
+        app.on_telnet_event(DataReceived(b"\x1b[1z<user>\r\n"))
+        assert "hero" not in sent, method
+
+
+def test_mxp_login_answers_each_request_only_once(tmp_path):
+    app, sent = _app_with(_store_with_login(tmp_path), method="mxp")
+    app.begin_login("gw")
+    app.after_connect()
+    for _ in range(3):
+        app.on_telnet_event(DataReceived(b"\x1b[1z<user>\r\n"))
+        app.on_telnet_event(DataReceived(b"\x1b[1z<password>\r\n"))
+    assert sent == ["hero", "secret"]  # a repeated request cannot repeat the password
+
+
+def test_mxp_login_is_never_answered_from_an_open_line(tmp_path):
+    # A player's own words can reach an open line, so a login request there is not the MUD's.
+    app, sent = _app_with(_store_with_login(tmp_path), method="mxp")
+    app.begin_login("gw")
+    app.after_connect()
+    app.on_telnet_event(DataReceived(b"<user>\r\n"))
+    app.on_telnet_event(DataReceived(b"<password>\r\n"))
+    assert sent == []

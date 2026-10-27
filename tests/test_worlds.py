@@ -153,7 +153,7 @@ def test_an_unknown_connect_method_falls_back_to_no_auto_connect(tmp_path):
     # player never chose.
     path = tmp_path / "worlds.toml"
     path.write_text(
-        '[[world]]\nname = "Odd"\nhost = "o.example"\nport = 23\nconnect_method = "mxp"\n',
+        '[[world]]\nname = "Odd"\nhost = "o.example"\nport = 23\nconnect_method = "zmodem"\n',
         encoding="utf-8",
     )
     assert load_worlds(path)[0].connect_method == "none"
@@ -187,3 +187,4 @@ def test_a_world_file_without_the_setting_does_not_log_in(tmp_path):
     path = tmp_path / "worlds.toml"
     path.write_text('[[world]]\nname = "Old"\nhost = "o.example"\nport = 23\n', encoding="utf-8")
     assert load_worlds(path)[0].connect_method == "none"
+

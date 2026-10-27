@@ -115,6 +115,9 @@ class MxpOutcome:
     # address needs the world's own setting, so that is the caller's job, not the
     # parser's.
     images: list[tuple[str, str]] = field(default_factory=list)
+    # <USER>/<PASSWORD>: the MUD asked for the login over MXP. Only ever set on a secure
+    # line, because an open line is where players' own words arrive.
+    login: list[str] = field(default_factory=list)
     # <NOBR>: the caller must join the next line onto this one instead of breaking.
     no_break: bool = False
     # The same instruction, plus an open <P>: either way the next line belongs on this one.
@@ -181,6 +184,7 @@ class MxpParser:
         replies: list[str] = []
         links: list[tuple[str, str]] = []
         images: list[tuple[str, str]] = []
+        login: list[str] = []
         # A server can mark its own text secure and then drop to open (or locked) partway
         # through a line, before a player's words. So the line is read in pieces, each in the
         # mode in force where it starts. Partway through, a line may only become less trusted:
@@ -190,13 +194,13 @@ class MxpParser:
         position = 0
         for match in _LINE_MODE_RE.finditer(line):
             piece = line[position:match.start()]
-            pieces.append(self._parse_piece(piece, cues, replies, links, images))
+            pieces.append(self._parse_piece(piece, cues, replies, links, images, login))
             code = int(match.group("mode"))
             if code in (0, 2, 3):
                 self._apply_mode(code)
             position = match.end()
-        pieces.append(self._parse_piece(line[position:], cues, replies, links, images))
-        return self._finish("".join(pieces), cues, replies, links, images)
+        pieces.append(self._parse_piece(line[position:], cues, replies, links, images, login))
+        return self._finish("".join(pieces), cues, replies, links, images, login)
 
     def _parse_piece(
         self,
@@ -205,13 +209,14 @@ class MxpParser:
         replies: list[str],
         links: list[tuple[str, str]],
         images: list[tuple[str, str]],
+        login: list[str],
     ) -> str:
         """Read one stretch of a line in the current mode."""
         if self._mode == MODE_LOCKED:
             return text
         # Tags first, entities second. &lt; exists precisely to write a literal "<", so
         # expanding entities before parsing tags would turn it into one and eat it.
-        text = self._parse_tags(text, cues, replies, links, images)
+        text = self._parse_tags(text, cues, replies, links, images, login)
         return self._expand_entities(text)
 
     def _finish(
@@ -221,6 +226,7 @@ class MxpParser:
         replies: list[str],
         links: list[tuple[str, str]],
         images: list[tuple[str, str]],
+        login: list[str],
     ) -> MxpOutcome:
         """Apply the one spacing rule that outlives a line.
 
@@ -239,6 +245,7 @@ class MxpParser:
             replies=replies,
             links=links,
             images=images,
+            login=login,
             no_break=no_break,
             # <NOBR> is one line's instruction; an open <P> lasts until </P>.
             join_next=no_break or self._paragraph,
@@ -263,6 +270,7 @@ class MxpParser:
         replies: list[str],
         links: list[tuple[str, str]],
         images: list[tuple[str, str]],
+        login: list[str],
     ) -> str:
         """Remove every tag, acting on the few that mean something here."""
         out: list[str] = []
@@ -290,7 +298,7 @@ class MxpParser:
             if name in _OPEN_TAGS or secure_ok:
                 self._act(
                     name, match.group("attrs"), closing, cues, replies, out, links, images,
-                    secure=secure_ok,
+                    login, secure=secure_ok,
                 )
             # A secure tag on an open line is dropped without action, exactly as the
             # security rule requires; its text stays, which is the safe half.
@@ -317,6 +325,7 @@ class MxpParser:
         out: list[str],
         links: list[tuple[str, str]],
         images: list[tuple[str, str]],
+        login: list[str],
         *,
         secure: bool = False,
     ) -> None:
@@ -343,6 +352,11 @@ class MxpParser:
             replies.append(self._version_reply(attrs))
         elif name == "support" and not closing:
             replies.append(_support_reply(attrs))
+        elif name in ("user", "password") and not closing:
+            # The MUD is asking for the login. Only reachable on a secure line, because
+            # every branch of _parse_tags runs _act for a secure tag or an open one, and
+            # these are not open tags.
+            login.append(name)
 
     def _version_reply(self, attrs: str) -> str:
         # The MUD may send <VERSION styleversion>; the client echoes the style back.
@@ -517,3 +531,5 @@ def _sound_cue(kind: str, attrs: str) -> SoundCue | None:
             parts.append(f"{positional[position]}={_unquote(token)}")
             position += 1
     return _parse_cue("music" if kind == "music" else "sound", " ".join(parts))
+
+

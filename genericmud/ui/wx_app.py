@@ -1489,10 +1489,10 @@ class FindDialog(wx.Dialog):
 # What a world's log file choices are called in its details, in LOG_FILES order.
 _LOG_FILE_LABELS = ("A new file each session", "One file per day", "One file for this world")
 # In the order CONNECT_METHODS visits them, so the value and its label stay together.
-# A login sent in answer to the MUD's own MXP request is not offered yet (see config/worlds.py).
 _CONNECT_LABELS = (
     ("none", "No auto-connect — send no login"),
     ("prompts", "Answer the MUD's prompts — name, then password when asked"),
+    ("mxp", "Let the MUD ask (MXP) — send the login only when the MUD requests it"),
     ("mush", "MUSH/MOO — send CONNECT name password"),
     ("diku", "Diku — send name, then password"),
 )
