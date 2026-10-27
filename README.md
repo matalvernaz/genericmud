@@ -479,11 +479,11 @@ same thing MUSHclient does with one: the file name is the link, and following it
 
 Either way the MUD has to say where the file lives. Most MUDs send just a file
 name and expect the client to be configured with their images address: a world's
-details take it as **Images web address**. A MUD that names the address itself
-works with no setting at all — which is all the browser-only `--web` mode has,
-since it takes a host and a port rather than a saved world. Only `http` and
-`https` are ever followed, and never an address on your own network except the
-machine the MUD runs on.
+details take it as **Images web address**, and the browser-only `--web` mode takes
+it as `--images <address>` (that mode has no saved world, so its settings come
+from the command line, like `--sounds`). A MUD that names the address in the tag
+itself needs no setting at all. Only `http` and `https` are ever followed, and
+never an address on your own network except the machine the MUD runs on.
 
 ## Sharing your setup
 
