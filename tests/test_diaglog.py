@@ -115,4 +115,5 @@ def test_startup_prunes_the_config_folders_logs(tmp_path, monkeypatch):
     monkeypatch.setattr("genericmud.config.worlds.config_dir", lambda: tmp_path)
     monkeypatch.setattr(diaglog, "prune_old_logs", lambda folder: looked_in.append(folder))
     entry._prune_old_logs()
-    assert looked_in == [tmp_path / "logs"]
+    # The app's own logs live in diagnostics/, apart from the session transcripts.
+    assert looked_in == [tmp_path / "logs" / "diagnostics"]

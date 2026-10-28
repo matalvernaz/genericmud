@@ -151,10 +151,22 @@ main output.
 transcript to read later. In a world's details you can have it log automatically
 whenever it connects, choose a new file each session, one file per day or one
 file for the world, and leave out what you type. Every log adds to its file and
-starts with the date and time, and the files are in the `logs` folder. If you
-stop a log with Alt+Shift+L, it stays stopped until you close the tab. While the
-MUD is hiding your typing — which is how they ask for a password — the log
-records `***` instead of what you typed.
+starts with the date and time. If you stop a log with Alt+Shift+L, it stays
+stopped until you close the tab. While the MUD is hiding your typing — which is
+how they ask for a password — the log records `***` instead of what you typed.
+
+Logs are kept in two folders, so that reading one back and reporting a problem
+never mean sorting through the other:
+
+| Folder | Holds |
+|---|---|
+| `logs/worlds` | session logs — what the MUD said, and what you typed if the world logs that |
+| `logs/diagnostics` | the per-run diagnostic trace and any `crash-*.log` files |
+
+**`/logs`** says both folder paths and how many files are in each. Logs written
+by an older version sat together in `logs` itself; the first time this version
+starts it moves them into the right folder, and leaves anything it doesn't
+recognise exactly where it is.
 
 ## Getting around the game
 
@@ -482,7 +494,7 @@ above.
 - **Logs and saved data** live in `genericmud-data` next to the exe (or
   `~/.genericmud` when running from source).
 - Found a bug? Open an issue or send your newest `crash-*.log` and
-  `diagnostic-*.log` from the logs folder.
+  `diagnostic-*.log` from `logs/diagnostics`.
 
 ## For developers
 

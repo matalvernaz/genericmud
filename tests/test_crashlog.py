@@ -94,7 +94,8 @@ def test_install_opens_log_and_sets_hooks(tmp_path, monkeypatch):
     try:
         assert log is not None
         assert sys.excepthook is not original_sys  # main-thread hook installed
-        assert log.path.exists() and log.path.parent == tmp_path / "logs"
+        # Crash dumps live with the diagnostic traces, apart from the session logs.
+        assert log.path.exists() and log.path.parent == tmp_path / "logs" / "diagnostics"
     finally:
         if log is not None:
             log.stop()
