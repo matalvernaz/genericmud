@@ -772,18 +772,20 @@ def test_editing_a_world_changes_its_open_tab_at_once(frame, monkeypatch):
         panel.app = EngineApp(VoiceRouter(RecordingBackend(), clock=lambda: 0.0), keymap={})
         edited = World(
             "W", "new.example", 4000, encoding="cp1251", sounds="C:/sounds",
-            command_separator="|", log_commands=False, download_sounds=False,
+            command_separator="|", log_commands=False, echo_input=True, download_sounds=False,
         )
         panel.apply_world_settings(edited)
         loop.run_until_complete(asyncio.sleep(0.01))
         assert panel.app.command_separator == "|"
         assert panel.app.log_commands is False
+        assert panel.app.echo_input is True
         assert panel.app.download_media is False
         # How the tab connects stays as it opened until the world is opened again, so a
         # reconnect (Ctrl+D) can't mix a new host with the old encoding and sounds.
         assert (panel.world.host, panel.world.port) == ("w.example", 23)
         assert (panel.world.encoding, panel.world.sounds) == ("auto", None)
         assert panel.world.command_separator == "|" and not panel.world.log_commands
+        assert panel.world.echo_input is True
     finally:
         panel.app = None
         panel.Destroy()

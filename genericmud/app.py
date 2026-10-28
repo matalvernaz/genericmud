@@ -457,6 +457,9 @@ class EngineApp:
         self.log_automatically = False
         self.log_files = "session"
         self.log_commands = True
+        # Echo what you type into the output (MUSHclient's "echo input"). Off unless the world
+        # asks for it, and separate from logging it: either one can be wanted without the other.
+        self.echo_input = False
         self.download_media = True  # fetch the sounds a MUD offers (the world's choice)
         self.credentials = credentials
         self._login: AutoLogin | None = None
@@ -561,6 +564,7 @@ class EngineApp:
         self.log_automatically = world.log_automatically
         self.log_files = world.log_files
         self.log_commands = world.log_commands
+        self.echo_input = world.echo_input
         self.download_media = world.download_sounds
 
     def on_connect(self, world: str, *, socket_open: bool = True) -> ActivationResult | None:
@@ -1666,6 +1670,8 @@ class EngineApp:
                 self._login.disarm()
             if self.log_commands:
                 self._log("> ***" if self._input_masked else f"> {text}")
+            if self.echo_input and not self._input_masked:
+                self._echo_input(text)
         if allow_client and self._client_command(text):
             return
         if self._safe_speedwalk(text) or self._speedwalk(text):
@@ -1674,6 +1680,20 @@ class EngineApp:
             self._send(line)
             if self.nav.record(line):  # build the breadcrumb trail from manual walking
                 self._on_player_moved()
+
+    def _echo_input(self, text: str) -> None:
+        """Put what the player typed into the output too (the world's "echo input" setting).
+
+        Buffered rather than only shown, so the review keys can read a command back after it
+        has scrolled away -- the point of having it at all for someone listening. Not spoken:
+        the player typed it, and hearing every command repeated is noise.
+
+        Never reached with hidden input: a password prompt goes down _dispatch_secret, and the
+        guard at the call site keeps masked text out even if that ever changes.
+        """
+        line = Line(f"> {text}")
+        self.buffer.append(line)
+        self._post(protocol.line(line.plain_text))
 
     def _dispatch_secret(self, text: str) -> None:
         """Send what was typed while the server hides input (a password), exactly as typed.

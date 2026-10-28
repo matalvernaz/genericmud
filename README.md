@@ -156,6 +156,13 @@ stop a log with Alt+Shift+L, it stays stopped until you close the tab. While the
 MUD is hiding your typing — which is how they ask for a password — the log
 records `***` instead of what you typed.
 
+The same world details also have **Echo input in the output**, off by default,
+which puts each command you send into the output as well — buffered like any
+other line, so the review keys can read back something you typed that has
+scrolled away. It never speaks them, and it never shows a password. It's
+separate from the logging one on purpose: wanting your commands on screen and
+wanting them in a file are two different things.
+
 ## Getting around the game
 
 - The **numpad** is a compass: 8 north, 2 south, 4 west, 6 east, the corner keys

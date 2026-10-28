@@ -44,6 +44,10 @@ class World:
     log_automatically: bool = False
     log_files: str = "session"
     log_commands: bool = True
+    # Show what you type in the output as well ("echo input", as MUSHclient calls it). Off by
+    # default: it doubles every command into the scrollback. Nothing to do with the log above --
+    # wanting one without the other is the normal case.
+    echo_input: bool = False
     # Fetch the sounds a MUD offers to download (MSP U=, GMCP Client.Media). The MSP spec has
     # clients let the player switch that off.
     download_sounds: bool = True
@@ -152,6 +156,7 @@ def load_worlds(path: Path | None = None) -> list[World]:
                 log_automatically=entry.get("log_automatically") is True,
                 log_files=normalize_log_files(entry.get("log_files")),
                 log_commands=entry.get("log_commands") is not False,
+                echo_input=entry.get("echo_input") is True,
                 download_sounds=entry.get("download_sounds") is not False,
             )
         )
@@ -188,6 +193,8 @@ def save_worlds(worlds: list[World], path: Path | None = None) -> None:
             lines.append(f"log_files = {_quote(log_files)}")
         if not world.log_commands:
             lines.append("log_commands = false")
+        if world.echo_input:
+            lines.append("echo_input = true")
         if not world.download_sounds:
             lines.append("download_sounds = false")
         blocks.append("\n".join(lines))
