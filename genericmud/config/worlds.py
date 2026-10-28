@@ -23,6 +23,18 @@ CLIENT_COMMAND_PREFIX = "/"
 # How a world names its log files: a new file each session (the original behaviour), one per
 # day, or one for the world. Each appends.
 LOG_FILES = ("session", "day", "world")
+# How a stored username and password are sent. "prompts" answers the MUD's own prompts --
+# named that way rather than "automatic", which would promise detection of the right method
+# that it does not do. The rest are MUSHclient's habits, for MUDs that expect the login typed
+# blind. MXP is deliberately absent: the client does not parse MXP yet (see protocol/telnet.py
+# and connection.py), so a MXP login could not be sent without advertising a protocol whose
+# markup would then leak into the output.
+CONNECT_METHODS = ("none", "prompts", "mush", "diku")
+# What an absent setting means, and what a new world starts on. "none" for both: with no
+# login stored there is nothing to send, so a world that offered to log in and then did
+# nothing would be worse than one that never offered. It also keeps the setting honest --
+# nobody gets a login method they didn't choose.
+DEFAULT_CONNECT_METHOD = "none"
 
 
 @dataclass
@@ -44,6 +56,12 @@ class World:
     log_automatically: bool = False
     log_files: str = "session"
     log_commands: bool = True
+    # Login: how the stored username and password are sent (CONNECT_METHODS), and commands
+    # to type once the connection is up, one per line. The username and password themselves
+    # live in the credential store, never here -- a world file is what "Export This World"
+    # zips up and what people share.
+    connect_method: str = DEFAULT_CONNECT_METHOD
+    post_connect_commands: str = ""
     # Fetch the sounds a MUD offers to download (MSP U=, GMCP Client.Media). The MSP spec has
     # clients let the player switch that off.
     download_sounds: bool = True
@@ -52,6 +70,8 @@ class World:
         self.encoding = normalize_encoding(self.encoding)
         self.command_separator = normalize_separator(self.command_separator)
         self.log_files = normalize_log_files(self.log_files)
+        self.connect_method = normalize_connect_method(self.connect_method)
+        self.post_connect_commands = normalize_post_connect(self.post_connect_commands)
         # No real world name or host has a control character in it, and one gets in easily:
         # a shared world zip can carry a newline, Ctrl+Backspace in a Windows edit box
         # types a DEL. Keep them out of the name every rule, map and folder is filed under.
@@ -79,6 +99,26 @@ def normalize_separator(value: object) -> str:
 def normalize_log_files(value: object) -> str:
     """One of LOG_FILES; anything else is a new file each session."""
     return value if value in LOG_FILES else "session"
+
+
+def normalize_connect_method(value: object) -> str:
+    """One of CONNECT_METHODS; anything else means no auto-connect."""
+    return value if value in CONNECT_METHODS else DEFAULT_CONNECT_METHOD
+
+
+def normalize_post_connect(value: object) -> str:
+    """The commands to send after connecting: one per line, blank lines dropped.
+
+    Reads either a TOML array of strings or one multi-line string, so a hand-edited world
+    file can use whichever reads better.
+    """
+    if isinstance(value, (list, tuple)):
+        raw = [item for item in value if isinstance(item, str)]
+    elif isinstance(value, str):
+        raw = value.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    else:
+        raw = []
+    return "\n".join(line.strip() for line in raw if line.strip())
 
 
 def parse_port(value: object) -> int:
@@ -153,6 +193,10 @@ def load_worlds(path: Path | None = None) -> list[World]:
                 log_files=normalize_log_files(entry.get("log_files")),
                 log_commands=entry.get("log_commands") is not False,
                 download_sounds=entry.get("download_sounds") is not False,
+                connect_method=normalize_connect_method(entry.get("connect_method")),
+                post_connect_commands=normalize_post_connect(
+                    entry.get("post_connect_commands")
+                ),
             )
         )
     return worlds
@@ -190,6 +234,13 @@ def save_worlds(worlds: list[World], path: Path | None = None) -> None:
             lines.append("log_commands = false")
         if not world.download_sounds:
             lines.append("download_sounds = false")
+        connect_method = normalize_connect_method(world.connect_method)
+        if connect_method != DEFAULT_CONNECT_METHOD:
+            lines.append(f"connect_method = {_quote(connect_method)}")
+        post_connect = normalize_post_connect(world.post_connect_commands)
+        if post_connect:  # an array, so a command with a quote in it needs no escaping
+            items = ", ".join(_quote(line) for line in post_connect.split("\n"))
+            lines.append(f"post_connect_commands = [{items}]")
         blocks.append("\n".join(lines))
     atomic_write_text(target, "\n\n".join(blocks) + "\n")
 

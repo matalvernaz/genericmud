@@ -30,7 +30,12 @@ from genericmud.automation.variables import VariableEntry, list_variables
 from genericmud.bridge import protocol
 from genericmud.completion import OutputWordIndex
 from genericmud.config.atomic import atomic_write_text
-from genericmud.config.worlds import config_dir
+from genericmud.config.worlds import (
+    DEFAULT_CONNECT_METHOD,
+    config_dir,
+    normalize_connect_method,
+    normalize_post_connect,
+)
 from genericmud.mapping import RoomMap, load_map, save_map, spoken_count
 from genericmud.model.buffer import Buffer, Line
 from genericmud.navigation import Navigator, SafeWalk, expand_speedwalk
@@ -91,6 +96,10 @@ _STATE_SAVE_DELAY_SECONDS = 2.0  # a pack's SaveState is written this soon after
 # in a session (changing a password in-game) only WONT ECHO or Escape ends the hiding.
 _LOGIN_PHASE_SECONDS = 300.0
 _HIDDEN_INPUT_TIMEOUT_SECONDS = 60.0
+# How long an automatic login waits for a login prompt before the world's after-connect
+# commands are typed anyway. A MUD that asks sends its prompt within a second or two; this
+# only exists so a MUD that never asks can't hold those commands for the whole session.
+_POST_CONNECT_FALLBACK_SECONDS = 30.0
 # Transport statuses that mean the socket went away or was replaced (transport/connection.py).
 _SOCKET_CHANGES = (
     "disconnected",
@@ -120,6 +129,21 @@ _REVIEW_VERBS = frozenset(
 _CHANNEL_REVIEW_VERBS = frozenset(
     {"prev", "next", "older", "newer", "prev_word", "next_word"}
 )
+
+
+def _redact_secret(text: str, secret: str) -> str:
+    """``text`` with ``secret`` taken out of it, as a whole whitespace-separated token.
+
+    A server that echoes what it reads will send a blind login straight back -- MUSH/MOO's
+    "CONNECT hero hunter2", or a "Password: hunter2" for Diku -- and that line would be
+    spoken and shown, and written to the session log. Matching whole tokens rather than any
+    substring keeps a one-character password from redacting half the output, while still
+    catching both shapes.
+    """
+    if not secret:
+        return text
+    pattern = re.compile(r"(?<!\S)" + re.escape(secret) + r"(?!\S)")
+    return pattern.sub("***", text)
 
 
 def _parse_count(text: str) -> int | None:
@@ -361,6 +385,8 @@ class EngineApp:
         diag: DiagnosticLog | None = None,
         suppress_reconnect: Callable[[], None] | None = None,
         encoding: str = AUTO,
+        connect_method: str = DEFAULT_CONNECT_METHOD,
+        post_connect_commands: str = "",
         other_worlds: Callable[[], Iterable[str]] | None = None,
         clock: Callable[[], float] | None = None,
         withdraw_option: Callable[[int], None] | None = None,
@@ -460,6 +486,16 @@ class EngineApp:
         self.download_media = True  # fetch the sounds a MUD offers (the world's choice)
         self.credentials = credentials
         self._login: AutoLogin | None = None
+        # How this world logs in, and what it types once the connection is up (both come from
+        # the world file; the username and password themselves come from the credential store).
+        self.connect_method = normalize_connect_method(connect_method)
+        self.post_connect_commands = normalize_post_connect(post_connect_commands)
+        self._post_connect_sent = False  # per connection: a reconnect types them again
+        # Login lines to type the moment the socket is up (MUSH/MOO and Diku). Queued rather
+        # than sent because on_connect runs before the transport has connected.
+        self._pending_login: list[str] = []
+        # The password to strip out of anything incoming, while it is in play (see _handle_line).
+        self._password_guard = ""
         self._walk: SafeWalk | None = None
         self._user_aliases: dict[str, str] = {}  # interactively-made aliases: pattern -> command
         self._user_triggers: dict[str, str] = {}
@@ -561,6 +597,10 @@ class EngineApp:
         self.log_automatically = world.log_automatically
         self.log_files = world.log_files
         self.log_commands = world.log_commands
+        # How this world logs in, and what it types once connected. A reconnect from this tab
+        # reads both again, so an edit has to reach the running session and not just the file.
+        self.connect_method = world.connect_method
+        self.post_connect_commands = world.post_connect_commands
         self.download_media = world.download_sounds
 
     def on_connect(self, world: str, *, socket_open: bool = True) -> ActivationResult | None:
@@ -1032,16 +1072,62 @@ class EngineApp:
             pass  # a state write must never break session close
 
     def begin_login(self, world: str) -> None:
-        """Arm auto-login for ``world`` if credentials are stored for it."""
+        """Decide how this connection logs in. Sends nothing: the socket may not exist yet.
+
+        ``on_connect`` runs *before* the transport connects, because the packs have to be
+        armed before the first bytes arrive. A blind login typed here would therefore go
+        nowhere -- _send raises ConnectionError and the line is dropped in silence -- so the
+        up-front lines are queued, and :meth:`after_connect` types them once the socket is up.
+
+        Four methods (``config.worlds.CONNECT_METHODS``). "prompts" answers the MUD's own
+        prompts; "mush" and "diku" type the login blind, for MUDs that never ask; "none"
+        sends no credentials at all.
+        """
         self._login_phase_started = self._clock()  # a fresh connection means fresh prompts
         self._login = None
-        if self.credentials is None:
-            return
-        creds = self.credentials.get(world)
-        if creds is None:
+        self._pending_login = []
+        self._password_guard = ""  # only once a password is actually going out
+        self._post_connect_sent = False  # a reconnect types them again
+        creds = self.credentials.get(world) if self.credentials is not None else None
+        if creds is None or self.connect_method == "none":
+            # Nothing to send. A stored login under "none" is deliberately ignored -- that is
+            # what "no auto-connect" means.
             return
         username, password = creds
-        self._login = AutoLogin(username, password, self._send_for_login)
+        self._password_guard = password  # so a server that echoes it can't say it back
+        if self.connect_method == "mush":
+            self._pending_login = [f"CONNECT {username} {password}"]  # MUSH/MOO's one line
+        elif self.connect_method == "diku":
+            self._pending_login = [username, password]  # Diku's name, then password
+        else:
+            self._login = AutoLogin(username, password, self._send_for_login)
+
+    def after_connect(self) -> None:
+        """The socket is up: type this world's up-front login, then its commands.
+
+        Both reconnect paths reach this through :meth:`after_reconnect`; a first connection
+        reaches it from the window, which is the only place that knows the transport opened.
+        """
+        for line in self._pending_login:
+            self._send_for_login(line)
+        self._pending_login = []
+        if self._login is not None:
+            # A MUD that never shows a login prompt would otherwise hold the after-connect
+            # commands for the whole session. The send is idempotent, so this is harmless
+            # when the prompt arrives quickly.
+            self._schedule(_POST_CONNECT_FALLBACK_SECONDS, self._send_post_connect)
+        else:
+            # No prompt to wait for, so nothing is pending between the login and the commands.
+            self._send_post_connect()
+
+    def _send_post_connect(self) -> None:
+        """Type the world's after-connect commands, once per connection."""
+        if self._post_connect_sent:
+            return
+        self._post_connect_sent = True
+        for command in self.post_connect_commands.split("\n"):
+            if command:
+                self._send(command)  # straight to the wire: these are for the MUD, not /commands
 
     def _send_for_login(self, text: str) -> None:
         """Auto-login's typing. On a slow link its password goes out before the WILL ECHO
@@ -1192,6 +1278,13 @@ class EngineApp:
                 )
         spans = parse_ansi(text)
         plain = "".join(span.text for span in spans)
+        if self._password_guard:
+            # A blind login is typed before the server has switched echo off, so a server
+            # that echoes what it reads sends the password back. It must not reach the
+            # output box, the screen reader, the session log or a soundpack.
+            redacted = _redact_secret(plain, self._password_guard)
+            if redacted != plain:
+                plain, spans = redacted, []  # the colours belonged to the text that's gone
         if not plain.strip():
             return  # blank line: any sound cues already fired; don't show/speak "blank"
         for pack in self._mush_packs:
@@ -1201,6 +1294,10 @@ class EngineApp:
         self._log(line.plain_text)  # full session log, including gagged-from-speech
         if self._login is not None and not self._login.done:
             self._login.feed(line.plain_text)  # answer name/password prompts
+            if self._login.done:
+                # The password is away (or the wait gave up): what the world asked to type
+                # once connected goes now.
+                self._send_post_connect()
         if self._walk is not None and self._walk.active:
             self._walk.on_line(line.plain_text)  # halt the walk if a step was blocked
         if line.substitute is not None:
@@ -2095,6 +2192,9 @@ class EngineApp:
         # A fresh socket means fresh login prompts; the old AutoLogin is marked done, so
         # re-arm it or a reconnect strands the user at the login screen.
         self.begin_login(self.name)
+        # The socket is live here (both reconnect paths call this only after connect()), so
+        # this is where a blind login and the after-connect commands actually go out.
+        self.after_connect()
 
     def on_connection_status(self, message: str) -> None:
         """Surface a transport status line (reconnecting, reconnected) to the user.
