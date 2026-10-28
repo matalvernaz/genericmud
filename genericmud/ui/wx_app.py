@@ -44,6 +44,7 @@ from genericmud.config.ui_prefs import UiPrefs, load_ui_prefs, save_ui_prefs
 from genericmud.config.update_prefs import is_snoozed, load_prefs, save_prefs, snooze_timestamp
 from genericmud.config.world_files import migrate_world_files
 from genericmud.config.worlds import (
+    DEFAULT_CONNECT_METHOD,
     DEFAULT_PORT,
     DEFAULT_SEPARATOR,
     LOG_FILES,
@@ -94,7 +95,7 @@ from genericmud.protocol.charset import AUTO, ENCODING_CHOICES, encoding_label
 from genericmud.scripting import user_scripts
 from genericmud.scripting.api import MESSAGE_BUTTONS, ScriptApi
 from genericmud.session.crashlog import install_loop_exception_handler
-from genericmud.session.credentials import PlaintextCredentialStore
+from genericmud.session.credentials import CredentialStore, open_credential_store
 from genericmud.session.diaglog import DiagnosticLog, make_diagnostic_log
 from genericmud.session.hub import SessionHub
 from genericmud.sound.bass_backend import make_sound_backend
@@ -255,7 +256,7 @@ class SessionPanel(wx.Panel):
         keymap: dict,
         world: World,
         packs: PackStore | None = None,
-        credentials: PlaintextCredentialStore | None = None,
+        credentials: CredentialStore | None = None,
         hub: SessionHub | None = None,
         diag: DiagnosticLog | None = None,
         prefs: UiPrefs | None = None,
@@ -366,6 +367,9 @@ class SessionPanel(wx.Panel):
             suppress_reconnect=self._connection.suppress_reconnect,
             withdraw_option=self._connection.withdraw_remote,
             encoding=self.world.encoding,
+            connect_method=self.world.connect_method,
+            post_connect_commands=self.world.post_connect_commands,
+            mxp=self.world.mxp,
             other_worlds=lambda: [world.name for world in load_worlds()],
         )
         self.app.on_focus_changed(self._focused)  # what the window said before this existed
@@ -397,6 +401,9 @@ class SessionPanel(wx.Panel):
             await self._connection.connect(self.world.host, self.world.port, tls=self.world.tls)
             if self._diag is not None:
                 self._diag.event("connect.ok", host=self.world.host)
+            # First, before anything else can queue up: the socket is finally open, so a
+            # blind login (MUSH/MOO, Diku) and the after-connect commands can be typed.
+            self.app.after_connect()
             self._post(protocol.echo(f"* Connected to {self.world.name}"))
             # Speak it too: connect failure and reconnect both speak, so success staying
             # echo-only was inconsistent and left a quiet MUD's first moment ambiguous.
@@ -745,7 +752,7 @@ class SessionPanel(wx.Panel):
     # --- find (output only) ---
 
     def _on_output_key(self, event: wx.KeyEvent) -> None:
-        """Find keys, live only while the output has focus: Ctrl+F, F3, Shift+F3."""
+        """Find keys and link following, live only while the output has focus."""
         code = event.GetKeyCode()
         if (
             code == ord("F")
@@ -757,6 +764,22 @@ class SessionPanel(wx.Panel):
             return
         if code == wx.WXK_F3 and not event.ControlDown() and not event.AltDown():
             self._find_again(reverse=event.ShiftDown())
+            return
+        if (
+            code in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER)
+            and not event.ControlDown()
+            and not event.AltDown()
+            and not event.ShiftDown()
+        ):
+            # Reading the output: there is nothing to send from here, so Enter follows the
+            # link on the line the reader is on -- the keyboard form of clicking the words.
+            # The action is sent directly because the keymap has no plain "enter": _key_combo
+            # keeps it as typing, or it would stop the command box sending anything.
+            if self.app is not None:
+                self._loop.call_soon_threadsafe(
+                    self.app.on_ws_message,
+                    {"type": protocol.KEY, "key": "review:link"},
+                )
             return
         # Route bound keymap combos here too, so the panic keys and other macros work while
         # the reader is in the output. Plain arrows/typing return no combo (see _key_combo),
@@ -1025,10 +1048,11 @@ class SessionPanel(wx.Panel):
             self.app.on_focus_changed(focused)
 
     def apply_world_settings(self, world: World) -> None:  # UI thread
-        """Take a world's edited command stacking, logging and sound downloads now. How the
-        tab connects (host, port, TLS, encoding, sounds) stays as it opened, so a reconnect from
-        this tab doesn't reach a new host with the old encoding; those apply when the world is
-        opened again."""
+        """Take a world's edited command stacking, logging, MXP, login and
+        sound downloads now. How
+        the tab connects (host, port, TLS, encoding, sounds) stays as it opened, so a reconnect
+        from this tab doesn't reach a new host with the old encoding; those apply when the world
+        is opened again."""
         self.world = replace(
             self.world,
             command_stacking=world.command_stacking,
@@ -1036,6 +1060,9 @@ class SessionPanel(wx.Panel):
             log_automatically=world.log_automatically,
             log_files=world.log_files,
             log_commands=world.log_commands,
+            mxp=world.mxp,
+            connect_method=world.connect_method,
+            post_connect_commands=world.post_connect_commands,
             download_sounds=world.download_sounds,
         )
         if self.app is not None:
@@ -1418,6 +1445,15 @@ class FindDialog(wx.Dialog):
 
 # What a world's log file choices are called in its details, in LOG_FILES order.
 _LOG_FILE_LABELS = ("A new file each session", "One file per day", "One file for this world")
+# In the order CONNECT_METHODS visits them, so the value and its label stay together.
+# MXP is absent because genericMud doesn't parse MXP yet (see config/worlds.py).
+_CONNECT_LABELS = (
+    ("none", "No auto-connect — send no login"),
+    ("prompts", "Answer the MUD's prompts — name, then password when asked"),
+    ("mxp", "Let the MUD ask (MXP) — send the login only when the MUD requests it"),
+    ("mush", "MUSH/MOO — send CONNECT name password"),
+    ("diku", "Diku — send name, then password"),
+)
 
 _ID_NEW_WORLD = wx.ID_HIGHEST + 1
 _ID_EDIT_WORLD = wx.ID_HIGHEST + 2
@@ -1436,10 +1472,14 @@ class WorldDialog(wx.Dialog):
         save_default: bool = True,
         show_save: bool = True,
         lock_name: bool = False,
+        credentials: CredentialStore | None = None,
         note: str = "",
     ) -> None:
         super().__init__(parent, title=title)
         self._world: World | None = None
+        self._credentials = credentials
+        # Kept so a rename can move the stored login: the store is keyed by world name.
+        self._initial_name = initial.name if initial is not None else None
         # Why the dialog is up, first in the window: NVDA reads a dialog's text that labels no
         # control as it opens, and it can be read again. Said aloud just before the dialog
         # instead, it was cut off when the dialog took the focus.
@@ -1474,6 +1514,16 @@ class WorldDialog(wx.Dialog):
         self._download_sounds.SetName("Download sounds the MUD offers")
         self._download_sounds.SetValue(True)
         grid.Add(self._download_sounds, 1, wx.EXPAND)
+        self._mxp = wx.CheckBox(self, label="Understand M&XP markup")
+        self._mxp.SetName("Understand MXP markup")
+        self._mxp.SetValue(True)
+        grid.Add(self._mxp, 1, wx.EXPAND)
+        # Where <IMAGE> looks for a file when the tag names no address of its own. Most MUDs
+        # expect the client to be told this; without it an image can't be found, so it's
+        # skipped -- which is also what MUSHclient does with an address-less image.
+        self._images_url = self._labeled_text(
+            grid, "&Images web address:", "Images web address", ""
+        )
 
         grid.Add((0, 0))
         self._tls = wx.CheckBox(self, label="Use &TLS")
@@ -1516,6 +1566,49 @@ class WorldDialog(wx.Dialog):
         self._log_commands.SetName("Log what you type (passwords stay hidden)")
         self._log_commands.SetValue(True)
         grid.Add(self._log_commands, 1, wx.EXPAND)
+
+        # Login. The username and password go to the credential store, never to worlds.toml:
+        # that file is what "Export This World" zips up and what people share. The method and
+        # the after-connect commands aren't secret, so they live in the world file with the
+        # rest of the per-world settings.
+        self._username = self._labeled_text(grid, "&Username:", "Username")
+        grid.Add(wx.StaticText(self, label="&Password:"), 0, wx.ALIGN_CENTER_VERTICAL)
+        password_row = wx.BoxSizer(wx.HORIZONTAL)
+        # Two controls rather than one restyled: wx won't reliably turn the password style on
+        # and off on a live control (macOS ignores it), and a half-applied toggle would show
+        # dots while claiming to reveal. Only one is shown at a time.
+        self._password = wx.TextCtrl(self, style=wx.TE_PASSWORD)
+        self._password.SetName("Password")
+        self._password_plain = wx.TextCtrl(self)
+        self._password_plain.SetName("Password, revealed")
+        self._password_plain.Hide()
+        password_row.Add(self._password, 1, wx.EXPAND)
+        password_row.Add(self._password_plain, 1, wx.EXPAND)
+        grid.Add(password_row, 1, wx.EXPAND)
+        self._reveal = wx.CheckBox(self, label="&Reveal password")
+        self._reveal.SetName("Reveal password")
+        self._reveal.SetValue(False)  # always masked to begin with
+        self._reveal.Bind(wx.EVT_CHECKBOX, self._on_reveal)
+        grid.Add((0, 0))
+        grid.Add(self._reveal, 1, wx.EXPAND)
+        grid.Add(wx.StaticText(self, label="&Connect:"), 0, wx.ALIGN_CENTER_VERTICAL)
+        self._connect = wx.Choice(self, choices=[label for _value, label in _CONNECT_LABELS])
+        self._connect.SetName("Connect")
+        # The list starts on the default, so Down arrow walks away from it rather than back
+        # to it: with the login boxes empty there is nothing to send, and a world that
+        # promised to log in and then didn't would be worse than one that never offered.
+        self._connect.SetSelection(
+            [value for value, _label in _CONNECT_LABELS].index(DEFAULT_CONNECT_METHOD)
+        )
+        grid.Add(self._connect, 1, wx.EXPAND)
+        grid.Add(
+            wx.StaticText(self, label="Sent after &connecting, one command per line:"),
+            0,
+            wx.ALIGN_TOP,
+        )
+        self._post_connect = wx.TextCtrl(self, style=wx.TE_MULTILINE, size=(-1, 70))
+        self._post_connect.SetName("Commands sent after connecting")
+        grid.Add(self._post_connect, 1, wx.EXPAND)
 
         self._save: wx.CheckBox | None = None
         if show_save:
@@ -1564,6 +1657,18 @@ class WorldDialog(wx.Dialog):
             self._log_files.SetSelection(LOG_FILES.index(initial.log_files))
             self._log_commands.SetValue(initial.log_commands)
             self._download_sounds.SetValue(initial.download_sounds)
+            methods = [value for value, _label in _CONNECT_LABELS]
+            self._connect.SetSelection(methods.index(initial.connect_method))
+            self._post_connect.SetValue(initial.post_connect_commands)
+            stored = self._credentials.get(initial.name) if self._credentials is not None else None
+            if stored is not None:
+                # Pre-filled rather than blank: leaving it blank could not tell "keep the
+                # password I already have" from "forget it", and one of the two is a trap.
+                self._username.SetValue(stored[0])
+                self._password.SetValue(stored[1])
+                self._password_plain.SetValue(stored[1])
+            self._mxp.SetValue(initial.mxp)
+            self._images_url.SetValue(initial.images_url)
         if lock_name:
             self._name.Enable(False)
             self._host.SetFocus()
@@ -1614,8 +1719,52 @@ class WorldDialog(wx.Dialog):
             log_files=LOG_FILES[self._log_files.GetSelection()],
             log_commands=self._log_commands.GetValue(),
             download_sounds=self._download_sounds.GetValue(),
+            connect_method=_CONNECT_LABELS[self._connect.GetSelection()][0],
+            post_connect_commands=self._post_connect.GetValue(),
+            mxp=self._mxp.GetValue(),
+            images_url=self._images_url.GetValue().strip(),
         )
+        self._store_credentials(self._world)
         self.EndModal(wx.ID_OK)
+
+    def _password_value(self) -> str:
+        """Whatever is in the password field right now, revealed or not.
+
+        Keyed on which control is visible, not on the Reveal checkbox: by the time the
+        checkbox's own handler runs the checkbox has already flipped, and reading it there
+        would take the hidden (empty) control's value and drop what the player typed.
+        """
+        if self._password_plain.IsShown():
+            return self._password_plain.GetValue()
+        return self._password.GetValue()
+
+    def _on_reveal(self, _event: wx.CommandEvent) -> None:
+        """Show the password in plain text, or hide it again."""
+        reveal = self._reveal.GetValue()
+        typed = self._password_value()  # whichever control was on screen holds the truth
+        self._password.SetValue(typed)
+        self._password_plain.SetValue(typed)
+        self._password.Show(not reveal)
+        self._password_plain.Show(reveal)
+        self.Layout()
+        (self._password_plain if reveal else self._password).SetFocus()
+
+    def _store_credentials(self, world: World) -> None:
+        """Save this world's login to the credential store, following a rename.
+
+        The store is keyed by the world's name, so a rename that left the old key behind
+        would silently stop the world logging in.
+        """
+        if self._credentials is None or not self.should_save():
+            return
+        username = self._username.GetValue().strip()
+        password = self._password_value()
+        if username or password:
+            self._credentials.set(world.name, username, password)
+        else:
+            self._credentials.delete(world.name)  # both blank means "forget this login"
+        if self._initial_name is not None and self._initial_name != world.name:
+            self._credentials.delete(self._initial_name)
 
     def get_world(self) -> World:
         if self._world is None:
@@ -3672,9 +3821,20 @@ class GenericMudFrame(wx.Frame):
         self._loop = loop
         self._keymap = keymap
         self._packs = PackStore(config_dir() / "soundpacks")
-        self._credentials = PlaintextCredentialStore(config_dir() / "credentials.json")
+        # Logins go to the OS credential store where one is available, and any older plaintext
+        # logins are migrated out of the file on the way past. Where there is none, the reason
+        # is kept and spoken below: a silent fallback to a readable file is the one thing a
+        # user must never have to discover later.
+        self._credentials, plain_reason = open_credential_store(config_dir() / "credentials.json")
+        self._credentials_note = (
+            None
+            if plain_reason is None
+            else f"Login details are stored unencrypted in the credentials file: {plain_reason}."
+        )
         self._hub = SessionHub()  # shared across all open sessions for cross-character play
         self._announcer = make_voice_backend()  # speaks UI status for screen-reader users
+        if self._credentials_note is not None:
+            self._announcer.speak(self._credentials_note)
         self._diag = make_diagnostic_log()  # one sound-path trace file for the whole process
         # Before any session opens: move each saved world's files off the ASCII-only name an
         # older build filed them under, so its rules and map are where it looks for them.
@@ -3905,6 +4065,7 @@ class GenericMudFrame(wx.Frame):
             save_default=True,
             show_save=show_save,
             lock_name=lock_name,
+            credentials=self._credentials,
         )
         try:
             if dialog.ShowModal() != wx.ID_OK:
@@ -4394,6 +4555,7 @@ class GenericMudFrame(wx.Frame):
                 f"The {world.name} soundpack is installed, with its own sounds: the Sounds "
                 "folder can stay blank. Press Enter to connect."
             ),
+            credentials=self._credentials,
         )
         try:
             if dialog.ShowModal() != wx.ID_OK:
@@ -4444,6 +4606,7 @@ class GenericMudFrame(wx.Frame):
             offer_trust=needs_trust,
             save_default=True,
             note=note,
+            credentials=self._credentials,
         )
         if connect.ShowModal() == wx.ID_OK:
             world = connect.get_world()
@@ -4485,6 +4648,7 @@ def _world_from_args(args) -> World | None:
     return World(
         name=args.host, host=args.host, port=args.port, tls=args.tls,
         sounds=args.sounds, encoding=getattr(args, "encoding", AUTO),
+        images_url=getattr(args, "images", "") or "",
     )
 
 
@@ -4520,3 +4684,5 @@ def run(args, recovery=None) -> None:
 def _run_loop(loop: asyncio.AbstractEventLoop) -> None:
     asyncio.set_event_loop(loop)
     loop.run_forever()
+
+

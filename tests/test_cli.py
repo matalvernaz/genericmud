@@ -15,3 +15,13 @@ def test_port_accepts_valid_tcp_port():
 def test_port_rejects_invalid_values(port):
     with pytest.raises(SystemExit):
         _parse_args(["mud.example", port])
+
+
+def test_an_images_address_is_optional_and_web_only():
+    # The browser-only mode has no saved world, so its pictures address comes from here.
+    assert _parse_args(["mud.example"]).images is None
+    assert _parse_args(["mud.example", "--images", "https://mud.example/art/"]).images == (
+        "https://mud.example/art/"
+    )
+    with pytest.raises(SystemExit):
+        _parse_args(["mud.example", "--images", "file:///C:/pictures"])

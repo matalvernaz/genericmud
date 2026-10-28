@@ -14,6 +14,7 @@ import re
 import time
 import traceback
 from collections.abc import Callable, Iterable
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -30,7 +31,12 @@ from genericmud.automation.variables import VariableEntry, list_variables
 from genericmud.bridge import protocol
 from genericmud.completion import OutputWordIndex
 from genericmud.config.atomic import atomic_write_text
-from genericmud.config.worlds import config_dir
+from genericmud.config.worlds import (
+    DEFAULT_CONNECT_METHOD,
+    config_dir,
+    normalize_connect_method,
+    normalize_post_connect,
+)
 from genericmud.mapping import RoomMap, load_map, save_map, spoken_count
 from genericmud.model.buffer import Buffer, Line
 from genericmud.navigation import Navigator, SafeWalk, expand_speedwalk
@@ -40,7 +46,8 @@ from genericmud.packs.setup import GitUpdateResult
 from genericmud.protocol import msdp
 from genericmud.protocol import telnet as T
 from genericmud.protocol.charset import AUTO, ServerTextCodec
-from genericmud.protocol.msp import parse_msp_line
+from genericmud.protocol.msp import SoundCue, parse_msp_line
+from genericmud.protocol.mxp import IMAGE_MARK, MxpParser, resolve_image_url
 from genericmud.protocol.oob import OobMessage, ServerStatus, from_subnegotiation
 from genericmud.render.ansi import parse_ansi
 from genericmud.review.channels import ChannelReview
@@ -91,6 +98,19 @@ _STATE_SAVE_DELAY_SECONDS = 2.0  # a pack's SaveState is written this soon after
 # in a session (changing a password in-game) only WONT ECHO or Escape ends the hiding.
 _LOGIN_PHASE_SECONDS = 300.0
 _HIDDEN_INPUT_TIMEOUT_SECONDS = 60.0
+# How long an automatic login waits for a login prompt before the world's after-connect
+# commands are typed anyway. A MUD that asks sends its prompt within a second or two; this
+# only exists so a MUD that never asks can't hold those commands for the whole session.
+_POST_CONNECT_FALLBACK_SECONDS = 30.0
+# How much text an MXP <P> may hold before it is emitted anyway. A paragraph is meant to
+# join a room description's worth of lines, not to buffer a session: past this the client
+# says what it has and starts again, so a server that never closes <P> costs nobody their
+# memory or their speech.
+_MXP_MAX_JOIN_CHARS = 4000
+_MXP_MAX_JOIN_LINES = 50
+# ...and how long it may hold them. A server sending one line every 45 seconds would reach
+# the line cap after half an hour of silence, so size alone does not bound latency.
+_MXP_MAX_JOIN_SECONDS = 30.0
 # Transport statuses that mean the socket went away or was replaced (transport/connection.py).
 _SOCKET_CHANGES = (
     "disconnected",
@@ -111,6 +131,10 @@ _MSDP_ROOM_VARS = frozenset(
 # reload (which clears user_rules.SOURCE) can't silently delete them.
 INTERACTIVE_SOURCE = "user-interactive"
 
+# An <A HREF> link is opened, never typed at the MUD: only these schemes are followed, so a
+# MUD can't send the platform off to launch a local application through the shell.
+_LINK_URL_SCHEMES = ("http://", "https://")
+
 _REVIEW_VERBS = frozenset(
     {
         "prev_line", "next_line", "prev_word", "next_word", "prev_char", "next_char",
@@ -120,6 +144,60 @@ _REVIEW_VERBS = frozenset(
 _CHANNEL_REVIEW_VERBS = frozenset(
     {"prev", "next", "older", "newer", "prev_word", "next_word"}
 )
+
+
+def _redact_secret(text: str, secret: str) -> str:
+    """``text`` with ``secret`` taken out of it, as a whole whitespace-separated token.
+
+    A server that echoes what it reads will send a blind login straight back -- MUSH/MOO's
+    "CONNECT hero hunter2", or a "Password: hunter2" for Diku -- and that line would be
+    spoken and shown, and written to the session log. Matching whole tokens rather than any
+    substring keeps a one-character password from redacting half the output, while still
+    catching both shapes.
+    """
+    if not secret:
+        return text
+    pattern = re.compile(r"(?<!\S)" + re.escape(secret) + r"(?!\S)")
+    return pattern.sub("***", text)
+def _strip_image_marks(text: str) -> tuple[str, list[int]]:
+    """``text`` without its inline-image markers, and where each marker sat once they're gone.
+
+    Kept separate from the parser because the offset is only knowable here: everything between
+    the parser and this point (MXP tags, MSP markers, ANSI codes, password redaction) rewrites
+    the text, so a position counted any earlier would point at the wrong place.
+    """
+    if IMAGE_MARK not in text:
+        return text, []
+    kept: list[str] = []
+    positions: list[int] = []
+    for char in text:
+        if char == IMAGE_MARK:
+            positions.append(len(kept))
+        else:
+            kept.append(char)
+    return "".join(kept), positions
+
+
+def _link_positions(text: str, links: list[tuple[str, str]]) -> list[tuple[int, int, str]]:
+    """Where each link's words sit inside the finished line, as (start, end, command).
+
+    The parser reports a link by its words, not by position, because everything between the
+    parser and here (ANSI, MSP, redaction) rewrites the text. Searching forward from the
+    previous link keeps a word that appears twice ("a fountain by a fountain") pointing at the
+    right occurrence, in the order the MUD sent them. A link whose words are gone -- a pack
+    substituted the line -- is dropped: a wrong position would make the wrong words clickable.
+    """
+    spans: list[tuple[int, int, str]] = []
+    cursor = 0
+    for words, command in links:
+        if not words:
+            continue
+        start = text.find(words, cursor)
+        if start < 0:
+            continue
+        cursor = start + len(words)
+        spans.append((start, cursor, command))
+    return spans
 
 
 def _parse_count(text: str) -> int | None:
@@ -361,6 +439,9 @@ class EngineApp:
         diag: DiagnosticLog | None = None,
         suppress_reconnect: Callable[[], None] | None = None,
         encoding: str = AUTO,
+        connect_method: str = DEFAULT_CONNECT_METHOD,
+        post_connect_commands: str = "",
+        mxp: bool = True,
         other_worlds: Callable[[], Iterable[str]] | None = None,
         clock: Callable[[], float] | None = None,
         withdraw_option: Callable[[int], None] | None = None,
@@ -373,6 +454,9 @@ class EngineApp:
         self.pack_updates: PackUpdates | None = None
         self._world_packs: list[str] = []  # the packs enabled for this session's world
         self._send = send or (lambda _text: None)
+        # Kept here as well as on the pack host: MXP's replies (<VERSION>, <SUPPORTS>) are
+        # raw bytes rather than a line, and this is the only place that needs to send one.
+        self._raw_send = send_raw
         self._post = post or (lambda _message: None)
         # Wired by the UI to the transport; the engine only knows the server said goodbye.
         self._suppress_reconnect = suppress_reconnect or (lambda: None)
@@ -460,6 +544,32 @@ class EngineApp:
         self.download_media = True  # fetch the sounds a MUD offers (the world's choice)
         self.credentials = credentials
         self._login: AutoLogin | None = None
+        # How this world logs in, and what it types once the connection is up (both come from
+        # the world file; the username and password themselves come from the credential store).
+        self.connect_method = normalize_connect_method(connect_method)
+        self.post_connect_commands = normalize_post_connect(post_connect_commands)
+        self._post_connect_sent = False  # per connection: a reconnect types them again
+        # Login lines to type the moment the socket is up (MUSH/MOO and Diku). Queued rather
+        # than sent because on_connect runs before the transport has connected.
+        self._pending_login: list[str] = []
+        # The password to strip out of anything incoming, while it is in play (see _handle_line).
+        self._password_guard = ""
+        # MXP: on unless this world turns it off. The parser strips every tag, so what
+        # reaches the output is plain text whatever the server sends.
+        self.mxp_enabled = mxp
+        # Where an <IMAGE> without a URL argument looks for its file. Most MUDs expect the
+        # client to have this configured, the same way MSP's U= expects a sounds location.
+        self.images_url = ""
+        self._mxp = MxpParser()
+        self._mxp_join = ""  # text held across lines by <NOBR> or an open <P>
+        self._mxp_join_links = []  # links gathered in that held text, emitted with it
+        self._mxp_join_images = []  # ditto for images, whose markers ride in the text itself
+        self._mxp_held_lines = 0  # how many lines that hold has swallowed so far
+        # One deadline, not one per <P>: paragraphs do not nest and the stream is sequential,
+        # so at most one hold is ever open. The token stops a stale timer from flushing a
+        # paragraph that has since ended and been replaced.
+        self._mxp_timer_armed = False
+        self._mxp_timer_token = 0
         self._walk: SafeWalk | None = None
         self._user_aliases: dict[str, str] = {}  # interactively-made aliases: pattern -> command
         self._user_triggers: dict[str, str] = {}
@@ -561,7 +671,15 @@ class EngineApp:
         self.log_automatically = world.log_automatically
         self.log_files = world.log_files
         self.log_commands = world.log_commands
+        # How this world logs in, and what it types once connected. A reconnect from this tab
+        # reads both again, so an edit has to reach the running session and not just the file.
+        self.connect_method = world.connect_method
+        self.post_connect_commands = world.post_connect_commands
         self.download_media = world.download_sounds
+        # MXP is parsed here, not by the window, so switching it off for a world that is already
+        # open can take effect at once: no reconnect needed to stop seeing its markup.
+        self.mxp_enabled = world.mxp
+        self.images_url = world.images_url
 
     def on_connect(self, world: str, *, socket_open: bool = True) -> ActivationResult | None:
         """The on-connect sequence: register with the hub, activate packs, arm login.
@@ -1032,16 +1150,67 @@ class EngineApp:
             pass  # a state write must never break session close
 
     def begin_login(self, world: str) -> None:
-        """Arm auto-login for ``world`` if credentials are stored for it."""
+        """Decide how this connection logs in. Sends nothing: the socket may not exist yet.
+
+        ``on_connect`` runs *before* the transport connects, because the packs have to be
+        armed before the first bytes arrive. A blind login typed here would therefore go
+        nowhere -- _send raises ConnectionError and the line is dropped in silence -- so the
+        up-front lines are queued, and :meth:`after_connect` types them once the socket is up.
+
+        Four methods (``config.worlds.CONNECT_METHODS``). "prompts" answers the MUD's own
+        prompts; "mush" and "diku" type the login blind, for MUDs that never ask; "none"
+        sends no credentials at all.
+        """
         self._login_phase_started = self._clock()  # a fresh connection means fresh prompts
         self._login = None
-        if self.credentials is None:
-            return
-        creds = self.credentials.get(world)
-        if creds is None:
+        self._pending_login = []
+        self._password_guard = ""  # only once a password is actually going out
+        self._post_connect_sent = False  # a reconnect types them again
+        self._mxp_login_sent: set[str] = set()  # which of USER/PASSWORD this link has
+        creds = self.credentials.get(world) if self.credentials is not None else None
+        if creds is None or self.connect_method == "none":
+            # Nothing to send. A stored login under "none" is deliberately ignored -- that is
+            # what "no auto-connect" means.
             return
         username, password = creds
-        self._login = AutoLogin(username, password, self._send_for_login)
+        self._password_guard = password  # so a server that echoes it can't say it back
+        if self.connect_method == "mxp":
+            # The MUD asks over MXP, so nothing is typed until it does. If it never asks,
+            # nothing is sent at all -- that is what "let the MUD ask" has to mean.
+            return
+        if self.connect_method == "mush":
+            self._pending_login = [f"CONNECT {username} {password}"]  # MUSH/MOO's one line
+        elif self.connect_method == "diku":
+            self._pending_login = [username, password]  # Diku's name, then password
+        else:
+            self._login = AutoLogin(username, password, self._send_for_login)
+
+    def after_connect(self) -> None:
+        """The socket is up: type this world's up-front login, then its commands.
+
+        Both reconnect paths reach this through :meth:`after_reconnect`; a first connection
+        reaches it from the window, which is the only place that knows the transport opened.
+        """
+        for line in self._pending_login:
+            self._send_for_login(line)
+        self._pending_login = []
+        if self._login is not None or self.connect_method == "mxp":
+            # A MUD that never asks for the login would otherwise hold the after-connect
+            # commands for the whole session. The send is idempotent, so this is harmless
+            # when the request arrives quickly.
+            self._schedule(_POST_CONNECT_FALLBACK_SECONDS, self._send_post_connect)
+        else:
+            # No prompt to wait for, so nothing is pending between the login and the commands.
+            self._send_post_connect()
+
+    def _send_post_connect(self) -> None:
+        """Type the world's after-connect commands, once per connection."""
+        if self._post_connect_sent:
+            return
+        self._post_connect_sent = True
+        for command in self.post_connect_commands.split("\n"):
+            if command:
+                self._send(command)  # straight to the wire: these are for the MUD, not /commands
 
     def _send_for_login(self, text: str) -> None:
         """Auto-login's typing. On a slow link its password goes out before the WILL ECHO
@@ -1152,9 +1321,145 @@ class EngineApp:
             self._emit_line(self._pending)
             self._pending = ""
 
+    def _mxp_feed(
+        self, text: str
+    ) -> tuple[str, list[SoundCue], list[tuple[str, str]], list[tuple[str, str]]]:
+        """Parse one line as MXP, returning plain text, its sound cues and its links.
+
+        ``<NOBR>`` and an open ``<P>`` are the only MXP rules that span lines: both mean the
+        next line belongs on this one, so the text is held rather than emitted. Everything
+        else is decided within the line. Links are held with the text they came from, or a
+        link tagged on a swallowed line would point at a paragraph that doesn't contain it.
+
+        The hold is bounded. A ``<P>`` that is never closed would otherwise keep growing and
+        keep the user in silence for as long as it lasted, so once enough has been gathered
+        the paragraph is emitted in one piece and the stream carries on. Nothing is dropped:
+        the join simply restarts, and the parser's own paragraph state is untouched.
+        """
+        if not self.mxp_enabled:
+            return text, [], [], []
+        # The held text comes back already stripped of its tags, so a link seen while it was
+        # being gathered has to be carried alongside it; the join is what brings them together.
+        # An image needs no such care: it left a marker in the text, which survives the join.
+        links = self._mxp_join_links
+        self._mxp_join_links = []
+        images = self._mxp_join_images
+        self._mxp_join_images = []
+        if self._mxp_join:
+            text = self._mxp_join + text
+            self._mxp_join = ""
+        outcome = self._mxp.feed(text)
+        for payload in outcome.replies:
+            self._mxp_reply(payload)
+        for request in outcome.login:
+            self._mxp_login(request)
+        links.extend(outcome.links)
+        images.extend(outcome.images)
+        if not outcome.join_next:
+            self._release_mxp_hold()
+            return outcome.text, outcome.cues, links, images
+        self._mxp_held_lines += 1
+        if (
+            self._mxp_held_lines >= _MXP_MAX_JOIN_LINES
+            or len(outcome.text) >= _MXP_MAX_JOIN_CHARS
+        ):
+            held = outcome.text
+            self._release_mxp_hold()
+            if self._diag is not None:
+                self._diag.event("mxp.join_flushed", reason="size")
+            return held, outcome.cues, links, images
+        self._mxp_join = outcome.text
+        self._mxp_join_links = links  # for a deadline flush, which has no text to re-parse
+        self._mxp_join_images = images
+        self._arm_mxp_deadline()
+        return "", outcome.cues, [], []
+
+    def _release_mxp_hold(self) -> None:
+        """Forget a hold, and any deadline waiting on it."""
+        self._mxp_join = ""
+        self._mxp_join_links = []
+        self._mxp_join_images = []
+        self._mxp_held_lines = 0
+        self._mxp_timer_armed = False
+        self._mxp_timer_token += 1  # a timer already scheduled must now do nothing
+
+    def _arm_mxp_deadline(self) -> None:
+        """Start the clock on a hold, once, however many lines it swallows."""
+        if self._mxp_timer_armed:
+            return
+        self._mxp_timer_armed = True
+        self._mxp_timer_token += 1
+        token = self._mxp_timer_token
+        self._schedule(
+            _MXP_MAX_JOIN_SECONDS, lambda: self._mxp_deadline_reached(token)
+        )
+
+    def _mxp_deadline_reached(self, token: int) -> None:
+        """Say what a long-held paragraph has so far, rather than leave the user in silence."""
+        if token != self._mxp_timer_token or not self._mxp_join or self._closed:
+            return
+        held = self._mxp_join
+        held_links = self._mxp_join_links
+        held_images = self._mxp_join_images
+        self._release_mxp_hold()
+        if self._diag is not None:
+            self._diag.event("mxp.join_flushed", reason="timeout")
+        self._emit_parsed_line(held, links=held_links, images=held_images)
+
+    def _mxp_login(self, request: str) -> None:
+        """The MUD asked for the login over MXP: answer once, and only if told to.
+
+        Strict on purpose. Only the "mxp" connect method answers, so a player who chose a
+        different method never gets a login sent by a route they did not choose; and each of
+        USER and PASSWORD is answered at most once per connection, so a repeated request
+        cannot make the client type the password twice.
+        """
+        if self.connect_method != "mxp" or request in self._mxp_login_sent:
+            return
+        creds = self.credentials.get(self.name) if self.credentials is not None else None
+        if creds is None:
+            return
+        username, password = creds
+        self._mxp_login_sent.add(request)
+        self._send_for_login(username if request == "user" else password)
+        if request == "password":
+            self._send_post_connect()  # the login is done, so what follows can go
+
+    def _mxp_reply(self, payload: str) -> None:
+        """Answer ``<VERSION>``/``<SUPPORT>`` on a secure line, as the spec requires.
+
+        The secure line (``ESC[1z``) is how the MUD tells a client reply from something a
+        player typed, so it is not optional.
+        """
+        if self._diag is not None:
+            self._diag.event("mxp.reply", payload=payload)
+        if self._raw_send is None:
+            return  # headless: nothing to answer on, and the diag event records it
+        try:
+            self._raw_send(MxpParser.secure_line(payload).encode("utf-8"))
+        except (OSError, ConnectionError):
+            pass  # a dead socket must not break the line that provoked the question
+
     def _emit_line(self, text: str) -> None:
+        # Strip MXP markup before anything reads it; links and images ride along with the text.
+        text, mxp_cues, links, images = self._mxp_feed(text)
+        self._emit_parsed_line(text, mxp_cues, links, images)
+
+    def _emit_parsed_line(
+        self,
+        text: str,
+        mxp_cues: list[SoundCue] | None = None,
+        links: list[tuple[str, str]] | None = None,
+        images: list[tuple[str, str]] | None = None,
+    ) -> None:
+        """Show and speak a line that has already been through the MXP parser.
+
+        Kept separate because the deadline flushes a held paragraph: sending that text back
+        through :meth:`_emit_line` would feed it to the parser again, find the paragraph still
+        open, and hold it a second time -- the flush would emit nothing at all.
+        """
         text, cues = parse_msp_line(text)  # strip MSP markers before colour parsing
-        for cue in cues:
+        for cue in [*(mxp_cues or []), *cues]:
             channel = MUSIC_CATEGORY if cue.kind == "music" else DEFAULT_CATEGORY
             if cue.is_stop:
                 if cue.url:  # the spec's way to set where later cues download from
@@ -1192,15 +1497,49 @@ class EngineApp:
                 )
         spans = parse_ansi(text)
         plain = "".join(span.text for span in spans)
-        if not plain.strip():
+        if self._password_guard:
+            # A blind login is typed before the server has switched echo off, so a server
+            # that echoes what it reads sends the password back. It must not reach the
+            # output box, the screen reader, the session log or a soundpack.
+            redacted = _redact_secret(plain, self._password_guard)
+            if redacted != plain:
+                plain, spans = redacted, []  # the colours belonged to the text that's gone
+        # Inline images: the parser left a marker wherever one sits, and only now is its offset
+        # knowable. An image whose address can't be worked out simply isn't there. The
+        # blank-line decision waits until after this pass: a line that is only a picture has no
+        # text, but it is not blank.
+        plain, marks = _strip_image_marks(plain)
+        if marks:
+            spans = [replace(span, text=span.text.replace(IMAGE_MARK, "")) for span in spans]
+            spans = [span for span in spans if span.text]
+        shown: list[tuple[int, str]] = []
+        for (file, base), offset in zip(images or [], marks, strict=False):
+            url = resolve_image_url(
+                file, base, self.images_url, self.media.trusted_address()
+            )
+            if url:
+                shown.append((offset, url))
+                if self._diag is not None:
+                    self._diag.event("mxp.image", file=file, url=url)
+        if not plain.strip() and not shown:
             return  # blank line: any sound cues already fired; don't show/speak "blank"
         for pack in self._mush_packs:
             pack.dispatch_line(plain)
-        line = Line(plain, spans=spans)
+        line_links = list(links or [])
+        # A text client has no way to show a picture, so an image also becomes a link: the
+        # same thing MUSHclient does with one (it turns <IMAGE> into a hyperlink), and the
+        # only form in which a picture can be reached without seeing it.
+        for _offset, url in shown:
+            line_links.append((url.rsplit("/", 1)[-1], url))
+        line = Line(plain, spans=spans, links=line_links)
         self.engine.process_line(line)  # may set line.channel and gag flags
         self._log(line.plain_text)  # full session log, including gagged-from-speech
         if self._login is not None and not self._login.done:
             self._login.feed(line.plain_text)  # answer name/password prompts
+            if self._login.done:
+                # The password is away (or the wait gave up): what the world asked to type
+                # once connected goes now.
+                self._send_post_connect()
         if self._walk is not None and self._walk.active:
             self._walk.on_line(line.plain_text)  # halt the walk if a step was blocked
         if line.substitute is not None:
@@ -1210,7 +1549,7 @@ class EngineApp:
             if not line.plain_text.strip():
                 return
         policy = self.channels.policy(line.channel)
-        if policy.speak and not line.gagged and self.engine.line_speech:
+        if policy.speak and not line.gagged and self.engine.line_speech and line.plain_text.strip():
             self.voice.speak(
                 line.plain_text,
                 channel=(policy.voice or line.channel),
@@ -1224,6 +1563,14 @@ class EngineApp:
                     line.plain_text,
                     gagged=line.gagged,
                     display_when_gagged=line.display_when_gagged,
+                    # Positions are only meaningful for the words the MUD sent; a substituted
+                    # line shows a pack's own text, so it gets none.
+                    links=(
+                        _link_positions(line.plain_text, line.links)
+                        if line.substitute is None
+                        else []
+                    ),
+                    images=shown if line.substitute is None else [],
                 )
             )
 
@@ -1581,6 +1928,12 @@ class EngineApp:
                 self._dispatch_command(command)
         elif kind == protocol.KEY:
             self._handle_key(message.get("key", ""))
+        elif kind == protocol.LINK:
+            # The web renderer drew a real anchor and the player activated it. Only the
+            # command comes back: what it may do is decided here, not in the renderer.
+            self._follow_link(
+                str(message.get("text", "")), str(message.get("command", ""))
+            )
         elif kind == protocol.CLIENT_ERROR:
             self._handle_client_error(message)
         elif kind == protocol.FIND:
@@ -1970,16 +2323,21 @@ class EngineApp:
 
     def _handle_key(self, combo: str) -> None:
         action = self.keymap.get(combo)
-        if action is None:
+        if action is None and ":" not in combo:
             self.engine.press_key(combo)  # user-defined macro
             return
-        namespace, _, argument = action.partition(":")
+        # A renderer control with a meaning of its own for a key (Enter in the output box,
+        # where there is nothing to send) passes the action itself. Keymap combos never
+        # contain a colon and actions always do, so the two can't be confused.
+        namespace, _, argument = (action or combo).partition(":")
         if namespace == "recall":
             # "recall:N" or "recall:<channel>:N" (channel filters the scrollback).
             channel, _, count = argument.rpartition(":")
             n = _parse_count(count)
             if n is not None:
                 self._speak_review(self.review.recall(n, channel=channel or None))
+        elif namespace == "review" and argument == "link":
+            self._activate_link()
         elif namespace == "review" and argument in _REVIEW_VERBS:
             if not self.review.active:
                 self.review.enter()
@@ -2005,6 +2363,62 @@ class EngineApp:
         elif namespace == "diag" and argument == "where":
             self._diag_where()
         # "soundpack:toggle" and other namespaces are wired as features land.
+
+    def _activate_link(self) -> None:
+        """Follow the MXP link under the review cursor.
+
+        The mouse version of this is "click the words"; the keyboard version is the same
+        gesture one level down -- the review cursor's word picks the link, and on a line
+        with a single link anywhere on it counts. Nothing is remembered between presses:
+        the link lives on its line, so reading back through the scrollback still follows
+        the right one.
+        """
+        if not self.review.active:
+            self.review.enter()  # nothing reviewed yet, so act on the newest line
+        links = self.review.links()
+        if not links:
+            self._speak_review("no link on this line")
+            return
+        chosen = self.review.link()
+        if chosen is None:
+            # Several links and the word isn't in one: name them rather than guess, so one
+            # more Alt+Right lands on a word that picks the intended one. A link with no
+            # words of its own (an image, or an empty <SEND>) is named by what it does.
+            named = "; ".join(
+                f"{number} {text or command}"
+                for number, (text, command) in enumerate(links, 1)
+            )
+            self._speak_review(f"{len(links)} links: {named}")
+            return
+        self._follow_link(*chosen)
+
+    def _follow_link(self, text: str, command: str) -> None:
+        """Do what a link asks, whoever asked it: the review cursor or a click in the browser."""
+        command = command.strip()
+        if not command:
+            return
+        if self._diag is not None:
+            self._diag.event("mxp.link", text=text, command=command)
+        if command.lower().startswith(_LINK_URL_SCHEMES):
+            self._open_link(command)
+            return
+        # A link is the MUD's text, not the player's, so it may not run a client command:
+        # a MUD could otherwise tag any word with <SEND HREF="/quit"> and end the session.
+        self._dispatch_command(command, allow_client=False)
+        self._speak_system(f"{text}: {command}" if text else f"link: {command}")
+
+    def _open_link(self, url: str) -> None:
+        """Open an <A HREF> link in the browser, announcing it because focus moves."""
+        window = self.pack_window
+        if window is not None:
+            if not window.open_url(url):
+                self._speak_system("no browser to open that link")
+                return
+        else:
+            # Nothing native to ask: the web UI runs inside a browser, so the renderer opens
+            # the tab. Only the schemes checked by the caller ever reach here.
+            self._post(protocol.open_url(url))
+        self._speak_system(f"opening {url}")
 
     def _diag_where(self) -> None:
         """Speak the diagnostic log path + a one-line summary (often names the failure)."""
@@ -2095,6 +2509,9 @@ class EngineApp:
         # A fresh socket means fresh login prompts; the old AutoLogin is marked done, so
         # re-arm it or a reconnect strands the user at the login screen.
         self.begin_login(self.name)
+        # The socket is live here (both reconnect paths call this only after connect()), so
+        # this is where a blind login and the after-connect commands actually go out.
+        self.after_connect()
 
     def on_connection_status(self, message: str) -> None:
         """Surface a transport status line (reconnecting, reconnected) to the user.
@@ -2195,3 +2612,5 @@ class EngineApp:
             self._speak_system(f"logging to {path.name}")
         else:
             self._post(protocol.echo(f"* Logging to {path.name}"))
+
+

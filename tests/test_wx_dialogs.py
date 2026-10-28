@@ -772,13 +772,21 @@ def test_editing_a_world_changes_its_open_tab_at_once(frame, monkeypatch):
         panel.app = EngineApp(VoiceRouter(RecordingBackend(), clock=lambda: 0.0), keymap={})
         edited = World(
             "W", "new.example", 4000, encoding="cp1251", sounds="C:/sounds",
-            command_separator="|", log_commands=False, download_sounds=False,
+            command_separator="|", log_commands=False, mxp=False, download_sounds=False,
+            connect_method="prompts", post_connect_commands="look\nscore",
         )
         panel.apply_world_settings(edited)
         loop.run_until_complete(asyncio.sleep(0.01))
         assert panel.app.command_separator == "|"
         assert panel.app.log_commands is False
+        # MXP is parsed engine-side, so turning it off reaches the running tab rather than
+        # waiting for a reconnect.
+        assert panel.app.mxp_enabled is False
         assert panel.app.download_media is False
+        # A reconnect from this tab reads the login settings again, so an edit has to land in
+        # the running session rather than only in the world file.
+        assert panel.app.connect_method == "prompts"
+        assert panel.app.post_connect_commands == "look\nscore"
         # How the tab connects stays as it opened until the world is opened again, so a
         # reconnect (Ctrl+D) can't mix a new host with the old encoding and sounds.
         assert (panel.world.host, panel.world.port) == ("w.example", 23)
@@ -1460,6 +1468,80 @@ def test_genericmud_is_in_front_while_it_is_the_active_program(frame, tmp_path, 
         main.Destroy()
         loop.run_until_complete(asyncio.sleep(0.01))
         loop.close()
+
+
+def test_the_world_dialog_prefills_saves_and_moves_a_stored_login(frame, tmp_path):
+    from genericmud.config.worlds import World
+    from genericmud.session.credentials import PlaintextCredentialStore
+    from genericmud.ui.wx_app import WorldDialog
+
+    store = PlaintextCredentialStore(tmp_path / "c.json")
+    store.set("Old", "hero", "secret")
+    dialog = WorldDialog(frame, World("Old", "h.example", 4000), credentials=store)
+    try:
+        _accept(dialog)  # EndModal on a dialog that was never shown
+        # Pre-filled rather than blank, so leaving it alone can't mean "forget my password".
+        assert dialog._username.GetValue() == "hero"
+        assert dialog._password_value() == "secret"
+        dialog._name.SetValue("New")  # a rename must move the login with the world
+        dialog._on_ok(wx.CommandEvent())
+        assert store.get("New") == ("hero", "secret")
+        assert store.get("Old") is None
+    finally:
+        dialog.Destroy()
+
+
+def test_revealing_the_password_keeps_what_was_typed(frame, tmp_path):
+    from genericmud.config.worlds import World
+    from genericmud.ui.wx_app import WorldDialog
+
+    dialog = WorldDialog(frame, World("W", "h.example", 4000))
+    try:
+        assert dialog._password.IsShown() and not dialog._password_plain.IsShown()
+        dialog._password.SetValue("hunter2")
+        dialog._reveal.SetValue(True)
+        dialog._on_reveal(wx.CommandEvent())
+        assert dialog._password_plain.IsShown() and not dialog._password.IsShown()
+        assert dialog._password_value() == "hunter2"
+        # Typing while revealed, then hiding again, must keep what was typed.
+        dialog._password_plain.SetValue("hunter3")
+        dialog._reveal.SetValue(False)
+        dialog._on_reveal(wx.CommandEvent())
+        assert dialog._password_value() == "hunter3"
+    finally:
+        dialog.Destroy()
+
+
+def test_clearing_both_login_fields_forgets_the_stored_login(frame, tmp_path):
+    from genericmud.config.worlds import World
+    from genericmud.session.credentials import PlaintextCredentialStore
+    from genericmud.ui.wx_app import WorldDialog
+
+    store = PlaintextCredentialStore(tmp_path / "c.json")
+    store.set("Gone", "hero", "secret")
+    dialog = WorldDialog(frame, World("Gone", "h.example", 4000), credentials=store)
+    try:
+        _accept(dialog)
+        dialog._username.SetValue("")
+        dialog._password.SetValue("")
+        dialog._password_plain.SetValue("")
+        dialog._on_ok(wx.CommandEvent())
+        assert store.get("Gone") is None  # blank means forget, not "keep the old one"
+    finally:
+        dialog.Destroy()
+
+
+def test_a_new_world_starts_on_no_auto_connect(frame):
+    # With the login boxes empty there is nothing to send, so a new world must not offer to
+    # send one; Automatic is a deliberate switch once a login has been stored.
+    from genericmud.ui.wx_app import WorldDialog
+
+    dialog = WorldDialog(frame)
+    try:
+        chosen = dialog._connect.GetStringSelection()
+        assert chosen.startswith("No auto-connect")
+    finally:
+        dialog.Destroy()
 
 
 def test_the_sounds_folder_says_what_blank_means(frame):
