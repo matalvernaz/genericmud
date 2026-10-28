@@ -71,8 +71,9 @@ choose the world, and press **Edit**; it applies the next time you open the
 world. A tab that's already open, reconnecting included, keeps the host, port,
 encoding and sounds folder it opened with.
 
-A world's details also hold its **command separator** and **logging** settings,
-described below. Changes to those apply straight away, even to an open tab.
+A world's details also hold its **command separator**, **logging** and **images
+address** settings, described below. Changes to those apply straight away, even to
+an open tab.
 
 Next time, press **Ctrl+O** to pick the world from your saved list; that dialog
 can also edit a saved world or start a new one. **Ctrl+D** disconnects and
@@ -137,6 +138,16 @@ always in the output box.
   **Alt+Shift+Left/Right** by character; **Alt+Home/End** jump to the oldest or
   newest line.
 - **Alt+Shift+Enter** spells the current line out character by character.
+- **Alt+Enter** follows the link on the line you're reading. For MUDs that send
+  MXP links (an exit or an item that does something when clicked), this is the
+  keyboard form of clicking it: the command is sent as if you'd typed it. When a
+  line carries several links, **Alt+Left/Right** into the word you want first —
+  the cursor's word picks the link — and if the cursor isn't inside one, the
+  links are read out rather than guessed. While the output box has focus, plain
+  **Enter** does the same thing.
+- In the **web UI** those links are real links in the page as well, so they can be
+  focused and activated like any other link, in addition to the keys above. A link
+  to a web page opens in a new tab.
 - **Alt+T** repeats the last tell; **Alt+C** the last chat line.
 - **Ctrl+F** searches the output, and **F3** / **Shift+F3** find the next and
   previous match. These work while the output box has focus.
@@ -393,6 +404,25 @@ to. When the MUD gives a sound a caption, a description for players who can't
 hear it, the caption appears in the output in brackets, like `[A wolf howls]`,
 where the review keys can find it. It isn't spoken.
 
+### Pictures
+
+A MUD can put an image on a line — a map, a room picture, a shop's sign. MXP has
+no way to describe one, so there is nothing to read out: an image is a file name
+and a place on the line, and nothing else.
+
+In the **web UI** the picture is shown where the MUD put it. In the **text
+client** — which has nowhere to draw one — the image becomes a link instead, the
+same thing MUSHclient does with one: the file name is the link, and following it
+(Alt+Enter, or Enter in the output) opens the picture in your browser.
+
+Either way the MUD has to say where the file lives. Most MUDs send just a file
+name and expect the client to be configured with their images address: a world's
+details take it as **Images web address**, and the browser-only `--web` mode takes
+it as `--images <address>` (that mode has no saved world, so its settings come
+from the command line, like `--sounds`). A MUD that names the address in the tag
+itself needs no setting at all. Only `http` and `https` are ever followed, and
+never an address on your own network except the machine the MUD runs on.
+
 ## Sharing your setup
 
 **File → Export This World** saves the world you're on — connection details, all
@@ -439,6 +469,7 @@ View, **Alt+H** Help.
 | Alt+Shift+Left / Right | Review character by character |
 | Alt+Home / Alt+End | Oldest / newest line |
 | Alt+Shift+Enter | Spell the current line |
+| Alt+Enter | Follow the link on this line (Enter does it too in the output) |
 | Alt+T / Alt+C | Last tell / last chat |
 | Ctrl+F | Find in the output (while the output has focus) |
 | F3 / Shift+F3 | Find next / previous |

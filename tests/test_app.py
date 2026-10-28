@@ -560,3 +560,136 @@ def test_soundpacks_split_their_own_way_whatever_the_world_says():
     VipMudPack(ScriptApi(app.engine, source="vip")).load_source("#alias go {n;s}")
     app.on_ws_message({"type": "input", "text": "go"})
     assert sent == ["n", "s"]
+
+
+def test_what_the_player_sends_is_never_parsed_as_markup():
+    # MXP is an inbound protocol: whatever the player types goes to the MUD exactly as
+    # typed, angle brackets and all. Nothing in the outbound path touches the MXP parser.
+    app, _backend, sent, _posted = _app()
+    app.on_ws_message({"type": "input", "text": "say <b>hi</b> and <build> this"})
+    assert sent == ["say <b>hi</b> and <build> this"]
+
+
+# --- MXP wiring --------------------------------------------------------------
+
+
+def _mxp_app(**kwargs):
+    backend = RecordingBackend()
+    voice = VoiceRouter(backend, clock=lambda: 0.0)
+    sent: list[str] = []
+    raw: list[bytes] = []
+    app = EngineApp(
+        voice,
+        send=sent.append,
+        send_raw=raw.append,
+        post=[].append,
+        keymap=load_keymap("vipmud"),
+        **kwargs,
+    )
+    return app, sent, raw
+
+
+def test_mxp_markup_never_reaches_the_output():
+    app, _sent, _raw = _mxp_app()
+    app.on_telnet_event(DataReceived(b"\x1b[1z<b>Bold</b> and <i>italic</i>\r\n"))
+    assert app.buffer.lines()[-1].plain_text == "Bold and italic"
+
+
+def test_mxp_version_question_is_answered_on_a_secure_line():
+    # The secure prefix is how the MUD tells a client reply from something a player typed.
+    app, _sent, raw = _mxp_app()
+    app.on_telnet_event(DataReceived(b"\x1b[1z<version>\r\n"))
+    assert raw, "no reply was sent"
+    assert raw[-1].startswith(b"\x1b[1z<VERSION ")
+    assert raw[-1].endswith(b">\n")
+
+
+def test_a_world_can_turn_mxp_off():
+    app, _sent, _raw = _mxp_app(mxp=False)
+    app.on_telnet_event(DataReceived(b"<b>Bold</b>\r\n"))
+    assert app.buffer.lines()[-1].plain_text == "<b>Bold</b>"
+
+
+def test_nobr_joins_the_next_line_instead_of_breaking():
+    app, _sent, _raw = _mxp_app()
+    app.on_telnet_event(DataReceived(b"first part<NOBR>\r\n"))
+    app.on_telnet_event(DataReceived(b"second part\r\n"))
+    assert app.buffer.lines()[-1].plain_text == "first partsecond part"
+
+
+def test_mxp_sound_cues_are_taken_out_of_the_text():
+    # The cue goes down the same path as MSP's (test_sound_bus covers the playing itself);
+    # what matters here is that an MXP sound tag never shows up as words.
+    app, _sent, _raw = _mxp_app()
+    app.on_telnet_event(DataReceived(b'\x1b[1z<sound "oof.wav">x\r\n'))
+    assert app.buffer.lines()[-1].plain_text == "x"
+
+
+def test_an_unclosed_paragraph_is_flushed_rather_than_held_for_ever():
+    # <P> joins lines, but a server that never closes it must not hold the session in
+    # silence; the cap emits what it has and starts again, losing nothing.
+    app, _sent, _raw = _mxp_app()
+    app.on_telnet_event(DataReceived(b"\x1b[1z<P>\r\n"))
+    for index in range(80):
+        app.on_telnet_event(DataReceived(f"line {index} \r\n".encode()))
+    shown = [line.plain_text for line in app.buffer.lines()]
+    # One emitted line is the proof: without the cap everything would still be held.
+    assert shown, "nothing was emitted before the paragraph closed"
+    # Closing the paragraph releases whatever is still held, so nothing is lost.
+    app.on_telnet_event(DataReceived(b"</P>\r\n"))
+    joined = "".join(line.plain_text for line in app.buffer.lines())
+    for index in (0, 40, 79):
+        assert f"line {index} " in joined  # nothing was dropped on the way through
+
+
+def test_a_paragraph_is_capped_by_size_as_well_as_line_count():
+    app, _sent, _raw = _mxp_app()
+    app.on_telnet_event(DataReceived(b"\x1b[1z<P>\r\n"))
+    for _ in range(12):
+        app.on_telnet_event(DataReceived((b"x" * 900) + b"\r\n"))
+    shown = [line.plain_text for line in app.buffer.lines()]
+    assert shown, "the paragraph was never emitted"
+    assert len(shown) > 1, "the hold was never capped"
+    assert max(len(line) for line in shown) <= 4000 + 900  # bounded, not one huge string
+    app.on_telnet_event(DataReceived(b"</P>\r\n"))
+    assert sum(len(line.plain_text) for line in app.buffer.lines()) == 12 * 900  # none lost
+
+
+
+
+def _mxp_app_with_timers(**kwargs):
+    """An MXP session whose scheduled callbacks are captured instead of run."""
+    timers: list = []
+    app, sent, raw = _mxp_app(schedule=lambda _delay, callback: timers.append(callback), **kwargs)
+    return app, sent, raw, timers
+
+
+def test_a_paragraph_held_too_long_is_spoken_on_the_deadline():
+    # Size caps bound the text, not the wait: a server sending a line every 45 seconds would
+    # reach the line cap after half an hour of silence, so there is a deadline as well.
+    app, _sent, _raw, timers = _mxp_app_with_timers()
+    app.on_telnet_event(DataReceived(b"\x1b[1z<P>\r\n"))
+    app.on_telnet_event(DataReceived(b"waiting line\r\n"))
+    assert not app.buffer.lines()  # held, as a paragraph should be
+    timers[0]()  # the deadline passes
+    assert app.buffer.lines()[-1].plain_text == "waiting line"
+
+
+def test_one_deadline_covers_a_whole_paragraph():
+    # The deadline is armed on the first held line, not on every one.
+    app, _sent, _raw, timers = _mxp_app_with_timers()
+    app.on_telnet_event(DataReceived(b"\x1b[1z<P>\r\n"))
+    for index in range(5):
+        app.on_telnet_event(DataReceived(f"line {index} \r\n".encode()))
+    assert len(timers) == 1
+
+
+def test_a_deadline_that_fires_after_the_paragraph_closed_does_nothing():
+    app, _sent, _raw, timers = _mxp_app_with_timers()
+    app.on_telnet_event(DataReceived(b"\x1b[1z<P>\r\n"))
+    app.on_telnet_event(DataReceived(b"whole paragraph\r\n"))
+    app.on_telnet_event(DataReceived(b"</P>\r\n"))
+    shown = [line.plain_text for line in app.buffer.lines()]
+    assert shown[-1] == "whole paragraph"
+    timers[0]()  # a stale deadline must not repeat it, or emit an empty line
+    assert [line.plain_text for line in app.buffer.lines()] == shown

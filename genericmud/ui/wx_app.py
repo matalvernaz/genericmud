@@ -366,6 +366,7 @@ class SessionPanel(wx.Panel):
             suppress_reconnect=self._connection.suppress_reconnect,
             withdraw_option=self._connection.withdraw_remote,
             encoding=self.world.encoding,
+            mxp=self.world.mxp,
             other_worlds=lambda: [world.name for world in load_worlds()],
         )
         self.app.on_focus_changed(self._focused)  # what the window said before this existed
@@ -745,7 +746,7 @@ class SessionPanel(wx.Panel):
     # --- find (output only) ---
 
     def _on_output_key(self, event: wx.KeyEvent) -> None:
-        """Find keys, live only while the output has focus: Ctrl+F, F3, Shift+F3."""
+        """Find keys and link following, live only while the output has focus."""
         code = event.GetKeyCode()
         if (
             code == ord("F")
@@ -757,6 +758,22 @@ class SessionPanel(wx.Panel):
             return
         if code == wx.WXK_F3 and not event.ControlDown() and not event.AltDown():
             self._find_again(reverse=event.ShiftDown())
+            return
+        if (
+            code in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER)
+            and not event.ControlDown()
+            and not event.AltDown()
+            and not event.ShiftDown()
+        ):
+            # Reading the output: there is nothing to send from here, so Enter follows the
+            # link on the line the reader is on -- the keyboard form of clicking the words.
+            # The action is sent directly because the keymap has no plain "enter": _key_combo
+            # keeps it as typing, or it would stop the command box sending anything.
+            if self.app is not None:
+                self._loop.call_soon_threadsafe(
+                    self.app.on_ws_message,
+                    {"type": protocol.KEY, "key": "review:link"},
+                )
             return
         # Route bound keymap combos here too, so the panic keys and other macros work while
         # the reader is in the output. Plain arrows/typing return no combo (see _key_combo),
@@ -1025,10 +1042,10 @@ class SessionPanel(wx.Panel):
             self.app.on_focus_changed(focused)
 
     def apply_world_settings(self, world: World) -> None:  # UI thread
-        """Take a world's edited command stacking, logging and sound downloads now. How the
-        tab connects (host, port, TLS, encoding, sounds) stays as it opened, so a reconnect from
-        this tab doesn't reach a new host with the old encoding; those apply when the world is
-        opened again."""
+        """Take a world's edited command stacking, logging, MXP and sound downloads now. How
+        the tab connects (host, port, TLS, encoding, sounds) stays as it opened, so a reconnect
+        from this tab doesn't reach a new host with the old encoding; those apply when the world
+        is opened again."""
         self.world = replace(
             self.world,
             command_stacking=world.command_stacking,
@@ -1036,6 +1053,7 @@ class SessionPanel(wx.Panel):
             log_automatically=world.log_automatically,
             log_files=world.log_files,
             log_commands=world.log_commands,
+            mxp=world.mxp,
             download_sounds=world.download_sounds,
         )
         if self.app is not None:
@@ -1474,6 +1492,16 @@ class WorldDialog(wx.Dialog):
         self._download_sounds.SetName("Download sounds the MUD offers")
         self._download_sounds.SetValue(True)
         grid.Add(self._download_sounds, 1, wx.EXPAND)
+        self._mxp = wx.CheckBox(self, label="Understand M&XP markup")
+        self._mxp.SetName("Understand MXP markup")
+        self._mxp.SetValue(True)
+        grid.Add(self._mxp, 1, wx.EXPAND)
+        # Where <IMAGE> looks for a file when the tag names no address of its own. Most MUDs
+        # expect the client to be told this; without it an image can't be found, so it's
+        # skipped -- which is also what MUSHclient does with an address-less image.
+        self._images_url = self._labeled_text(
+            grid, "&Images web address:", "Images web address", ""
+        )
 
         grid.Add((0, 0))
         self._tls = wx.CheckBox(self, label="Use &TLS")
@@ -1564,6 +1592,8 @@ class WorldDialog(wx.Dialog):
             self._log_files.SetSelection(LOG_FILES.index(initial.log_files))
             self._log_commands.SetValue(initial.log_commands)
             self._download_sounds.SetValue(initial.download_sounds)
+            self._mxp.SetValue(initial.mxp)
+            self._images_url.SetValue(initial.images_url)
         if lock_name:
             self._name.Enable(False)
             self._host.SetFocus()
@@ -1614,6 +1644,8 @@ class WorldDialog(wx.Dialog):
             log_files=LOG_FILES[self._log_files.GetSelection()],
             log_commands=self._log_commands.GetValue(),
             download_sounds=self._download_sounds.GetValue(),
+            mxp=self._mxp.GetValue(),
+            images_url=self._images_url.GetValue().strip(),
         )
         self.EndModal(wx.ID_OK)
 
@@ -4485,6 +4517,7 @@ def _world_from_args(args) -> World | None:
     return World(
         name=args.host, host=args.host, port=args.port, tls=args.tls,
         sounds=args.sounds, encoding=getattr(args, "encoding", AUTO),
+        images_url=getattr(args, "images", "") or "",
     )
 
 
@@ -4520,3 +4553,5 @@ def run(args, recovery=None) -> None:
 def _run_loop(loop: asyncio.AbstractEventLoop) -> None:
     asyncio.set_event_loop(loop)
     loop.run_forever()
+
+

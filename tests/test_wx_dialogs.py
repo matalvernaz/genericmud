@@ -772,12 +772,15 @@ def test_editing_a_world_changes_its_open_tab_at_once(frame, monkeypatch):
         panel.app = EngineApp(VoiceRouter(RecordingBackend(), clock=lambda: 0.0), keymap={})
         edited = World(
             "W", "new.example", 4000, encoding="cp1251", sounds="C:/sounds",
-            command_separator="|", log_commands=False, download_sounds=False,
+            command_separator="|", log_commands=False, mxp=False, download_sounds=False,
         )
         panel.apply_world_settings(edited)
         loop.run_until_complete(asyncio.sleep(0.01))
         assert panel.app.command_separator == "|"
         assert panel.app.log_commands is False
+        # MXP is parsed engine-side, so turning it off reaches the running tab rather than
+        # waiting for a reconnect.
+        assert panel.app.mxp_enabled is False
         assert panel.app.download_media is False
         # How the tab connects stays as it opened until the world is opened again, so a
         # reconnect (Ctrl+D) can't mix a new host with the old encoding and sounds.

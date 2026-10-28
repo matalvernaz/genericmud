@@ -78,14 +78,16 @@ GMCP_SUPPORTS = (
 # Remote (server-side WILL) options we accept by replying DO.
 # MSP carries no subnegotiation of its own — the cues are inline !!SOUND/!!MUSIC tags —
 # but spec-compliant servers still gate those tags behind DO MSP, so it has to be here.
-# MXP is intentionally omitted: we don't parse it yet, so advertising DO MXP just
-# makes servers emit MXP markup that leaks into the output. Re-add when parsed.
+# MXP is accepted now that protocol/mxp.py strips every tag. It used to be left out on
+# purpose: advertising DO MXP without a parser made servers send markup that reached the
+# output as literal "<b>" in the text a blind user was hearing.
 # ECHO is how a server hides a password (WILL ECHO) and shows typing again after it
 # (WONT ECHO). Refusing it made servers that track option state (FluffOS, via libtelnet)
 # count echo as never on, so they never sent the WONT and the client thought every later
 # command was a password. Accepting it is what MUSHclient does.
 _ACCEPT_REMOTE = frozenset(
-    {T.OPT_MCCP2, T.OPT_GMCP, T.OPT_MSDP, T.OPT_MSSP, T.OPT_MSP, T.OPT_EOR, T.OPT_SGA, T.OPT_ECHO}
+    {T.OPT_MCCP2, T.OPT_GMCP, T.OPT_MSDP, T.OPT_MSSP, T.OPT_MSP, T.OPT_MXP, T.OPT_EOR,
+     T.OPT_SGA, T.OPT_ECHO}
 )
 # Local (our-side) options we offer by replying WILL when the server says DO.
 _ENABLE_LOCAL = frozenset({T.OPT_TTYPE, T.OPT_NAWS})

@@ -47,11 +47,20 @@ class World:
     # Fetch the sounds a MUD offers to download (MSP U=, GMCP Client.Media). The MSP spec has
     # clients let the player switch that off.
     download_sounds: bool = True
+    # Understand MXP markup. On by default because the parser strips every tag, so a server
+    # sending MXP reads as ordinary text; off is the escape hatch for a server that sends
+    # something this parser gets wrong.
+    mxp: bool = True
+    # Where an <IMAGE> looks for its file when the tag carries no URL of its own. Most MUDs
+    # expect the client to have this configured, the same way MSP's U= expects a sounds
+    # location -- without one an image can't be located, and is quietly dropped.
+    images_url: str = ""
 
     def __post_init__(self) -> None:
         self.encoding = normalize_encoding(self.encoding)
         self.command_separator = normalize_separator(self.command_separator)
         self.log_files = normalize_log_files(self.log_files)
+        self.images_url = normalize_images_url(self.images_url)
         # No real world name or host has a control character in it, and one gets in easily:
         # a shared world zip can carry a newline, Ctrl+Backspace in a Windows edit box
         # types a DEL. Keep them out of the name every rule, map and folder is filed under.
@@ -81,6 +90,15 @@ def normalize_log_files(value: object) -> str:
     return value if value in LOG_FILES else "session"
 
 
+def normalize_images_url(value: object) -> str:
+    """A usable images location: web only, or "" for none.
+
+    The web UI loads whatever is set here and a text client opens it in the browser, so a
+    scheme that isn't the web -- ``file:``, a bare folder path, anything with a colon in
+    front of it -- is not kept rather than left for something further along to deal with.
+    """
+    text = value.strip() if isinstance(value, str) else ""
+    return text if text.lower().startswith(("http://", "https://")) else ""
 def parse_port(value: object) -> int:
     """Return a valid TCP port, or raise ``ValueError`` with a user-facing message."""
     if isinstance(value, bool):
@@ -153,6 +171,8 @@ def load_worlds(path: Path | None = None) -> list[World]:
                 log_files=normalize_log_files(entry.get("log_files")),
                 log_commands=entry.get("log_commands") is not False,
                 download_sounds=entry.get("download_sounds") is not False,
+                mxp=entry.get("mxp") is not False,
+                images_url=normalize_images_url(entry.get("images_url")),
             )
         )
     return worlds
@@ -190,6 +210,10 @@ def save_worlds(worlds: list[World], path: Path | None = None) -> None:
             lines.append("log_commands = false")
         if not world.download_sounds:
             lines.append("download_sounds = false")
+        if not world.mxp:
+            lines.append("mxp = false")
+        if world.images_url:
+            lines.append(f"images_url = {_quote(world.images_url)}")
         blocks.append("\n".join(lines))
     atomic_write_text(target, "\n\n".join(blocks) + "\n")
 
@@ -219,3 +243,4 @@ def _quote(value: str) -> str:
             out.append(char)
     out.append('"')
     return "".join(out)
+

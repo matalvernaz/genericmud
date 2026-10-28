@@ -43,6 +43,13 @@
 # Spell the current review line (or the newest line) character by character.
 "alt+shift+enter" = "review:spell_line"
 
+# Follow the MXP link on the reviewed line (a tag like <send href="drink">fountain</send>).
+# On a line with several links the review cursor's word picks one, so Alt+Right into the
+# word first; if the word belongs to no link, the links are read out instead of guessed.
+# While the output box has focus plain Enter does the same, since there is nothing to send
+# from there -- from the command box Enter must stay "send", hence this chord.
+"alt+enter" = "review:link"
+
 # Channel browsing: cycle the channels your triggers route chat to, scroll
 # within one, and recall its recent messages -- a parallel layer to the Alt
 # review keys, on Ctrl+Alt.

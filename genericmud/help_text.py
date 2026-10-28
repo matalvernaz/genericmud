@@ -239,6 +239,9 @@ Alt+Left / Right  Review word by word
 Alt+Shift+Left / Right   Review character by character
 Alt+Home / End    Oldest / newest line
 Alt+Shift+Enter   Spell the current line character by character
+Alt+Enter         Follow the link on this line: the keyboard form of clicking it
+                  (Enter does the same while the output box has focus). On a
+                  line with several links, Alt+Left / Right into one first
 Alt+T             Repeat the last tell
 Alt+C             Repeat the last chat line
 
