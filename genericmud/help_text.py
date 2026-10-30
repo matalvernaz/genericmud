@@ -46,6 +46,9 @@ The numpad is a compass: 8 north, 2 south, 4 west, 6 east, corners are the
 diagonals, 5 or 0 look, period scans, minus up, plus down (turn this off in
 the View menu if NVDA needs your numpad). Type .3n2e to speedwalk. Alt+B
 drops a breadcrumb and Alt+R walks you back to it.
+With Numpad compass walking on, custom numpad hotkeys are inactive.
+Turn it off under View to use numpad keys in Automation hotkeys (Ctrl+B).
+Your screen reader or operating system may intercept some numpad keys.
 
 Mapping:
 On MUDs that tell the client which room you're in, genericMud draws a map as

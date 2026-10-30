@@ -161,6 +161,11 @@ records `***` instead of what you typed.
 - The **numpad** is a compass: 8 north, 2 south, 4 west, 6 east, the corner keys
   are the diagonals, 5 or 0 look, `.` scans, `-` goes up, `+` goes down. If
   NVDA's desktop layout needs your numpad, turn this off under View.
+  With **Numpad compass walking** on, custom numpad hotkeys are inactive.
+  Turn it off under View to use keys such as `numpad5` or `numpad+` in Automation
+  hotkeys (Ctrl+B).
+  Your screen reader or operating system may intercept physical numpad keys before
+  genericMud receives them.
 - Type `.3n2e` to speed-walk three north and two east. Type `..3n2e` to walk it
   one room at a time, stopping if something blocks the way.
 - **Alt+B** drops a breadcrumb. Wander wherever; **Alt+R** walks you straight

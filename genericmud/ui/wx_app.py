@@ -125,7 +125,17 @@ _NAMED_KEYS = {
 }
 
 
-def _key_combo(event: wx.KeyEvent) -> str | None:
+_NUMPAD_KEYS = {
+    wx.WXK_NUMPAD0: "numpad0", wx.WXK_NUMPAD1: "numpad1", wx.WXK_NUMPAD2: "numpad2",
+    wx.WXK_NUMPAD3: "numpad3", wx.WXK_NUMPAD4: "numpad4", wx.WXK_NUMPAD5: "numpad5",
+    wx.WXK_NUMPAD6: "numpad6", wx.WXK_NUMPAD7: "numpad7", wx.WXK_NUMPAD8: "numpad8",
+    wx.WXK_NUMPAD9: "numpad9", wx.WXK_NUMPAD_ADD: "numpad+",
+    wx.WXK_NUMPAD_SUBTRACT: "numpad-", wx.WXK_NUMPAD_DECIMAL: "numpad.",
+    wx.WXK_NUMPAD_MULTIPLY: "numpad*", wx.WXK_NUMPAD_DIVIDE: "numpad/",
+}
+
+
+def _key_combo(event: wx.KeyEvent, *, allow_numpad: bool = True) -> str | None:
     """Build a keymap combo ("ctrl+1", "alt+up", "f11") or None for plain typing."""
     code = event.GetKeyCode()
     mods = []
@@ -136,7 +146,11 @@ def _key_combo(event: wx.KeyEvent) -> str | None:
     if event.ShiftDown():
         mods.append("shift")
 
-    if wx.WXK_F1 <= code <= wx.WXK_F24:
+    if code in _NUMPAD_KEYS:
+        if not allow_numpad:
+            return None  # compass owns these keys; key capture can still name them
+        name = _NUMPAD_KEYS[code]
+    elif wx.WXK_F1 <= code <= wx.WXK_F24:
         name = f"f{code - wx.WXK_F1 + 1}"
     elif code in _NAMED_KEYS:
         name = _NAMED_KEYS[code]
@@ -146,7 +160,7 @@ def _key_combo(event: wx.KeyEvent) -> str | None:
         return None
 
     is_fkey = name.startswith("f") and name[1:].isdigit()
-    is_special = is_fkey or name == "escape"
+    is_special = is_fkey or name == "escape" or code in _NUMPAD_KEYS
     if not mods and not is_special:
         return None  # ordinary typing
     if mods == ["shift"] and not is_fkey:
@@ -761,7 +775,8 @@ class SessionPanel(wx.Panel):
         # Route bound keymap combos here too, so the panic keys and other macros work while
         # the reader is in the output. Plain arrows/typing return no combo (see _key_combo),
         # so the screen reader's own line/char review of the output is untouched.
-        if self._dispatch_bound_combo(_key_combo(event)):
+        combo = _key_combo(event, allow_numpad=not self._prefs.numpad_compass)
+        if self._dispatch_bound_combo(combo):
             return
         event.Skip()
 
@@ -883,7 +898,7 @@ class SessionPanel(wx.Panel):
 
     def _on_input_key(self, event: wx.KeyEvent) -> None:
         code = event.GetKeyCode()
-        combo = _key_combo(event)
+        combo = _key_combo(event, allow_numpad=not self._prefs.numpad_compass)
         if combo in (_COMPLETE_FORWARD, _COMPLETE_BACKWARD):
             self._cycle_completion(backward=(combo == _COMPLETE_BACKWARD))
             return
@@ -3234,6 +3249,16 @@ class AutomationManagerDialog(wx.Dialog):
         )
         return False
 
+    def _announce_rule_change(self, kind: str, rule: object, message: str) -> None:
+        if kind == "key" and rule.enabled and self._panel._prefs.numpad_compass:
+            combo = rule.key.strip().lower()
+            key = combo.removeprefix("ctrl+").removeprefix("alt+")
+            if key != combo:
+                key = key.removeprefix("shift+")
+            if key in _NUMPAD_KEYS.values():
+                message += " Turn off Numpad compass walking under View to use it."
+        self._announce(message)
+
     def _on_new(self, _event: wx.CommandEvent) -> None:
         kind = self._kind()
         if kind == "script":
@@ -3245,7 +3270,7 @@ class AutomationManagerDialog(wx.Dialog):
         items = self._collection(kind)
         items.append(result)
         if self._save_and_reload_rules(len(items) - 1):
-            self._announce(f"{self._KIND_WORD[kind]} added.")
+            self._announce_rule_change(kind, result, f"{self._KIND_WORD[kind]} added.")
 
     def _on_edit(self, _event: wx.CommandEvent) -> None:
         if self._kind() == "script":
@@ -3259,7 +3284,7 @@ class AutomationManagerDialog(wx.Dialog):
         if result is not None:
             items[index] = result
             if self._save_and_reload_rules(index):
-                self._announce(f"{self._KIND_WORD[kind]} updated.")
+                self._announce_rule_change(kind, result, f"{self._KIND_WORD[kind]} updated.")
 
     def _on_duplicate(self, _event: wx.CommandEvent) -> None:
         if (index := self._selected_index()) is None:
@@ -3282,7 +3307,7 @@ class AutomationManagerDialog(wx.Dialog):
             return
         items.append(result)
         if self._save_and_reload_rules(len(items) - 1):
-            self._announce(f"{self._KIND_WORD[kind]} duplicated.")
+            self._announce_rule_change(kind, result, f"{self._KIND_WORD[kind]} duplicated.")
 
     def _on_toggle(self, _event: wx.CommandEvent) -> None:
         kind = self._kind()
@@ -3292,7 +3317,7 @@ class AutomationManagerDialog(wx.Dialog):
         items[index] = replace(items[index], enabled=not items[index].enabled)
         if self._save_and_reload_rules(index):
             state = "enabled" if items[index].enabled else "disabled"
-            self._announce(f"{self._KIND_WORD[kind]} {state}.")
+            self._announce_rule_change(kind, items[index], f"{self._KIND_WORD[kind]} {state}.")
 
     def _on_delete(self, _event: wx.CommandEvent) -> None:
         if self._kind() == "script":
