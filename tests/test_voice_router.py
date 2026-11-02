@@ -119,3 +119,28 @@ def test_interrupt_stops_speech_but_keeps_the_suppressed_backlog():
 def test_print_fallback_is_safe_without_a_console(monkeypatch):
     monkeypatch.setattr(sys, "stdout", None)
     PrintBackend().speak("windowed build has no stdout")
+
+
+# --- a world that may not speak can't stop the shared screen reader ------------
+
+
+def test_a_muted_router_does_not_interrupt_the_shared_speech():
+    # Every open world speaks through the one screen reader, so a background world's
+    # interrupt would cut the world in front.
+    backend = RecordingBackend()
+    router = VoiceRouter(backend, clock=lambda: 0.0)
+    router.set_muted(True)
+    router.interrupt()
+    assert backend.stops == 0
+    router.set_muted(False)
+    router.interrupt()
+    assert backend.stops == 1
+
+
+def test_the_panic_key_still_stops_speech_in_a_muted_world():
+    # F11 and switching tabs away flush on purpose; only interrupt gives way.
+    backend = RecordingBackend()
+    router = VoiceRouter(backend, clock=lambda: 0.0)
+    router.set_muted(True)
+    router.flush()
+    assert backend.stops == 1

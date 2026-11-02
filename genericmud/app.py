@@ -381,6 +381,11 @@ class AppSink(EngineSink):
         self._voice.speak(text, channel, interrupt)
 
     def stop_speech(self) -> None:
+        # A soundpack in a background tab keeps running (MUSHclient packs stop NVDA on their
+        # own triggers), but the screen reader is shared: its stop would cut the world in
+        # front. Only a world that may speak may stop speech.
+        if self._voice.muted:
+            return
         self._voice.flush()
 
     def play(

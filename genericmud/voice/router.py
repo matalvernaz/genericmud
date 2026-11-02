@@ -76,8 +76,19 @@ class VoiceRouter:
 
         Follow mode barges in on room movement; the "N more lines" notice still
         owes the user those unheard lines, so only the utterance is cut.
+
+        A muted router does nothing. Every open world speaks through the one screen
+        reader, so a world that may not speak (a background tab) has no utterance of its
+        own to cut, and stopping the reader would cut the world in front instead.
         """
+        if self._muted:
+            return
         self._safe(self._backend.stop)
+
+    @property
+    def muted(self) -> bool:
+        """Whether this world may not speak right now (see :meth:`set_muted`)."""
+        return self._muted
 
     def _safe(self, action: Callable[..., None], *args: str) -> None:
         """Call a backend method, swallowing any fault.
