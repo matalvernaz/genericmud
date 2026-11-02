@@ -610,6 +610,10 @@ class EngineApp:
         # Wired by the UI to the transport: tell the server to turn an option off (DONT).
         self._withdraw_option = withdraw_option or (lambda _option: None)
         self._login_phase_started = self._clock()  # restarted with every connection
+        # Which of USER/PASSWORD this connection has answered over MXP, and whether an MXP
+        # login request may be answered at all: only once a connection starts logging in.
+        self._mxp_login_sent: set[str] = set()
+        self._mxp_login_armed = False
         self._hidden_answers = 0  # lines typed since the MUD hid input; the second gets a hint
         self._hidden_timeout_token = 0  # bumped to cancel a pending hidden-input timeout
         self._ticks_armed = False  # the OnPluginTick chain is scheduled at most once
@@ -1188,7 +1192,10 @@ class EngineApp:
         self._pending_login = []
         self._password_guard = ""  # only once a password is actually going out
         self._post_connect_sent = False  # a reconnect types them again
-        self._mxp_login_sent: set[str] = set()  # which of USER/PASSWORD this link has
+        self._mxp_login_sent = set()  # which of USER/PASSWORD this link has
+        # An MXP login request is only answered while the connection is logging in: the login
+        # phase, and only until the player types something themselves, as with AutoLogin.
+        self._mxp_login_armed = True
         creds = self.credentials.get(world) if self.credentials is not None else None
         if creds is None or self.connect_method == "none":
             # Nothing to send. A stored login under "none" is deliberately ignored -- that is
@@ -1445,6 +1452,13 @@ class EngineApp:
         cannot make the client type the password twice.
         """
         if self.connect_method != "mxp" or request in self._mxp_login_sent:
+            return
+        # Only while logging in. A request later in the session (a pack's Simulate, or text
+        # that reached a secure line some other way) is not the MUD asking for the login.
+        in_login_phase = self._clock() - self._login_phase_started < _LOGIN_PHASE_SECONDS
+        if not self._mxp_login_armed or not in_login_phase:
+            if self._diag is not None:
+                self._diag.event("mxp.login_refused", request=request)
             return
         creds = self.credentials.get(self.name) if self.credentials is not None else None
         if creds is None:
@@ -2046,9 +2060,11 @@ class EngineApp:
 
     def _dispatch_command(self, text: str, *, allow_client: bool = True) -> None:
         if text.strip():
+            # The user is typing their own login (or already playing): stand down so a later
+            # in-game line can't make auto-login, or an MXP login request, send the stored
+            # credentials.
+            self._mxp_login_armed = False
             if self._login is not None and not self._login.done:
-                # The user is typing their own login (or already playing): stand down so a
-                # later in-game line can't make auto-login send the stored credentials.
                 self._login.disarm()
             if self.log_commands:
                 self._log("> ***" if self._input_masked else f"> {text}")
@@ -2086,6 +2102,7 @@ class EngineApp:
         a speedwalk, and aliases, client commands and the breadcrumb trail all read it.
         """
         if text.strip():
+            self._mxp_login_armed = False  # the user is answering the prompt themselves
             if self._login is not None and not self._login.done:
                 self._login.disarm()  # the user is answering the prompt themselves
             if self.log_commands:
