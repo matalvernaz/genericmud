@@ -122,7 +122,8 @@ command to another tab by its world name: `/to alter aeon look`.
 - **View menu → Silence other worlds.** On by default: only the world you're
   looking at speaks. Turn it off and every open world speaks, so with nine worlds
   open you hear all nine instead of one — each of them still respects background
-  silence and Ctrl+M.
+  silence and Ctrl+M. They share one voice, though: nothing says which world a
+  line came from, and with Ctrl+I on, a busy world cuts the others off.
 - **Ctrl+M** turns self-voice off entirely so you can read the output box with
   your screen reader's own commands instead.
 - **Esc** or **F11** shuts the voice up right now. **Shift+F11** stops every
