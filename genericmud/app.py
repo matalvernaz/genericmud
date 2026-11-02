@@ -1688,8 +1688,9 @@ class EngineApp:
         has scrolled away -- the point of having it at all for someone listening. Not spoken:
         the player typed it, and hearing every command repeated is noise.
 
-        Never reached with hidden input: a password prompt goes down _dispatch_secret, and the
-        guard at the call site keeps masked text out even if that ever changes.
+        Typed input takes _dispatch_secret while the MUD hides it, but a command sent from
+        another tab, an alias or a trigger reaches _dispatch_command directly, so the guard at
+        the call site is what keeps masked text out of the output on those paths.
         """
         line = Line(f"> {text}")
         self.buffer.append(line)

@@ -81,6 +81,18 @@ def test_a_hidden_password_is_not_echoed():
     assert app.buffer.lines() == []
 
 
+def test_a_command_from_another_tab_is_not_echoed_while_input_is_hidden():
+    # Typed input goes down _dispatch_secret while the MUD hides it, but a command sent from
+    # another tab (or an alias or trigger) reaches _dispatch_command directly. The guard there
+    # is what keeps a password out of the scrollback on those paths.
+    app, _backend, posted = _app()
+    app.echo_input = True
+    app._input_masked = True
+    app._dispatch_remote("hunter2")
+    assert _echoed(posted) == []
+    assert app.buffer.lines() == []
+
+
 def test_client_commands_are_echoed_too_since_they_are_typed():
     app, _backend, posted = _app()
     app.echo_input = True
