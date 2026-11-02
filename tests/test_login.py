@@ -436,11 +436,27 @@ def _store_with_login(tmp_path, username="hero", password="secret"):
 
 
 def test_mush_method_sends_one_connect_line_then_the_commands(tmp_path):
-    # MUSHclient's MUSH/MOO habit: a single CONNECT command carrying both.
+    # MUSHclient's MUSH/MOO habit: a single connect command carrying both. Lowercase, because
+    # every connect screen prints it that way, and a server that compares the command exactly
+    # takes only that form: in capitals it reprints its banner and ignores the login (see the
+    # test below).
     app, sent = _app_with(_store_with_login(tmp_path), method="mush", commands="look\nscore")
     app.begin_login("gw")
     app.after_connect()
-    assert sent == ["CONNECT hero secret", "look", "score"]
+    assert sent == ["connect hero secret", "look", "score"]
+
+
+def test_the_mush_login_is_lowercase_however_the_world_was_named(tmp_path):
+    # The case is part of the command for some servers, so nothing in the world's own name or
+    # in the login may put it back into capitals: the command goes out lowercase, always.
+    app, sent = _app_with(
+        _store_with_login(tmp_path, username="Ariadne", password="Hunter2"),
+        method="mush",
+    )
+    app.begin_login("gw")
+    app.after_connect()
+    assert sent == ["connect Ariadne Hunter2"]
+    assert sent[0].split(" ")[0] == "connect"
 
 
 def test_a_blind_login_waits_for_the_socket_to_open(tmp_path):
@@ -451,7 +467,7 @@ def test_a_blind_login_waits_for_the_socket_to_open(tmp_path):
     app.begin_login("gw")
     assert sent == []  # nothing may leave before the connection is up
     app.after_connect()
-    assert sent == ["CONNECT hero secret", "look"]
+    assert sent == ["connect hero secret", "look"]
 
 
 def test_diku_method_sends_name_then_password_then_the_commands(tmp_path):
@@ -676,7 +692,7 @@ def test_a_blind_login_is_never_typed_into_a_closed_socket(tmp_path):
     assert sent == []
     socket_open["value"] = True  # the transport has connected
     app.after_connect()
-    assert sent == ["CONNECT hero secret", "look"]
+    assert sent == ["connect hero secret", "look"]
 
 
 def test_an_echoed_password_is_hidden_from_the_output(tmp_path):
@@ -694,7 +710,7 @@ def test_the_redaction_matches_whole_words_only():
     from genericmud.app import _redact_secret
 
     assert _redact_secret("Password: hunter2", "hunter2") == "Password: ***"
-    assert _redact_secret("CONNECT hero hunter2", "hunter2") == "CONNECT hero ***"
+    assert _redact_secret("connect hero hunter2", "hunter2") == "connect hero ***"
     # A one-character password must not redact half the output.
     assert _redact_secret("a whole line of it", "a") == "*** whole line of it"
     # Part of a word is not the password.

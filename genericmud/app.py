@@ -156,7 +156,7 @@ def _redact_secret(text: str, secret: str) -> str:
     """``text`` with ``secret`` taken out of it, as a whole whitespace-separated token.
 
     A server that echoes what it reads will send a blind login straight back -- MUSH/MOO's
-    "CONNECT hero hunter2", or a "Password: hunter2" for Diku -- and that line would be
+    "connect hero hunter2", or a "Password: hunter2" for Diku -- and that line would be
     spoken and shown, and written to the session log. Matching whole tokens rather than any
     substring keeps a one-character password from redacting half the output, while still
     catching both shapes.
@@ -1213,7 +1213,12 @@ class EngineApp:
             # nothing is sent at all -- that is what "let the MUD ask" has to mean.
             return
         if self.connect_method == "mush":
-            self._pending_login = [f"CONNECT {username} {password}"]  # MUSH/MOO's one line
+            # Lowercase, as every MUSH/MOO connect screen prints it. Some servers compare this
+            # command exactly: "CONNECT" or "Connect" makes them reprint the banner and ignore
+            # the login, leaving the player at the connect screen with no error to explain it.
+            # MUSHclient's documentation writes the command in capitals, which is where ours
+            # came from; a server that doesn't care about case takes either form.
+            self._pending_login = [f"connect {username} {password}"]  # MUSH/MOO's one line
         elif self.connect_method == "diku":
             self._pending_login = [username, password]  # Diku's name, then password
         else:
