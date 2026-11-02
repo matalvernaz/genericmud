@@ -1104,7 +1104,10 @@ class SessionPanel(wx.Panel):
         unicode_key = event.GetUnicodeKey()
         modified = event.ControlDown() or event.AltDown()
         if unicode_key >= 32 and unicode_key != 127 and not modified:
+            selection = self.input.GetSelection()
             self.input.SetFocus()
+            # Focusing may select all text; WriteText must use the user's edit range.
+            self.input.SetSelection(*selection)
             self.input.WriteText(chr(unicode_key))
             return
         event.Skip()  # arrows etc. -> native screen-reader review of the output
