@@ -6,7 +6,7 @@ import keyring
 import pytest
 
 from genericmud.app import EngineApp
-from genericmud.protocol.telnet import DataReceived
+from genericmud.protocol.telnet import OPT_MXP, WILL, DataReceived, Negotiation
 from genericmud.session import credentials
 from genericmud.session.credentials import (
     KeyringCredentialStore,
@@ -702,9 +702,15 @@ def test_the_redaction_matches_whole_words_only():
     assert _redact_secret("nothing to do", "") == "nothing to do"
 
 
+def _offer_mxp(app) -> None:
+    """The server offers MXP, as one that asks for a login over it has to."""
+    app.on_telnet_event(Negotiation(WILL, OPT_MXP))
+
+
 def test_mxp_login_answers_when_the_mud_asks(tmp_path):
     # The fifth method: nothing goes until the MUD requests it over MXP.
     app, sent = _app_with(_store_with_login(tmp_path), method="mxp")
+    _offer_mxp(app)
     app.begin_login("gw")
     app.after_connect()
     assert sent == []  # nothing until asked
@@ -717,6 +723,7 @@ def test_mxp_login_is_ignored_by_the_other_methods(tmp_path):
     # Strict on purpose: a method the player did not choose must never type the login.
     for method in ("none", "prompts"):
         app, sent = _app_with(_store_with_login(tmp_path), method=method)
+        _offer_mxp(app)
         app.begin_login("gw")
         app.after_connect()
         app.on_telnet_event(DataReceived(b"\x1b[1z<user>\r\n"))
@@ -725,6 +732,7 @@ def test_mxp_login_is_ignored_by_the_other_methods(tmp_path):
 
 def test_mxp_login_answers_each_request_only_once(tmp_path):
     app, sent = _app_with(_store_with_login(tmp_path), method="mxp")
+    _offer_mxp(app)
     app.begin_login("gw")
     app.after_connect()
     for _ in range(3):
@@ -740,4 +748,38 @@ def test_mxp_login_is_never_answered_from_an_open_line(tmp_path):
     app.after_connect()
     app.on_telnet_event(DataReceived(b"<user>\r\n"))
     app.on_telnet_event(DataReceived(b"<password>\r\n"))
+    assert sent == []
+
+
+def test_mxp_login_is_not_answered_after_the_login_phase(tmp_path):
+    # A request later in the session is not the MUD logging the player in: a pack's
+    # Simulate() goes through the same parser, and so would text that reached a secure line.
+    now = {"value": 0.0}
+    app, sent = _app_with(_store_with_login(tmp_path), method="mxp")
+    app._clock = lambda: now["value"]
+    _offer_mxp(app)
+    app.begin_login("gw")
+    app.after_connect()
+    now["value"] = 301.0
+    app.on_telnet_event(DataReceived(b"\x1b[1z<user>\r\n"))
+    app.on_telnet_event(DataReceived(b"\x1b[1z<password>\r\n"))
+    assert sent == []
+
+
+def test_mxp_login_stands_down_once_the_player_types(tmp_path):
+    app, sent = _app_with(_store_with_login(tmp_path), method="mxp")
+    _offer_mxp(app)
+    app.begin_login("gw")
+    app.after_connect()
+    app.on_ws_message({"type": "input", "text": "look"})
+    app.on_telnet_event(DataReceived(b"\x1b[1z<password>\r\n"))
+    assert sent == ["look"]
+
+
+def test_an_mxp_login_request_before_any_login_began_is_ignored(tmp_path):
+    # The login state is set up when a connection starts logging in; a request that arrives
+    # any other way must be ignored, not raise out of the line that carried it.
+    app, sent = _app_with(_store_with_login(tmp_path), method="mxp")
+    _offer_mxp(app)
+    app.on_telnet_event(DataReceived(b"\x1b[1z<user>\r\n"))
     assert sent == []
