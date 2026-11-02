@@ -45,7 +45,9 @@
 
 # Switch worlds by the order their tabs were opened: Alt+1 is the first tab, Alt+0 the
 # tenth. The window announces the world it switched to, and Ctrl+Tab announces too.
-# These are window-side actions, so they work whatever tab you're typing in.
+# These are window-side actions, so they work whatever tab you're typing in. A world whose
+# soundpack or hotkeys use one of these keys keeps it (Erion's channel history does), and on
+# a Mac they aren't bound at all, since Option and a number types characters there.
 "alt+1" = "tab:select:1"
 "alt+2" = "tab:select:2"
 "alt+3" = "tab:select:3"

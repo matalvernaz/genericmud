@@ -928,7 +928,10 @@ class SessionPanel(wx.Panel):
             # has no idea which tabs are open. The binding still comes from the keymap, so
             # these keys are rebindable like every other one.
             action = self._keymap.get(combo)
-            if action is not None and action.startswith("tab:"):
+            # A soundpack or the player's own hotkey on the same key wins in this world:
+            # Erion's channel history, for one, reads messages on Alt+1 to Alt+0.
+            claimed = self.app is not None and self.app.engine.has_key(combo)
+            if action is not None and action.startswith("tab:") and not claimed:
                 frame = wx.GetTopLevelParent(self)
                 handle = getattr(frame, "handle_tab_action", None)
                 if handle is not None and handle(action):

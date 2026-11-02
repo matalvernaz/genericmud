@@ -153,3 +153,94 @@ def test_the_default_keymap_binds_the_alt_digits_to_tabs():
     for number in range(1, 10):
         assert keymap[f"alt+{number}"] == f"tab:select:{number}"
     assert keymap["alt+0"] == "tab:select:10"
+
+
+# --- A soundpack or hotkey on the same key -----------------------------------
+
+
+def _engine_app():
+    from genericmud.app import EngineApp
+    from genericmud.voice.router import VoiceRouter
+    from tests.helpers import RecordingBackend
+
+    return EngineApp(
+        VoiceRouter(RecordingBackend(), clock=lambda: 0.0),
+        send=[].append,
+        post=[].append,
+        keymap=load_keymap("vipmud"),
+        name="erion",
+    )
+
+
+def test_a_pack_binding_on_a_tab_key_still_runs_in_the_engine():
+    # Erion's channel history reads messages on Alt+1 to Alt+0. The keymap also has a tab
+    # action on those keys, which the engine can't carry out, so the pack's binding runs.
+    app = _engine_app()
+    fired = []
+    app.engine.add_key("alt+1", lambda _ctx: fired.append("history 1"), source="pack")
+    app._handle_key("alt+1")
+    assert fired == ["history 1"]
+
+
+def test_a_tab_key_nothing_else_uses_does_nothing_in_the_engine():
+    # The window switched tabs before the key got here; there is nothing left to do.
+    app = _engine_app()
+    app._handle_key("alt+2")
+
+
+class _Loop:
+    def __init__(self) -> None:
+        self.calls: list[tuple] = []
+
+    def call_soon_threadsafe(self, function, *args) -> None:
+        self.calls.append(args)
+
+
+def _panel(claimed: bool) -> SimpleNamespace:
+    """A session-panel-shaped object whose world does or doesn't bind the pressed key."""
+    engine = SimpleNamespace(has_key=lambda _combo: claimed)
+    return SimpleNamespace(
+        _keymap=load_keymap("vipmud"),
+        app=SimpleNamespace(engine=engine, on_ws_message=lambda _message: None),
+        _loop=_Loop(),
+    )
+
+
+def test_alt_number_switches_tabs_when_nothing_in_the_world_uses_it(monkeypatch):
+    from genericmud.ui import wx_app
+
+    frame = _frame()
+    monkeypatch.setattr(wx_app.wx, "GetTopLevelParent", lambda _window: frame)
+    panel = _panel(claimed=False)
+    assert wx_app.SessionPanel._dispatch_bound_combo(panel, "alt+2") is True
+    assert frame.book.GetSelection() == 1
+    assert panel._loop.calls == []
+
+
+def test_alt_number_goes_to_the_soundpack_when_it_uses_the_key(monkeypatch):
+    from genericmud.ui import wx_app
+
+    frame = _frame()
+    monkeypatch.setattr(wx_app.wx, "GetTopLevelParent", lambda _window: frame)
+    panel = _panel(claimed=True)
+    assert wx_app.SessionPanel._dispatch_bound_combo(panel, "alt+2") is True
+    assert frame.book.GetSelection() == 0
+    assert frame.said == []
+    assert panel._loop.calls == [({"type": "key", "key": "alt+2"},)]
+
+
+# --- Macs ---------------------------------------------------------------------
+
+
+def test_on_a_mac_option_and_a_number_is_left_for_typing(monkeypatch):
+    monkeypatch.setattr("sys.platform", "darwin")
+    keys = load_keymap("vipmud")
+    assert not [combo for combo in keys if combo.startswith("alt+") and combo[4:].isdigit()]
+    assert keys["ctrl+1"] == "recall:1"  # every other key is untouched
+
+
+def test_elsewhere_alt_and_a_number_switches_tabs(monkeypatch):
+    monkeypatch.setattr("sys.platform", "linux")
+    keys = load_keymap("vipmud")
+    assert keys["alt+1"] == "tab:select:1"
+    assert keys["alt+0"] == "tab:select:10"
