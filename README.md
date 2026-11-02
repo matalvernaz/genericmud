@@ -171,9 +171,9 @@ recognise exactly where it is.
 The same world details also have **Echo input in the output**, off by default,
 which puts each command you send into the output as well — buffered like any
 other line, so the review keys can read back something you typed that has
-scrolled away. It never speaks them, and it never shows a password. It's
-separate from the logging one on purpose: wanting your commands on screen and
-wanting them in a file are two different things.
+scrolled away. It never speaks them, and it shows nothing while the MUD is
+hiding what you type. It's separate from the logging one on purpose: wanting
+your commands on screen and wanting them in a file are two different things.
 
 ## Getting around the game
 
