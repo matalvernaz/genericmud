@@ -8,6 +8,15 @@ fails the build on purpose.
 
 Entries start at 0.7.1. Earlier releases were tagged before this file existed.
 
+## 0.21.3 — 2026-11-02
+
+**Typing from the output keeps your command**
+
+* Starting to type while you're reading the output still moves you to the
+  command box, but no longer throws away what you'd already typed there. On Mac
+  and Linux, the first letter used to replace the whole unsent command; it now
+  goes in where you left off.
+
 ## 0.21.2 — 2026-11-02
 
 **Other worlds keep quiet**
