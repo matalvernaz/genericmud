@@ -17,6 +17,7 @@ answer to read and one place to change.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 LOG_SUFFIX = ".log"
@@ -24,8 +25,15 @@ LOG_SUFFIX = ".log"
 # diagnostic loggers write a "banner" line first; a session log starts by saying so. Names
 # can't decide it -- a world called "crash" produces crash-20260101-120000.log in session
 # mode, which is exactly a crash log's shape -- and the first line can.
-_DIAGNOSTIC_MARKER = " banner "
+# The diagnostic marker is the same one diaglog's pruning looks for, so a transcript that merely
+# mentions a banner is never taken for a diagnostic log.
+_DIAGNOSTIC_MARKER = " banner version="
 _SESSION_MARKER = "Session started"
+# Before 0.16.0 a session log had no first line of its own: it began with whatever the MUD sent.
+# What it did have was the name the old logger always gave it, the world's name and the moment
+# logging started ("Valdrenne-20260620-101500.log"). With no diagnostic banner, that name is
+# enough; a file with neither marker nor that name is still left alone.
+_LEGACY_SESSION_NAME = re.compile(r".+-\d{8}-\d{6}\.log", re.IGNORECASE)
 _PROBE_CHARS = 4096
 _MAX_COLLISION_ATTEMPTS = 1000
 
@@ -107,6 +115,8 @@ def _kind_of(path: Path) -> str | None:
     if _DIAGNOSTIC_MARKER in first:
         return "diagnostic"
     if _SESSION_MARKER in first:
+        return "session"
+    if _LEGACY_SESSION_NAME.fullmatch(path.name):
         return "session"
     return None
 

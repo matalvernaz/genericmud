@@ -60,6 +60,22 @@ def test_diagnostic_and_crash_logs_go_together():
     assert log_count(world_log_dir()) == 0
 
 
+def test_a_session_log_from_before_0_16_is_filed_by_the_name_it_was_given():
+    # Older session logs began with whatever the MUD sent, so only their name says what they are.
+    legacy = _write(logs_root() / "Valdrenne-20260620-101500.log", "Welcome to Valdrenne!\n> look\n")
+    assert migrate_legacy_logs() == 1
+    assert not legacy.exists()
+    assert (world_log_dir() / legacy.name).exists()
+
+
+def test_a_transcript_that_mentions_a_banner_is_not_a_diagnostic_log():
+    # Only the banner line the diagnostic loggers write counts, the one their pruning looks for.
+    legacy = _write(logs_root() / "gw-20260620-101500.log", "The herald unfurls a banner over the gate.\n")
+    assert migrate_legacy_logs() == 1
+    assert (world_log_dir() / legacy.name).exists()
+    assert log_count(diagnostic_log_dir()) == 0
+
+
 def test_a_file_this_app_did_not_write_is_left_alone():
     # Guessing would file somebody else's file somewhere they would never look for it.
     stranger = _write(logs_root() / "notes.log", "my own notes\n")
