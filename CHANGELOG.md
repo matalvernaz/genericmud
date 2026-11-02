@@ -8,6 +8,71 @@ fails the build on purpose.
 
 Entries start at 0.7.1. Earlier releases were tagged before this file existed.
 
+## 0.21.0 — 2026-11-02
+
+**Logging in by itself**
+
+* A world's details take a username and password, kept in your computer's own
+  credential store (the Windows Credential Manager, the macOS Keychain, or the
+  Secret Service on Linux) and never in genericMud's files. Connect chooses how
+  they're sent: in answer to the MUD's own prompts, as MUSH and MOO's CONNECT
+  command, as a Diku name and then password, or only when the MUD asks for them
+  over MXP. A new world starts on No auto-connect.
+* Sent after connecting takes commands to type once you're in, like look and
+  score, one per line.
+* A password the MUD echoes back is kept out of the output, the speech and the
+  logs.
+* On a computer with no working credential store, genericMud keeps logins in
+  its own credentials file and says so when it starts.
+
+**MXP**
+
+* MUDs that use MXP get it. Their markup is taken out of the text instead of
+  reaching you as words, and genericMud answers their questions about what it
+  supports. Each world can switch this off.
+* Links a MUD puts in its text can be followed: Alt+Enter follows the link on
+  the line you're reviewing, and so does Enter on a line in the output box. In
+  the web UI they're real links.
+* A picture becomes a link in the text client, which opens it in your browser,
+  and a Show picture button in the web UI. A world's details take the MUD's
+  images web address, for MUDs that send only a file name.
+* MXP is only read once the MUD offers it, and nothing another player writes
+  can make genericMud follow a link, load a picture, send your login or hold
+  back your output.
+
+**More than one world**
+
+* Alt+1 to Alt+9 go straight to a tab, and Alt+0 to the tenth, unless the
+  world's soundpack or your own hotkeys use those keys. On a Mac they're left
+  free, since Option and a number types characters there.
+* Ctrl+Tab and those keys say which world you landed in.
+* View, Silence other worlds: switch it off and every open world speaks, not
+  just the one in front. It's on unless you change it, so nothing starts
+  talking unasked.
+* View, World name in the window title, names the window after the world
+  you're in.
+
+**Keys**
+
+* Ctrl+Alt+0 reads the tenth message on the channel you're browsing.
+* With numpad compass walking off, numpad keys can be your own hotkeys.
+* On a Windows keyboard with an AltGr key, AltGr and a key types its character
+  instead of being taken as a shortcut: AltGr+0 is @ on a French keyboard and }
+  on a German one.
+
+**Each world's own settings**
+
+* Echo input in the output puts each command you send into the output as well,
+  so the review keys can read it back after it has scrolled away. It's never
+  spoken, and nothing is shown while the MUD is hiding what you type.
+
+**Logs**
+
+* Session logs and diagnostic logs now have folders of their own, logs/worlds
+  and logs/diagnostics, and /logs says where they are. The first start of this
+  version moves the logs already there, and leaves anything it doesn't
+  recognise where it is.
+
 ## 0.20.5 — 2026-10-28
 
 **Faster with big soundpacks**
