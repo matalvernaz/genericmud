@@ -2003,6 +2003,13 @@ class EngineApp:
             self.engine.press_key(combo)  # user-defined macro
             return
         namespace, _, argument = action.partition(":")
+        if namespace == "tab":
+            # Switching tabs is the window's job, and the window does it before the key gets
+            # here. What reaches the engine is a key the world's soundpack or the player's own
+            # hotkey claimed (Erion's channel history reads messages on Alt+1 to Alt+0), so it
+            # goes to that binding, as it did before the key had a tab action.
+            self.engine.press_key(combo)
+            return
         if namespace == "recall":
             # "recall:N" or "recall:<channel>:N" (channel filters the scrollback).
             channel, _, count = argument.rpartition(":")
