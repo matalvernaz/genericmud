@@ -8,6 +8,17 @@ fails the build on purpose.
 
 Entries start at 0.7.1. Earlier releases were tagged before this file existed.
 
+## 0.21.2 — 2026-11-02
+
+**Other worlds keep quiet**
+
+* A world in another tab no longer cuts off the one you're listening to. With
+  follow mode on, every room change in a background world stopped the speech of
+  the world in front, and a soundpack in a background world that stops speech
+  on its own triggers did the same. While genericMud is in the background with
+  Background silence on, it no longer cuts off your screen reader in other
+  programs either.
+
 ## 0.21.1 — 2026-11-02
 
 **The Mac download**
