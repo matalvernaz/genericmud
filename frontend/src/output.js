@@ -75,17 +75,26 @@ export class Output {
   }
 
   _image(url) {
-    const img = document.createElement("img");
-    img.className = "mxp-image";
-    img.src = url;
-    // Deliberately no alt attribute: an empty alt would hide the image from a screen reader
-    // entirely, and the point is that something visual was there. MXP gives an image no
-    // description to use, so "graphic" is the most this client can honestly say about it.
-    img.decoding = "async";
-    img.loading = "lazy";
-    img.referrerPolicy = "no-referrer";  // don't tell the MUD's web server where we came from
-    img.addEventListener("error", () => img.remove());
-    return img;
+    // The picture is fetched only when the player asks for it. Loading it as the line arrives
+    // let a MUD make the browser request any address it named, the player's own network
+    // included, and tell that server the player's address, without anyone pressing anything.
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "mxp-image-button";
+    button.textContent = "Show picture";
+    button.addEventListener("click", () => {
+      const img = document.createElement("img");
+      img.className = "mxp-image";
+      // Deliberately no alt attribute: an empty alt would hide the image from a screen reader
+      // entirely, and the point is that something visual was there. MXP gives an image no
+      // description to use, so "graphic" is the most this client can honestly say about it.
+      img.decoding = "async";
+      img.referrerPolicy = "no-referrer";  // don't tell the MUD's web server where we came from
+      img.addEventListener("error", () => img.remove());
+      img.src = url;
+      button.replaceWith(img);
+    });
+    return button;
   }
 
   _atBottom() {

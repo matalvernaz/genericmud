@@ -12,7 +12,7 @@ from genericmud.bridge import protocol
 from genericmud.config.keymap import load_keymap
 from genericmud.config.worlds import World, load_worlds, save_worlds
 from genericmud.protocol.mxp import IMAGE_MARK, MxpParser, resolve_image_url
-from genericmud.protocol.telnet import DataReceived
+from genericmud.protocol.telnet import OPT_MXP, WILL, DataReceived, Negotiation
 from genericmud.voice.router import VoiceRouter
 from tests.helpers import RecordingBackend
 
@@ -27,6 +27,8 @@ def _app(images_url: str = ""):
     sent: list[str] = []
     posted: list[dict] = []
     app = EngineApp(voice, send=sent.append, post=posted.append, keymap=load_keymap("vipmud"))
+    # A server that uses MXP offers it first; until one does, nothing is read as MXP.
+    app.on_telnet_event(Negotiation(WILL, OPT_MXP))
     app.images_url = images_url
     return app, sent, backend, posted
 

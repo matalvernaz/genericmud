@@ -59,7 +59,9 @@ _TAG_RE = re.compile(
     r"(?P<attrs>(?:[^<>\"']|\"[^\"]*\"|'[^']*')*)"
     r">"
 )
-_ENTITY_RE = re.compile(r"&(?P<name>[A-Za-z][A-Za-z0-9]*|#\d+);")
+# A numeric entity has at most seven digits (U+10FFFF is 1114111): anything longer is not a
+# character, and int() on thousands of digits raises out of the whole line.
+_ENTITY_RE = re.compile(r"&(?P<name>[A-Za-z][A-Za-z0-9]{0,31}|#\d{1,7});")
 
 # Open tags are the only ones allowed on an open line (spec: "Only the tags described in
 # this section are OPEN tags" -- text formatting and line spacing).
@@ -127,6 +129,10 @@ class MxpParser:
         self._mode = MODE_OPEN  # this line's mode, set by an escape on it
         self._temp_secure = False  # mode 4: the next tag only
         self._paragraph = False  # between <P> and </P> newlines are not breaks
+        # A <P> opened on an open line, where players can write, ends with that line as every
+        # open tag does at the newline. Otherwise "<p>" in one chat line would hold everyone's
+        # output until the server happened to send "</p>".
+        self._paragraph_ends_with_line = False
         self._nobr = False  # <NOBR> swallows the next newline
         self._client_version = client_version
 
@@ -140,44 +146,73 @@ class MxpParser:
             match = _LINE_MODE_RE.match(line)
             if match is None:
                 return line
-            code = int(match.group("mode"))
             line = line[match.end():]
-            if code == 0:
-                self._mode = MODE_OPEN
-            elif code == 1:
-                self._mode = MODE_SECURE
-            elif code == 2:
-                self._mode = MODE_LOCKED
-            elif code == 3:  # reset: everything closed, back to open
-                self._mode = MODE_OPEN
-                self._default_mode = MODE_OPEN
-                self._paragraph = False
-                self._nobr = False
-            elif code == 4:
-                self._temp_secure = True
-            elif code in (5, 6, 7):
-                self._default_mode = {5: MODE_OPEN, 6: MODE_SECURE, 7: MODE_LOCKED}[code]
-                self._mode = self._default_mode
-            # 10-99 are automapper/user-defined line tags: nothing to do here, but they
-            # must not reach the text either, which the loop above already ensures.
+            self._apply_mode(int(match.group("mode")))
+
+    def _apply_mode(self, code: int) -> None:
+        """Act on one line-mode escape."""
+        if code == 0:
+            self._mode = MODE_OPEN
+        elif code == 1:
+            self._mode = MODE_SECURE
+        elif code == 2:
+            self._mode = MODE_LOCKED
+        elif code == 3:  # reset: everything closed, back to open
+            self._mode = MODE_OPEN
+            self._default_mode = MODE_OPEN
+            self._paragraph = False
+            self._nobr = False
+        elif code == 4:
+            self._temp_secure = True
+        elif code in (5, 6, 7):
+            self._default_mode = {5: MODE_OPEN, 6: MODE_SECURE, 7: MODE_LOCKED}[code]
+            self._mode = self._default_mode
+        # 10-99 are automapper/user-defined line tags: nothing to do here, but they
+        # must not reach the text either, which the callers already ensure.
 
     # --- one line ------------------------------------------------------------
 
     def feed(self, line: str) -> MxpOutcome:
         """Parse one line from the MUD. ``line`` has no newline; the caller joins."""
-        line = self._apply_modes(line)
-        if self._mode == MODE_LOCKED:
-            return self._finish(line, [], [], [], [])
-
+        # The image marker is this client's own, so one arriving in the text is somebody's
+        # attempt to move where a real picture is drawn.
+        line = self._apply_modes(line.replace(IMAGE_MARK, ""))
         cues: list[SoundCue] = []
         replies: list[str] = []
         links: list[tuple[str, str]] = []
         images: list[tuple[str, str]] = []
+        # A server can mark its own text secure and then drop to open (or locked) partway
+        # through a line, before a player's words. So the line is read in pieces, each in the
+        # mode in force where it starts. Partway through, a line may only become less trusted:
+        # escapes that would make what follows secure are ignored there, since a player who
+        # got an escape into their own words could otherwise make them secure.
+        pieces: list[str] = []
+        position = 0
+        for match in _LINE_MODE_RE.finditer(line):
+            piece = line[position:match.start()]
+            pieces.append(self._parse_piece(piece, cues, replies, links, images))
+            code = int(match.group("mode"))
+            if code in (0, 2, 3):
+                self._apply_mode(code)
+            position = match.end()
+        pieces.append(self._parse_piece(line[position:], cues, replies, links, images))
+        return self._finish("".join(pieces), cues, replies, links, images)
+
+    def _parse_piece(
+        self,
+        text: str,
+        cues: list[SoundCue],
+        replies: list[str],
+        links: list[tuple[str, str]],
+        images: list[tuple[str, str]],
+    ) -> str:
+        """Read one stretch of a line in the current mode."""
+        if self._mode == MODE_LOCKED:
+            return text
         # Tags first, entities second. &lt; exists precisely to write a literal "<", so
         # expanding entities before parsing tags would turn it into one and eat it.
-        text = self._parse_tags(line, cues, replies, links, images)
-        text = self._expand_entities(text)
-        return self._finish(text, cues, replies, links, images)
+        text = self._parse_tags(text, cues, replies, links, images)
+        return self._expand_entities(text)
 
     def _finish(
         self,
@@ -195,6 +230,9 @@ class MxpParser:
         """
         no_break = self._nobr
         self._nobr = False
+        if self._paragraph and self._paragraph_ends_with_line:
+            self._paragraph = False
+        self._paragraph_ends_with_line = False
         return MxpOutcome(
             text=text,
             cues=cues,
@@ -213,7 +251,7 @@ class MxpParser:
             name = match.group("name")
             if name.startswith("#"):
                 code = int(name[1:])
-                return chr(code) if 32 <= code < 0x110000 else ""
+                return chr(code) if _printable_code_point(code) else ""
             return _ENTITIES.get(name.lower(), match.group(0))
 
         return _ENTITY_RE.sub(replace, text)
@@ -252,6 +290,7 @@ class MxpParser:
             if name in _OPEN_TAGS or secure_ok:
                 self._act(
                     name, match.group("attrs"), closing, cues, replies, out, links, images,
+                    secure=secure_ok,
                 )
             # A secure tag on an open line is dropped without action, exactly as the
             # security rule requires; its text stays, which is the safe half.
@@ -278,12 +317,15 @@ class MxpParser:
         out: list[str],
         links: list[tuple[str, str]],
         images: list[tuple[str, str]],
+        *,
+        secure: bool = False,
     ) -> None:
         """Do the handful of things this client acts on."""
         if name in ("br", "sbr"):
             out.append("\n")
         elif name == "p":
             self._paragraph = not closing
+            self._paragraph_ends_with_line = not closing and not secure
         elif name == "nobr":
             self._nobr = True
         elif name in ("sound", "music") and not closing:
@@ -319,6 +361,17 @@ class MxpParser:
     def secure_line(payload: str) -> str:
         """Wrap a reply so the MUD can tell it came from the client, not the player."""
         return "\x1b[1z" + payload + "\n"
+
+
+def _printable_code_point(code: int) -> bool:
+    """Whether a numeric entity may become text: not a control character (C0, DEL or the C1
+    range, which includes a one-byte ANSI escape), not half of a surrogate pair (which can't
+    be written to a log), and not this client's own image marker."""
+    if code < 32 or 0x7F <= code <= 0x9F:
+        return False
+    if 0xD800 <= code <= 0xDFFF:
+        return False
+    return code < 0x110000 and chr(code) != IMAGE_MARK
 
 
 def _support_reply(attrs: str) -> str:

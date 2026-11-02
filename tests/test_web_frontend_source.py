@@ -66,3 +66,12 @@ def test_links_are_visibly_and_focusably_distinct():
     source = _read("style.css")
     assert "#output a.mxp-link:focus" in source
     assert "outline" in source
+
+
+def test_a_picture_loads_only_when_the_player_asks_for_it():
+    # Drawing the image as the line arrived let a MUD make the browser request any address it
+    # named, the player's own network included. The fetch starts from the button's click.
+    source = (FRONTEND / "output.js").read_text(encoding="utf-8")
+    image = source.split("_image(url) {", 1)[1].split("\n  }\n", 1)[0]
+    assert 'button.textContent = "Show picture"' in image
+    assert image.index('addEventListener("click"') < image.index("img.src = url")

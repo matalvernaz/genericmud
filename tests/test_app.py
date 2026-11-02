@@ -8,6 +8,7 @@ from genericmud.protocol.telnet import (
     GA,
     OPT_GMCP,
     OPT_MSDP,
+    OPT_MXP,
     WILL,
     Command,
     DataReceived,
@@ -586,6 +587,8 @@ def _mxp_app(**kwargs):
         keymap=load_keymap("vipmud"),
         **kwargs,
     )
+    # A server that uses MXP offers it first; until one does, nothing is read as MXP.
+    app.on_telnet_event(Negotiation(WILL, OPT_MXP))
     return app, sent, raw
 
 

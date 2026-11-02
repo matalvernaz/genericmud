@@ -787,12 +787,25 @@ class SessionPanel(wx.Panel):
         ):
             # Reading the output: there is nothing to send from here, so Enter follows the
             # link on the line the reader is on -- the keyboard form of clicking the words.
-            # The action is sent directly because the keymap has no plain "enter": _key_combo
-            # keeps it as typing, or it would stop the command box sending anything.
+            # The engine is told which line that is, by its text and its distance from the
+            # end, because its own review cursor knows nothing of this caret: following the
+            # newest line's link instead would run a command the reader never heard.
             if self.app is not None:
+                if self._pending:
+                    self._flush_output()  # the caret's line may still be in the append batch
+                lines = self.output.GetValue().split("\n")
+                ok, _column, caret_line = self.output.PositionToXY(
+                    self.output.GetInsertionPoint()
+                )
+                if not ok or not 0 <= caret_line < len(lines):
+                    caret_line = len(lines) - 1
                 self._loop.call_soon_threadsafe(
                     self.app.on_ws_message,
-                    {"type": protocol.KEY, "key": "review:link"},
+                    {
+                        "type": protocol.LINK_AT,
+                        "text": lines[caret_line],
+                        "from_end": len(lines) - 1 - caret_line,
+                    },
                 )
             return
         # Route bound keymap combos here too, so the panic keys and other macros work while
@@ -1476,7 +1489,7 @@ class FindDialog(wx.Dialog):
 # What a world's log file choices are called in its details, in LOG_FILES order.
 _LOG_FILE_LABELS = ("A new file each session", "One file per day", "One file for this world")
 # In the order CONNECT_METHODS visits them, so the value and its label stay together.
-# MXP is absent because genericMud doesn't parse MXP yet (see config/worlds.py).
+# A login sent in answer to the MUD's own MXP request is not offered yet (see config/worlds.py).
 _CONNECT_LABELS = (
     ("none", "No auto-connect — send no login"),
     ("prompts", "Answer the MUD's prompts — name, then password when asked"),
