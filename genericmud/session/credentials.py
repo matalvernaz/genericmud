@@ -17,12 +17,15 @@ already in the file into the OS store.
 from __future__ import annotations
 
 import json
+import secrets
 from pathlib import Path
 from typing import Protocol
 
 from genericmud.config.atomic import atomic_write_text
 
 CREDENTIAL_SERVICE = "genericmud"  # what the OS credential store files these under
+# The entry name the startup check writes and removes again; never a world's name.
+_STORE_CHECK_ENTRY = "genericmud store check"
 
 
 class CredentialStore(Protocol):
@@ -145,6 +148,10 @@ def migrate_plaintext_to_keyring(path: Path, store: KeyringCredentialStore) -> i
             store.set(world, username, password)
         except Exception:  # noqa: BLE001 - keep the plaintext rather than lose the login
             return moved
+        # A store can take a write and keep nothing, so a login only counts as moved once it
+        # reads back. The readable file goes only when every one of them has.
+        if store.get(world) != (username, password):
+            return moved
         moved += 1
     try:
         path.unlink()
@@ -165,9 +172,32 @@ def _usable_keyring() -> tuple[object | None, str | None]:
         return None, f"no credential store is available ({error})"
     # keyring answers with its "fail" backend when the platform offers nothing usable, and
     # only raising on write. Check for it up front, so the fallback is decided at startup.
-    if type(backend).__module__.endswith(".fail"):
+    module = type(backend).__module__
+    if module.endswith(".fail"):
         return None, "no credential store is available on this system"
+    # The "null" backend, which `keyring --disable` selects, accepts every write and keeps
+    # nothing; keyrings.alt's stores are files of its own, not the operating system's store.
+    if module.endswith(".null") or module.split(".")[0] == "keyrings":
+        return None, "the credential store is switched off, or isn't one the system provides"
+    if not _keeps_an_entry(keyring):
+        return None, "the credential store didn't keep a test entry"
     return keyring, None
+
+
+def _keeps_an_entry(keyring) -> bool:
+    """Write a throwaway entry, read it back and remove it: a store that takes a write is not
+    yet proof that it keeps one, and real logins are only trusted to one that does."""
+    sentinel = secrets.token_hex(8)
+    try:
+        keyring.set_password(CREDENTIAL_SERVICE, _STORE_CHECK_ENTRY, sentinel)
+        kept = keyring.get_password(CREDENTIAL_SERVICE, _STORE_CHECK_ENTRY) == sentinel
+    except Exception:  # noqa: BLE001 - a store that can't even be tried is not usable
+        kept = False
+    try:
+        keyring.delete_password(CREDENTIAL_SERVICE, _STORE_CHECK_ENTRY)
+    except Exception:  # noqa: BLE001 - already gone, or never written
+        pass
+    return kept
 
 
 def open_credential_store(path: Path) -> tuple[CredentialStore, str | None]:

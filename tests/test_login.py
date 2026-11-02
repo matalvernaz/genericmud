@@ -569,6 +569,71 @@ def test_a_corrupt_plaintext_file_is_left_alone_not_half_migrated(tmp_path, memo
     assert path.exists()  # nothing moved, so nothing deleted
 
 
+class _ForgetfulKeyring(keyring.backend.KeyringBackend):
+    """Takes every write and keeps nothing, like keyring's null backend under another name."""
+
+    priority = 1
+
+    def get_password(self, service, username):
+        return None
+
+    def set_password(self, service, username, password):
+        pass
+
+    def delete_password(self, service, username):
+        raise keyring.errors.PasswordDeleteError(username)
+
+
+@pytest.fixture
+def forgetful_keyring():
+    previous = keyring.get_keyring()
+    keyring.set_keyring(_ForgetfulKeyring())
+    try:
+        yield
+    finally:
+        keyring.set_keyring(previous)
+
+
+def test_the_null_keyring_is_never_trusted_with_logins(tmp_path):
+    # `keyring --disable` selects the null backend: every write "succeeds" and nothing is kept.
+    # Trusting it deleted the plaintext file and every saved login with it.
+    import keyring.backends.null
+
+    path = tmp_path / "credentials.json"
+    PlaintextCredentialStore(path).set("Aardwolf", "hero", "hunter2")
+    previous = keyring.get_keyring()
+    keyring.set_keyring(keyring.backends.null.Keyring())
+    try:
+        store, reason = open_credential_store(path)
+    finally:
+        keyring.set_keyring(previous)
+    assert isinstance(store, PlaintextCredentialStore)
+    assert reason
+    assert path.exists()
+    assert store.get("Aardwolf") == ("hero", "hunter2")
+
+
+def test_a_store_that_keeps_nothing_is_caught_by_the_startup_check(tmp_path, forgetful_keyring):
+    path = tmp_path / "credentials.json"
+    PlaintextCredentialStore(path).set("Aardwolf", "hero", "hunter2")
+    store, reason = open_credential_store(path)
+    assert isinstance(store, PlaintextCredentialStore)
+    assert reason == "the credential store didn't keep a test entry"
+    assert store.get("Aardwolf") == ("hero", "hunter2")
+
+
+def test_migration_keeps_the_file_unless_every_login_reads_back(tmp_path, forgetful_keyring):
+    path = tmp_path / "credentials.json"
+    PlaintextCredentialStore(path).set("Aardwolf", "hero", "hunter2")
+    assert migrate_plaintext_to_keyring(path, KeyringCredentialStore()) == 0
+    assert path.exists()
+
+
+def test_the_startup_check_leaves_nothing_behind(memory_keyring):
+    assert credentials._usable_keyring() == (keyring, None)
+    assert memory_keyring.entries == {}
+
+
 def test_no_credential_store_falls_back_and_says_why(tmp_path, monkeypatch):
     # The reason reaches the speaker, so it has to be a sentence, not an exception repr.
     monkeypatch.setattr(credentials, "_usable_keyring", lambda: (None, "no store here"))
