@@ -444,7 +444,7 @@ View, **Alt+H** Help.
 | Ctrl+Alt+Left / Right | Previous / next chat channel |
 | Ctrl+Alt+Up / Down | Scroll within the current channel |
 | Ctrl+Alt+Shift+Left / Right | Word by word in the channel line |
-| Ctrl+Alt+1..9 | Recent messages on the current channel |
+| Ctrl+Alt+1..9, Ctrl+Alt+0 | Recent messages on the current channel (0 is the tenth) |
 | Alt+B / Alt+R | Drop a breadcrumb / retrace to it |
 | Alt+W / Alt+S | Where am I / stop walking |
 | Alt+M | Read the mapped room and where its exits lead |
