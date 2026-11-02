@@ -136,10 +136,13 @@ on almost any MUD. A few conveniences in the command box:
 **Ctrl+N** opens another new world and **Ctrl+O** another saved one, each in its
 own tab. **Ctrl+Tab** and **Ctrl+Shift+Tab** switch between them and say which
 world you landed in; **Alt+1** through **Alt+9** (and **Alt+0** for the tenth) go
-straight to a tab, counting in the order you opened them. Only the tab you're on
-speaks; the others stay quiet but keep running — triggers still fire and sounds
-still play, so you miss nothing. To reach across, `/to` sends a command to another
-tab by its world name: `/to alter aeon look`.
+straight to a tab, counting in the order you opened them, unless the world's
+soundpack or your own hotkeys use those keys. On a Mac they're left free, since
+Option and a number types characters there. Out of the box only the tab you're
+on speaks; the others stay quiet but keep running — triggers still fire and
+sounds still play, so you miss nothing. **View → Silence other worlds** lets them
+all speak. To reach across, `/to` sends a command to another tab by its world
+name: `/to alter aeon look`.
 
 The window title can name the world you're in — **View → World name in the window
 title** — so Alt+Tab and the taskbar read as `genericMud - [Shards of Valdrenne]`
