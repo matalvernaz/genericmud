@@ -1470,6 +1470,16 @@ _ID_NEW_WORLD = wx.ID_HIGHEST + 1
 _ID_EDIT_WORLD = wx.ID_HIGHEST + 2
 
 
+def _saved_on_same_server(world: World) -> bool:
+    """Whether a saved world of this name points at the same server. Logins are kept by world
+    name, so a soundpack's world that only shares a saved world's name must not be offered
+    that world's login: it would be sent to the pack's server instead."""
+    return any(
+        saved.name == world.name and saved.host == world.host and saved.port == world.port
+        for saved in load_worlds()
+    )
+
+
 class WorldDialog(wx.Dialog):
     """Create or edit connection details for one world."""
 
@@ -1484,11 +1494,16 @@ class WorldDialog(wx.Dialog):
         show_save: bool = True,
         lock_name: bool = False,
         credentials: CredentialStore | None = None,
+        prefill_login: bool = True,
         note: str = "",
     ) -> None:
         super().__init__(parent, title=title)
         self._world: World | None = None
         self._credentials = credentials
+        # Whether the login boxes were filled from the store, i.e. they hold this world's own
+        # login. Only then does a rename move it: a soundpack's setup that merely shares a
+        # saved world's name must not take that world's login with it.
+        self._login_prefilled = False
         # Kept so a rename can move the stored login: the store is keyed by world name.
         self._initial_name = initial.name if initial is not None else None
         # Why the dialog is up, first in the window: NVDA reads a dialog's text that labels no
@@ -1668,8 +1683,11 @@ class WorldDialog(wx.Dialog):
             methods = [value for value, _label in _CONNECT_LABELS]
             self._connect.SetSelection(methods.index(initial.connect_method))
             self._post_connect.SetValue(initial.post_connect_commands)
-            stored = self._credentials.get(initial.name) if self._credentials is not None else None
+            stored = None
+            if prefill_login and self._credentials is not None:
+                stored = self._credentials.get(initial.name)
             if stored is not None:
+                self._login_prefilled = True
                 # Pre-filled rather than blank: leaving it blank could not tell "keep the
                 # password I already have" from "forget it", and one of the two is a trap.
                 self._username.SetValue(stored[0])
@@ -1729,7 +1747,18 @@ class WorldDialog(wx.Dialog):
             connect_method=_CONNECT_LABELS[self._connect.GetSelection()][0],
             post_connect_commands=self._post_connect.GetValue(),
         )
-        self._store_credentials(self._world)
+        try:
+            self._store_credentials(self._world)
+        except Exception as error:  # noqa: BLE001 - a locked or broken store, say so and stay
+            wx.MessageBox(
+                f"The login couldn't be saved to the credential store ({error}). Try again, "
+                "or clear the username and password to save the world without one.",
+                "World details",
+                wx.OK | wx.ICON_ERROR,
+                self,
+            )
+            self._username.SetFocus()
+            return
         self.EndModal(wx.ID_OK)
 
     def _password_value(self) -> str:
@@ -1768,7 +1797,11 @@ class WorldDialog(wx.Dialog):
             self._credentials.set(world.name, username, password)
         else:
             self._credentials.delete(world.name)  # both blank means "forget this login"
-        if self._initial_name is not None and self._initial_name != world.name:
+        if (
+            self._login_prefilled
+            and self._initial_name is not None
+            and self._initial_name != world.name
+        ):
             self._credentials.delete(self._initial_name)
 
     def get_world(self) -> World:
@@ -4666,6 +4699,8 @@ class GenericMudFrame(wx.Frame):
         needs_trust = (
             manifest.dialect in CODE_EXEC_DIALECTS and not self._packs.is_trusted(manifest.id)
         )
+        # Decided before the pack's world is saved over a same-named one.
+        same_server = _saved_on_same_server(world)
         self._save_world(world)
         dialog = WorldDialog(
             self,
@@ -4678,6 +4713,7 @@ class GenericMudFrame(wx.Frame):
                 "folder can stay blank. Press Enter to connect."
             ),
             credentials=self._credentials,
+            prefill_login=same_server,
         )
         try:
             if dialog.ShowModal() != wx.ID_OK:
@@ -4729,6 +4765,7 @@ class GenericMudFrame(wx.Frame):
             save_default=True,
             note=note,
             credentials=self._credentials,
+            prefill_login=result.world is not None and _saved_on_same_server(result.world),
         )
         if connect.ShowModal() == wx.ID_OK:
             world = connect.get_world()

@@ -1506,6 +1506,62 @@ def test_the_world_dialog_prefills_saves_and_moves_a_stored_login(frame, tmp_pat
         dialog.Destroy()
 
 
+def test_a_soundpack_world_on_another_server_gets_no_saved_login(frame, tmp_path):
+    # Logins are kept by world name. A pack whose world merely shares a saved world's name
+    # must not be handed that login, and renaming it must not take the original's login away.
+    from genericmud.config.worlds import World
+    from genericmud.session.credentials import PlaintextCredentialStore
+    from genericmud.ui.wx_app import WorldDialog
+
+    store = PlaintextCredentialStore(tmp_path / "c.json")
+    store.set("Erion", "hero", "secret")
+    dialog = WorldDialog(
+        frame,
+        World("Erion", "pack.example", 4000),
+        credentials=store,
+        prefill_login=False,
+    )
+    try:
+        assert dialog._username.GetValue() == ""
+        assert dialog._password_value() == ""
+        dialog._name.SetValue("Erion pack")
+        _accept(dialog)
+        assert store.get("Erion") == ("hero", "secret")
+        assert store.get("Erion pack") is None
+    finally:
+        dialog.Destroy()
+
+
+def test_a_login_the_store_refuses_keeps_the_dialog_open_and_says_why(frame, monkeypatch):
+    from genericmud.config.worlds import World
+    from genericmud.ui import wx_app
+    from genericmud.ui.wx_app import WorldDialog
+
+    class LockedStore:
+        def get(self, world):
+            return None
+
+        def set(self, world, username, password):
+            raise RuntimeError("the keychain is locked")
+
+        def delete(self, world):
+            pass
+
+    told: list[str] = []
+    monkeypatch.setattr(wx_app.wx, "MessageBox", lambda text, *_args: told.append(text))
+    dialog = WorldDialog(frame, World("gw", "h.example", 4000), credentials=LockedStore())
+    ended: list[int] = []
+    dialog.EndModal = ended.append
+    try:
+        dialog._username.SetValue("hero")
+        dialog._password.SetValue("secret")
+        dialog._on_ok(None)
+        assert ended == []
+        assert told and "the keychain is locked" in told[0]
+    finally:
+        dialog.Destroy()
+
+
 def test_a_world_dialog_note_comes_first_and_labels_no_control(frame):
     # NVDA reads a dialog's text that labels no control as the dialog opens.
     from genericmud.ui.wx_app import WorldDialog
