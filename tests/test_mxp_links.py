@@ -12,7 +12,7 @@ from genericmud.bridge import protocol
 from genericmud.config.keymap import load_keymap
 from genericmud.model.buffer import Buffer, Line
 from genericmud.protocol.mxp import MxpParser
-from genericmud.protocol.telnet import DataReceived
+from genericmud.protocol.telnet import OPT_MXP, WILL, DataReceived, Negotiation
 from genericmud.review.cursor import ReviewCursor
 from genericmud.voice.router import VoiceRouter
 from tests.helpers import RecordingBackend
@@ -45,6 +45,8 @@ def _build(*, window=None):
         post=posted.append,
         keymap=load_keymap("vipmud"),
     )
+    # A server that uses MXP offers it first; until one does, nothing is read as MXP.
+    app.on_telnet_event(Negotiation(WILL, OPT_MXP))
     # A front end with a window sets this; without it there is nothing to open a URL with.
     app.pack_window = window
     return app, sent, backend, posted

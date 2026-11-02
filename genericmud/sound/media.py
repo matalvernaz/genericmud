@@ -26,7 +26,6 @@ from urllib.request import Request
 
 from genericmud.safepath import (
     confine,
-    is_allowed_host,
     is_unsafe,
     resolve_media,
     trusted_addresses,
@@ -90,11 +89,6 @@ def is_downloadable(name: str) -> bool:
 def _trusted(address: str) -> frozenset[ipaddress.IPv4Address | ipaddress.IPv6Address]:
     """See :func:`genericmud.safepath.trusted_addresses` -- the addresses a download may reach."""
     return trusted_addresses(address)
-
-
-def is_allowed_media_host(host: str, trusted_address: str = "") -> bool:
-    """Whether media may be fetched from ``host`` -- see :func:`safepath.is_allowed_host`."""
-    return is_allowed_host(host, trusted_address)
 
 
 def http_fetch(url: str, dest: Path, trusted_address: str = "") -> None:

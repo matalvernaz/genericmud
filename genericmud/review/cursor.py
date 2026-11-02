@@ -53,6 +53,13 @@ class ReviewCursor:
     def exit(self) -> None:
         self.active = False
 
+    def go_to(self, index: int) -> str:
+        """Enter review on the buffer line at ``index`` (clamped), at its first word."""
+        self.active = True
+        self._set_line(index)
+        self._word = self._char = 0
+        return self._line_text()
+
     def next_line(self) -> str:
         self._set_line(self._index() + 1)
         self._word = self._char = 0

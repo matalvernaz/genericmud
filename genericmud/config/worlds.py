@@ -26,9 +26,7 @@ LOG_FILES = ("session", "day", "world")
 # How a stored username and password are sent. "prompts" answers the MUD's own prompts --
 # named that way rather than "automatic", which would promise detection of the right method
 # that it does not do. The rest are MUSHclient's habits, for MUDs that expect the login typed
-# blind. MXP is deliberately absent: the client does not parse MXP yet (see protocol/telnet.py
-# and connection.py), so a MXP login could not be sent without advertising a protocol whose
-# markup would then leak into the output.
+# blind. Answering a MUD's own MXP login request (<USER>, <PASSWORD>) is not one of them yet.
 CONNECT_METHODS = ("none", "prompts", "mush", "diku")
 # What an absent setting means, and what a new world starts on. "none" for both: with no
 # login stored there is nothing to send, so a world that offered to log in and then did

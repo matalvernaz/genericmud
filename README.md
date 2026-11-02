@@ -472,10 +472,12 @@ A MUD can put an image on a line — a map, a room picture, a shop's sign. MXP h
 no way to describe one, so there is nothing to read out: an image is a file name
 and a place on the line, and nothing else.
 
-In the **web UI** the picture is shown where the MUD put it. In the **text
-client** — which has nowhere to draw one — the image becomes a link instead, the
-same thing MUSHclient does with one: the file name is the link, and following it
-(Alt+Enter, or Enter in the output) opens the picture in your browser.
+In the **web UI** a **Show picture** button sits where the MUD put it, and the
+picture loads when you press it, never before, so a MUD can't make your browser
+fetch anything you didn't ask for. In the **text client** — which has nowhere to
+draw one — the image becomes a link instead, the same thing MUSHclient does with
+one: the file name is the link, and following it (Alt+Enter, or Enter on that
+line in the output) opens the picture in your browser.
 
 Either way the MUD has to say where the file lives. Most MUDs send just a file
 name and expect the client to be configured with their images address: a world's

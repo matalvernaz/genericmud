@@ -34,6 +34,9 @@ DISCONNECT = "disconnect"
 CLIENT_ERROR = "client_error"  # renderer reporting a failure (e.g. Web Audio load/decode)
 FIND = "find"  # search the scrollback buffer; the engine owns the search, the renderer follows
 LINK = "link"  # the player activated an MXP link the renderer drew; the engine decides what it does
+# Enter on a line of the output box: follow that line's link. Carries the line's text and how
+# far it is from the end, since the box holds fewer lines than the buffer.
+LINK_AT = "link_at"
 
 
 def line(

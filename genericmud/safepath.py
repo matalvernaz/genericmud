@@ -14,6 +14,7 @@ from __future__ import annotations
 import ipaddress
 import os
 import re
+import socket
 import unicodedata
 from pathlib import Path
 
@@ -70,6 +71,38 @@ def trusted_addresses(address: str) -> frozenset[ipaddress.IPv4Address | ipaddre
     return frozenset({peer})
 
 
+# Name endings that only resolve on a local network.
+_LOCAL_NAME_SUFFIXES = (
+    ".localhost", ".local", ".lan", ".home", ".internal", ".intranet", ".localdomain",
+    ".home.arpa", ".corp",
+)
+# Public wildcard-DNS services whose names resolve to whatever address is written in them
+# ("192.168.1.1.nip.io"). Not a complete list; the address checks above are the real guard.
+_NAME_IS_ADDRESS_SERVICES = (
+    "nip.io", "sslip.io", "xip.io", "localtest.me", "lvh.me", "traefik.me",
+)
+# What the old IPv4 notations are written with: digits, hex, and dots.
+_LEGACY_IPV4 = re.compile(r"[0-9a-fx.]+")
+
+
+def _address_in(name: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    """The IP address ``name`` spells, in any notation a browser accepts, or None.
+
+    Browsers read "127.1", "0177.0.0.1", "2130706433" and "0x7f000001" as 127.0.0.1, so the
+    standard form alone is not enough to tell an address from a name.
+    """
+    try:
+        return ipaddress.ip_address(name)
+    except ValueError:
+        pass
+    if not _LEGACY_IPV4.fullmatch(name):
+        return None
+    try:
+        return ipaddress.IPv4Address(socket.inet_aton(name))
+    except OSError:
+        return None
+
+
 def is_allowed_host(host: str, trusted_address: str = "") -> bool:
     """Whether a server-supplied address may be fetched from: public, or the MUD's own machine.
 
@@ -82,13 +115,20 @@ def is_allowed_host(host: str, trusted_address: str = "") -> bool:
     link-local in its own text, which is what a MUD would use to point a player's browser at
     their router.
     """
-    name = host.strip().strip("[]")
+    name = host.strip().strip("[]").lower()
+    if name.endswith("."):
+        name = name[:-1]  # "router.lan." is the same place as "router.lan"
     if not name:
         return False
-    try:
-        address = ipaddress.ip_address(name)
-    except ValueError:
-        return True  # a host name: nothing to judge without resolving it
+    address = _address_in(name)
+    if address is None:
+        # A host name: nothing to judge for certain without resolving it. What can be judged
+        # from the text is refused: a name with no dot (localhost, a router) only means
+        # something on the player's own network, as do the suffixes such networks use, and a
+        # few public services exist only to make a name point wherever its text says.
+        if "." not in name or name.endswith(_LOCAL_NAME_SUFFIXES):
+            return False
+        return not name.endswith(_NAME_IS_ADDRESS_SERVICES)
     if address in trusted_addresses(trusted_address):
         return True
     return not (

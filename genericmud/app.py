@@ -573,6 +573,11 @@ class EngineApp:
         self.images_url = ""
         self._mxp = MxpParser()
         self._mxp_join = ""  # text held across lines by <NOBR> or an open <P>
+        # Whether this connection's server has offered MXP (IAC WILL MXP). The world's setting
+        # only says MXP is welcome; until a server offers it, "<p>" in its text is somebody's
+        # words, and on a MUD that never speaks MXP a player could otherwise hold everyone's
+        # output with one.
+        self._mxp_negotiated = False
         self._mxp_join_links = []  # links gathered in that held text, emitted with it
         self._mxp_join_images = []  # ditto for images, whose markers ride in the text itself
         self._mxp_held_lines = 0  # how many lines that hold has swallowed so far
@@ -702,6 +707,11 @@ class EngineApp:
         """
         if not socket_open:
             self.engine.connected = False  # packs' IsConnected(), until it opens
+        # A new connection starts MXP from nothing: the server has to offer it again, and no
+        # mode, paragraph or held text carries over from the last one.
+        self._mxp_negotiated = False
+        self._mxp = MxpParser()
+        self._release_mxp_hold()
         if self.hub is not None and self.name:
             self.hub.register(self.name, self._dispatch_remote)
         if self.log_automatically:
@@ -1282,6 +1292,15 @@ class EngineApp:
             self._dispatch_msdp_start()
         elif (
             isinstance(event, T.Negotiation)
+            and event.option == T.OPT_MXP
+            and event.command in (T.WILL, T.WONT)
+        ):
+            self._mxp_negotiated = event.command == T.WILL
+            if not self._mxp_negotiated:
+                self._mxp = MxpParser()
+                self._release_mxp_hold()
+        elif (
+            isinstance(event, T.Negotiation)
             and event.option == T.OPT_ECHO
             and event.command in (T.WILL, T.WONT)  # DO/DONT ask whether WE echo: not this
         ):
@@ -1343,37 +1362,36 @@ class EngineApp:
         the paragraph is emitted in one piece and the stream carries on. Nothing is dropped:
         the join simply restarts, and the parser's own paragraph state is untouched.
         """
-        if not self.mxp_enabled:
+        if not self.mxp_enabled or not self._mxp_negotiated:
             return text, [], [], []
-        # The held text comes back already stripped of its tags, so a link seen while it was
-        # being gathered has to be carried alongside it; the join is what brings them together.
-        # An image needs no such care: it left a marker in the text, which survives the join.
+        # Links and images seen while a paragraph was being gathered are carried with the text
+        # they came from; an image left a marker in that text, which survives the join.
         links = self._mxp_join_links
         self._mxp_join_links = []
         images = self._mxp_join_images
         self._mxp_join_images = []
-        if self._mxp_join:
-            text = self._mxp_join + text
-            self._mxp_join = ""
+        held = self._mxp_join
+        self._mxp_join = ""
+        # Each line from the MUD is parsed once, on its own, and the parsed text is what gets
+        # joined. Feeding the held text back in with the next line decoded it twice (an
+        # escaped "&lt;password&gt;" came back as a live tag) and hid the next line's own mode
+        # escape behind it.
         outcome = self._mxp.feed(text)
         for payload in outcome.replies:
             self._mxp_reply(payload)
         links.extend(outcome.links)
         images.extend(outcome.images)
+        joined = held + outcome.text
         if not outcome.join_next:
             self._release_mxp_hold()
-            return outcome.text, outcome.cues, links, images
+            return joined, outcome.cues, links, images
         self._mxp_held_lines += 1
-        if (
-            self._mxp_held_lines >= _MXP_MAX_JOIN_LINES
-            or len(outcome.text) >= _MXP_MAX_JOIN_CHARS
-        ):
-            held = outcome.text
+        if self._mxp_held_lines >= _MXP_MAX_JOIN_LINES or len(joined) >= _MXP_MAX_JOIN_CHARS:
             self._release_mxp_hold()
             if self._diag is not None:
                 self._diag.event("mxp.join_flushed", reason="size")
-            return held, outcome.cues, links, images
-        self._mxp_join = outcome.text
+            return joined, outcome.cues, links, images
+        self._mxp_join = joined
         self._mxp_join_links = links  # for a deadline flush, which has no text to re-parse
         self._mxp_join_images = images
         self._arm_mxp_deadline()
@@ -1918,6 +1936,11 @@ class EngineApp:
             self._follow_link(
                 str(message.get("text", "")), str(message.get("command", ""))
             )
+        elif kind == protocol.LINK_AT:
+            from_end = message.get("from_end")
+            self._activate_link_at(
+                str(message.get("text", "")), from_end if isinstance(from_end, int) else 0
+            )
         elif kind == protocol.CLIENT_ERROR:
             self._handle_client_error(message)
         elif kind == protocol.FIND:
@@ -2415,6 +2438,23 @@ class EngineApp:
             self._speak_review(f"{len(links)} links: {named}")
             return
         self._follow_link(*chosen)
+
+    def _activate_link_at(self, text: str, from_end: int) -> None:
+        """Follow the link on the output line the reader is on (Enter in the output box).
+
+        The output box holds fewer lines than the buffer and has a caret of its own, so the
+        window says which line it is: its text, and how far it sits from the end. The review
+        cursor moves to that line and the link is followed from there, so Enter never acts on
+        some newer line the reader hasn't heard. A line that can't be found follows nothing.
+        """
+        lines = self.buffer.lines()
+        near = len(lines) - 1 - max(0, from_end)
+        matches = [index for index, line in enumerate(lines) if line.plain_text == text]
+        if not text.strip() or not matches:
+            self._speak_review("no link on this line")
+            return
+        self.review.go_to(min(matches, key=lambda index: abs(index - near)))
+        self._activate_link()
 
     def _follow_link(self, text: str, command: str) -> None:
         """Do what a link asks, whoever asked it: the review cursor or a click in the browser."""
