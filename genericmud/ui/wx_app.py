@@ -3775,7 +3775,7 @@ class GenericMudFrame(wx.Frame):
         # Off by default: most people don't want their window renamed under them, and
         # MUSHclient's own title is opt-in in the same way.
         self._title_world_item = view_menu.AppendCheckItem(
-            wx.ID_ANY, "World &name in the window title",
+            wx.ID_ANY, "World name in the window &title",
             "Call the window after the world you're in, as MUSHclient does",
         )
         self._title_world_item.Check(self._prefs.title_shows_world)
