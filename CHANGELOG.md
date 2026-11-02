@@ -8,6 +8,14 @@ fails the build on purpose.
 
 Entries start at 0.7.1. Earlier releases were tagged before this file existed.
 
+## 0.21.1 — 2026-11-02
+
+**The Mac download**
+
+* 0.21.0 was published without its Mac download. This is the same release with
+  the Mac one included; on Windows and Linux nothing changes from 0.21.0, so if
+  you already have that, there's nothing new for you here.
+
 ## 0.21.0 — 2026-11-02
 
 **Logging in by itself**

@@ -6,4 +6,4 @@ detecting a newer release never depends on ``importlib.metadata`` resolving in t
 frozen build (which silently returns nothing when the dist-info isn't bundled).
 """
 
-__version__ = "0.21.0"
+__version__ = "0.21.1"
