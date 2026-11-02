@@ -94,7 +94,7 @@ applied that you didn't choose. Pick the one your MUD expects.
 |---|---|
 | No auto-connect | Nothing. You log in yourself |
 | Answer the MUD's prompts | The name when asked, then the password once the MUD asks for it. Works with almost everything, and never sends the password before the username |
-| MUSH/MOO | The single command `CONNECT name password` |
+| MUSH/MOO | The single command `connect name password` |
 | Diku | The name, then the password, each on its own line |
 
 **Sent after connecting** takes commands, one per line, typed as soon as the

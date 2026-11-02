@@ -1568,7 +1568,7 @@ _CONNECT_LABELS = (
     ("none", "No auto-connect — send no login"),
     ("prompts", "Answer the MUD's prompts — name, then password when asked"),
     ("mxp", "Let the MUD ask (MXP) — send the login only when the MUD requests it"),
-    ("mush", "MUSH/MOO — send CONNECT name password"),
+    ("mush", "MUSH/MOO — send connect name password"),
     ("diku", "Diku — send name, then password"),
 )
 
