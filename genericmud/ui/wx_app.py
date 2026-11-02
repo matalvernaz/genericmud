@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import shutil
+import sys
 import tempfile
 import threading
 import time
@@ -136,6 +137,75 @@ _NUMPAD_KEYS = {
 }
 
 
+# Windows virtual-key codes and the key-state flag ToUnicodeEx reads, for the AltGr check.
+_VK_SHIFT = 0x10
+_VK_CONTROL = 0x11
+_VK_MENU = 0x12
+_VK_LCONTROL = 0xA2
+_VK_RMENU = 0xA5
+_KEY_IS_DOWN = 0x80
+# Work the character out without disturbing a dead key the player is part-way through.
+_TO_UNICODE_KEEP_STATE = 0x4
+
+
+def _ctrl_alt_types(
+    virtual_key: int, scan_code: int, *, shift: bool, layout: int | None = None
+) -> bool:
+    """Whether a Windows keyboard layout types a character for this key with Ctrl+Alt held.
+
+    Windows reports AltGr as Ctrl+Alt, so this is the AltGr question, asked of the layout the
+    way a browser decides AltGraph. ``layout`` defaults to the one this thread is typing with.
+    Windows only; raises if the layout can't be asked.
+    """
+    import ctypes
+
+    # A private handle on user32, so the argument types set here can't affect anyone else.
+    user32 = ctypes.WinDLL("user32")
+    user32.GetKeyboardLayout.argtypes = [ctypes.c_uint32]
+    user32.GetKeyboardLayout.restype = ctypes.c_void_p
+    user32.ToUnicodeEx.argtypes = [
+        ctypes.c_uint,
+        ctypes.c_uint,
+        ctypes.POINTER(ctypes.c_ubyte),
+        ctypes.c_wchar_p,
+        ctypes.c_int,
+        ctypes.c_uint,
+        ctypes.c_void_p,
+    ]
+    user32.ToUnicodeEx.restype = ctypes.c_int
+    key_state = (ctypes.c_ubyte * 256)()
+    for held in (_VK_CONTROL, _VK_MENU, _VK_LCONTROL, _VK_RMENU):
+        key_state[held] = _KEY_IS_DOWN
+    if shift:
+        key_state[_VK_SHIFT] = _KEY_IS_DOWN
+    typed = ctypes.create_unicode_buffer(8)
+    if layout is None:
+        layout = user32.GetKeyboardLayout(0)
+    count = user32.ToUnicodeEx(
+        virtual_key, scan_code, key_state, typed, len(typed), _TO_UNICODE_KEEP_STATE, layout
+    )
+    if count < 0:
+        return True  # a dead key: an accent waiting for the letter it goes on
+    # Ctrl can also make control characters (Ctrl+[ is Escape), and those aren't typing.
+    return count > 0 and typed.value[:1].isprintable()
+
+
+def _altgr_types_a_character(event: wx.KeyEvent) -> bool:
+    """Whether a Ctrl+Alt key press is really AltGr typing a character, on Windows.
+
+    On a German, French, Nordic or Polish keyboard Ctrl+Alt+0 is how } or @ gets typed, and a
+    Ctrl+Alt binding on that key swallowed it. Off Windows, or if the layout can't be asked,
+    the key stays a shortcut as it always was.
+    """
+    if sys.platform != "win32":
+        return False
+    try:
+        scan_code = (event.GetRawKeyFlags() >> 16) & 0xFF
+        return _ctrl_alt_types(event.GetRawKeyCode(), scan_code, shift=event.ShiftDown())
+    except Exception:  # noqa: BLE001 - a layout that can't be asked leaves the shortcut working
+        return False
+
+
 def _key_combo(event: wx.KeyEvent, *, allow_numpad: bool = True) -> str | None:
     """Build a keymap combo ("ctrl+1", "alt+up", "f11") or None for plain typing."""
     code = event.GetKeyCode()
@@ -157,6 +227,8 @@ def _key_combo(event: wx.KeyEvent, *, allow_numpad: bool = True) -> str | None:
         name = _NAMED_KEYS[code]
     elif 33 <= code < 127:
         name = chr(code).lower()
+        if "ctrl" in mods and "alt" in mods and _altgr_types_a_character(event):
+            return None  # AltGr typing a character, which Windows reports as Ctrl+Alt
     else:
         return None
 

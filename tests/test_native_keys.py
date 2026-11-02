@@ -7,6 +7,7 @@ interception. These tests need wxPython, but no display or foreground keyboard f
 from __future__ import annotations
 
 import importlib
+import sys
 from dataclasses import dataclass, replace
 from types import SimpleNamespace
 
@@ -274,3 +275,70 @@ def test_saved_hotkey_explains_compass_only_when_it_blocks_use(
     if hint:
         expected += " Turn off Numpad compass walking under View to use it."
     assert spoken == [expected]
+
+
+# --- AltGr ---------------------------------------------------------------------
+
+
+def test_altgr_typing_a_character_is_typing_not_a_ctrl_alt_combo(monkeypatch):
+    # Windows reports AltGr as Ctrl+Alt: on a French keyboard AltGr+0 is @, on a German one
+    # it is }. When the layout says the key types something, it must reach the input box.
+    monkeypatch.setattr(wx_app, "_altgr_types_a_character", lambda _event: True)
+    assert wx_app._key_combo(KeyEvent(ord("0"), ctrl=True, alt=True)) is None
+
+
+def test_ctrl_alt_on_a_key_that_types_nothing_stays_a_combo(monkeypatch):
+    monkeypatch.setattr(wx_app, "_altgr_types_a_character", lambda _event: False)
+    assert wx_app._key_combo(KeyEvent(ord("0"), ctrl=True, alt=True)) == "ctrl+alt+0"
+
+
+def test_altgr_is_only_asked_about_with_both_ctrl_and_alt(monkeypatch):
+    asked = []
+    monkeypatch.setattr(wx_app, "_altgr_types_a_character", lambda event: asked.append(event))
+    assert wx_app._key_combo(KeyEvent(ord("1"), ctrl=True)) == "ctrl+1"
+    assert wx_app._key_combo(KeyEvent(ord("1"), alt=True)) == "alt+1"
+    assert asked == []
+
+
+def test_altgr_typing_reaches_the_input_box_past_the_channel_keys(monkeypatch):
+    # The shipped keymap binds Ctrl+Alt+0 to the tenth channel message. AltGr+0 must still type.
+    monkeypatch.setattr(wx_app, "_altgr_types_a_character", lambda _event: True)
+    panel = PanelHarness(compass=True, keymap=load_keymap("vipmud"))
+    event = KeyEvent(ord("0"), ctrl=True, alt=True)
+    panel._on_input_key(event)
+    assert event.skipped is True
+    assert panel.sent == []
+
+
+def test_off_windows_the_layout_is_never_asked(monkeypatch):
+    monkeypatch.setattr(wx_app.sys, "platform", "linux")
+    assert wx_app._altgr_types_a_character(KeyEvent(ord("0"), ctrl=True, alt=True)) is False
+
+
+def test_a_layout_that_cannot_be_asked_leaves_the_shortcut_working(monkeypatch):
+    # Pretend to be on Windows: the fake event has no raw key code, so asking fails, and the
+    # key must stay the shortcut it always was rather than vanish.
+    monkeypatch.setattr(wx_app.sys, "platform", "win32")
+    assert wx_app._altgr_types_a_character(KeyEvent(ord("0"), ctrl=True, alt=True)) is False
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="asks real Windows keyboard layouts")
+def test_real_windows_layouts_answer_the_altgr_question():
+    # The Windows build runs this on a real machine: load the layouts and ask them, so the
+    # ctypes call itself is proven, not just the decision built on it.
+    import ctypes
+
+    user32 = ctypes.WinDLL("user32")
+    user32.LoadKeyboardLayoutW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint]
+    user32.LoadKeyboardLayoutW.restype = ctypes.c_void_p
+    german = user32.LoadKeyboardLayoutW("00000407", 0)
+    french = user32.LoadKeyboardLayoutW("0000040C", 0)
+    english = user32.LoadKeyboardLayoutW("00000409", 0)
+    zero_key, zero_scan = 0x30, 0x0B
+    e_key, e_scan = 0x45, 0x12
+    assert wx_app._ctrl_alt_types(zero_key, zero_scan, shift=False, layout=german) is True  # }
+    assert wx_app._ctrl_alt_types(zero_key, zero_scan, shift=False, layout=french) is True  # @
+    assert wx_app._ctrl_alt_types(e_key, e_scan, shift=False, layout=german) is True  # euro
+    # US English has no AltGr: Ctrl+Alt+0 and Ctrl+Alt+E type nothing, so they stay shortcuts.
+    assert wx_app._ctrl_alt_types(zero_key, zero_scan, shift=False, layout=english) is False
+    assert wx_app._ctrl_alt_types(e_key, e_scan, shift=False, layout=english) is False
