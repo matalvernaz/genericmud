@@ -326,19 +326,85 @@ def test_a_layout_that_cannot_be_asked_leaves_the_shortcut_working(monkeypatch):
 def test_real_windows_layouts_answer_the_altgr_question():
     # The Windows build runs this on a real machine: load the layouts and ask them, so the
     # ctypes call itself is proven, not just the decision built on it.
+    #
+    # Loading a layout is not the harmless thing it looks like: it puts it in the session's
+    # layout list, where Windows' own Left Alt+Shift can then switch to it, and nothing on
+    # screen says where it came from. So whatever this test adds, it takes away again -- and
+    # only what it added, since a layout the developer already had is not ours to unload.
     import ctypes
 
     user32 = ctypes.WinDLL("user32")
     user32.LoadKeyboardLayoutW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint]
     user32.LoadKeyboardLayoutW.restype = ctypes.c_void_p
-    german = user32.LoadKeyboardLayoutW("00000407", 0)
-    french = user32.LoadKeyboardLayoutW("0000040C", 0)
-    english = user32.LoadKeyboardLayoutW("00000409", 0)
-    zero_key, zero_scan = 0x30, 0x0B
-    e_key, e_scan = 0x45, 0x12
-    assert wx_app._ctrl_alt_types(zero_key, zero_scan, shift=False, layout=german) is True  # }
-    assert wx_app._ctrl_alt_types(zero_key, zero_scan, shift=False, layout=french) is True  # @
-    assert wx_app._ctrl_alt_types(e_key, e_scan, shift=False, layout=german) is True  # euro
-    # US English has no AltGr: Ctrl+Alt+0 and Ctrl+Alt+E type nothing, so they stay shortcuts.
-    assert wx_app._ctrl_alt_types(zero_key, zero_scan, shift=False, layout=english) is False
-    assert wx_app._ctrl_alt_types(e_key, e_scan, shift=False, layout=english) is False
+    user32.GetKeyboardLayoutList.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c_void_p)]
+    user32.GetKeyboardLayoutList.restype = ctypes.c_int
+    user32.UnloadKeyboardLayout.argtypes = [ctypes.c_void_p]
+    user32.UnloadKeyboardLayout.restype = ctypes.c_int
+
+    already = _loaded_layouts(user32)
+    loaded: dict[str, int] = {}
+    try:
+        for layout_id in ("00000407", "0000040C", "00000409"):
+            loaded[layout_id] = user32.LoadKeyboardLayoutW(layout_id, 0)
+        german = loaded["00000407"]
+        french = loaded["0000040C"]
+        english = loaded["00000409"]
+        zero_key, zero_scan = 0x30, 0x0B
+        e_key, e_scan = 0x45, 0x12
+        assert wx_app._ctrl_alt_types(zero_key, zero_scan, shift=False, layout=german) is True  # }
+        assert wx_app._ctrl_alt_types(zero_key, zero_scan, shift=False, layout=french) is True  # @
+        assert wx_app._ctrl_alt_types(e_key, e_scan, shift=False, layout=german) is True  # euro
+        # US English has no AltGr: Ctrl+Alt+0 and Ctrl+Alt+E type nothing, so they stay
+        # shortcuts.
+        assert wx_app._ctrl_alt_types(zero_key, zero_scan, shift=False, layout=english) is False
+        assert wx_app._ctrl_alt_types(e_key, e_scan, shift=False, layout=english) is False
+    finally:
+        _unload_layouts(user32, loaded, already)
+
+
+def _loaded_layouts(user32) -> set[int]:
+    """The layouts this session already has, by identifier (the low half of each handle)."""
+    import ctypes
+
+    count = user32.GetKeyboardLayoutList(0, None)
+    if count <= 0:
+        return set()
+    handles = (ctypes.c_void_p * count)()
+    user32.GetKeyboardLayoutList(count, handles)
+    return {int(handle) & 0xFFFF for handle in handles if handle}
+
+
+def _layouts_to_unload(loaded: dict[str, int], already: set[int]) -> list[str]:
+    """Which of the layouts a test loaded are its own to remove.
+
+    A layout that was loaded before the test ran belongs to whoever put it there -- the
+    developer's own German keyboard, say -- so it is left exactly as it was found.
+    """
+    return [layout_id for layout_id in loaded if int(layout_id, 16) not in already]
+
+
+def _unload_layouts(user32, loaded: dict[str, int], already: set[int]) -> None:
+    """Put the session back as it was found: remove only the layouts this test added.
+
+    Unloading is best-effort: Windows refuses to unload a layout that is in use, and a test is
+    not the place to insist. Nothing here may fail the run.
+    """
+    for layout_id in _layouts_to_unload(loaded, already):
+        handle = loaded.get(layout_id)
+        if handle:
+            user32.UnloadKeyboardLayout(handle)
+
+def test_only_the_layouts_a_test_added_are_its_to_remove():
+    # The rule that matters: a layout that was already loaded belongs to whoever put it there.
+    loaded = {"00000407": 0x407, "0000040C": 0x40C, "00000409": 0x409}
+    assert _layouts_to_unload(loaded, {0x409}) == ["00000407", "0000040C"]
+    assert _layouts_to_unload(loaded, {0x407, 0x40C, 0x409}) == []
+    assert _layouts_to_unload({}, {0x409}) == []
+
+
+def test_a_layout_identifier_is_read_as_the_hex_handle_it_is():
+    # 0x0409 is 1033 in decimal; comparing the two as plain numbers would unload nothing (or
+    # everything), so the identifier is parsed as what it is.
+    assert _layouts_to_unload({"00000409": 0x409}, {1033}) == []
+    assert _layouts_to_unload({"00000409": 0x409}, {0x409}) == []
+    assert _layouts_to_unload({"00000409": 0x409}, {0x407}) == ["00000409"]
