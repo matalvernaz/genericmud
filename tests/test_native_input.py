@@ -144,4 +144,5 @@ def _probe():
     if errors:
         raise errors[0]
     assert len(results) == len(cases), "MainLoop exited before native focus scenarios completed"
-    print(json.dumps(results, ensure_ascii=False))
+    # ASCII escapes: a Windows pipe uses the ANSI code page, which can't encode the Cyrillic cases.
+    print(json.dumps(results))
