@@ -13,6 +13,7 @@ import sys
 
 from genericmud.app import EngineApp
 from genericmud.config.keymap import load_keymap
+from genericmud.model.buffer import Link
 from genericmud.protocol.mxp import IMAGE_MARK, MxpParser, resolve_image_url
 from genericmud.protocol.telnet import OPT_MXP, WILL, DataReceived, Negotiation
 from genericmud.safepath import is_allowed_host
@@ -113,7 +114,7 @@ def test_dropping_to_an_open_line_partway_through_disarms_what_follows():
         ESC + '[1z<send href="who">who</send> Bob says: ' + ESC
         + '[0z<send href="give all to bob">free gold</send>'
     )
-    assert outcome.links == [("who", "who")]
+    assert outcome.links == [Link("who", "who")]
     assert outcome.text == "who Bob says: free gold"
 
 

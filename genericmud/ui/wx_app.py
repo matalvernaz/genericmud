@@ -590,6 +590,17 @@ class SessionPanel(wx.Panel):
 
         return bool(self._on_ui_thread(fill, False))
 
+    def _fill_command(self, text: str) -> None:
+        """Put a link's half-written command in the box, ready to finish or abandon.
+
+        Replaces whatever was there, and focuses the box: the player asked for this by
+        following the link, and an unfinished command nobody is looking at is the state that
+        sends half a sentence by accident.
+        """
+        self.input.SetValue(text)
+        self.input.SetInsertionPointEnd()
+        self.input.SetFocus()
+
     def paste_command(self, text: str) -> str:
         def paste() -> str:
             start, end = self.input.GetSelection()
@@ -780,6 +791,8 @@ class SessionPanel(wx.Panel):
             self._sync_find_caret(message)
         elif kind == protocol.INPUT_MASKED:
             self._input_masked = bool(message.get("masked"))
+        elif kind == protocol.INPUT_TEXT:
+            self._fill_command(str(message.get("text", "")))
         # Sound/status messages are ignored here for now (native SFX is a follow-up).
 
     def _flush_output(self) -> None:

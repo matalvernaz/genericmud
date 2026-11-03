@@ -38,6 +38,7 @@ import re
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
+from genericmud.model.buffer import Link
 from genericmud.protocol.msp import SoundCue, _parse_cue
 from genericmud.safepath import is_allowed_host, is_unsafe
 
@@ -108,8 +109,8 @@ class MxpOutcome:
     # Secure-line payloads to send back to the MUD, without the escape or the newline;
     # the caller wraps them (see :meth:`MxpParser.secure_line`).
     replies: list[str] = field(default_factory=list)
-    # (displayed text, command) for every link seen, for a window that can reach them.
-    links: list[tuple[str, str]] = field(default_factory=list)
+    # One :class:`Link` for each link seen, for a window that can reach them.
+    links: list[Link] = field(default_factory=list)
     # (file name, base URL) for each inline image, in the order they appeared, with an
     # IMAGE_MARK left in the text where each one goes. Resolving a file name to a real
     # address needs the world's own setting, so that is the caller's job, not the
@@ -182,7 +183,7 @@ class MxpParser:
         line = self._apply_modes(line.replace(IMAGE_MARK, ""))
         cues: list[SoundCue] = []
         replies: list[str] = []
-        links: list[tuple[str, str]] = []
+        links: list[Link] = []
         images: list[tuple[str, str]] = []
         login: list[str] = []
         # A server can mark its own text secure and then drop to open (or locked) partway
@@ -207,7 +208,7 @@ class MxpParser:
         text: str,
         cues: list[SoundCue],
         replies: list[str],
-        links: list[tuple[str, str]],
+        links: list[Link],
         images: list[tuple[str, str]],
         login: list[str],
     ) -> str:
@@ -224,7 +225,7 @@ class MxpParser:
         text: str,
         cues: list[SoundCue],
         replies: list[str],
-        links: list[tuple[str, str]],
+        links: list[Link],
         images: list[tuple[str, str]],
         login: list[str],
     ) -> MxpOutcome:
@@ -268,15 +269,16 @@ class MxpParser:
         text: str,
         cues: list[SoundCue],
         replies: list[str],
-        links: list[tuple[str, str]],
+        links: list[Link],
         images: list[tuple[str, str]],
         login: list[str],
     ) -> str:
         """Remove every tag, acting on the few that mean something here."""
         out: list[str] = []
         position = 0
-        # The text of a <SEND>/<A> link, so it can be paired with its command.
-        pending_link: tuple[int, str] | None = None
+        # The text of a <SEND>/<A> link, so it can be paired with its command and with
+        # whether following it sends that command or types it.
+        pending_link: tuple[int, str, bool] | None = None
         for match in _TAG_RE.finditer(text):
             name = match.group("name").lower()
             closing = bool(match.group("closing"))
@@ -303,14 +305,15 @@ class MxpParser:
             # A secure tag on an open line is dropped without action, exactly as the
             # security rule requires; its text stays, which is the safe half.
             if name in ("send", "a") and not closing and secure_ok:
-                pending_link = (len(out), _link_command(match.group("attrs")))
+                command, insert = _link_command(match.group("attrs"))
+                pending_link = (len(out), command, insert)
             elif name in ("send", "a") and closing and pending_link is not None:
-                index, command = pending_link
+                index, command, insert = pending_link
                 if command:
                     # An image inside a link leaves a marker where it sits; that is not words,
                     # so it must not become the link's name.
                     words = "".join(out[index:]).replace(IMAGE_MARK, "")
-                    links.append((words, command))
+                    links.append(Link(words, command, insert))
                 pending_link = None
         out.append(text[position:])
         return "".join(out)
@@ -323,7 +326,7 @@ class MxpParser:
         cues: list[SoundCue],
         replies: list[str],
         out: list[str],
-        links: list[tuple[str, str]],
+        links: list[Link],
         images: list[tuple[str, str]],
         login: list[str],
         *,
@@ -410,15 +413,43 @@ def _support_reply(attrs: str) -> str:
     return "<SUPPORTS " + " ".join(answers) + ">"
 
 
-def _link_command(attrs: str) -> str:
-    """The command a <SEND>/<A> link carries, from HREF= or the first bare argument."""
+def _link_command(attrs: str) -> tuple[str, bool]:
+    """The command a ``<SEND>``/``<A>`` link carries, and whether it is typed rather than sent.
+
+    The command is ``HREF=`` or the first bare argument. A bare ``PROMPT`` argument, which the
+    spec puts after the command, asks for the text to land in the player's own command line
+    instead of going to the MUD -- so a link can offer to start a command without finishing
+    it, and the player completes or abandons it. Sent as it stands, half a command would reach
+    the MUD as a command they never gave.
+    """
+    tokens = _tokens(attrs.strip())
     href = re.search(
         r"HREF\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s>]+))", attrs, re.IGNORECASE
     )
+    command = ""
     if href is not None:
-        return next((group for group in href.groups() if group is not None), "")
-    tokens = _tokens(attrs.strip())
-    return _unquote(tokens[0]) if tokens else ""
+        command = next((group for group in href.groups() if group is not None), "")
+    else:
+        for token in tokens:
+            if "=" in token and token[0] not in "\"'":
+                continue  # EXPIRE= and any other named argument comes before or after
+            command = _unquote(token)
+            break
+    return command, _has_prompt_flag(attrs, command)
+
+
+def _has_prompt_flag(attrs: str, command: str) -> bool:
+    """Whether a ``<SEND>`` asks for its command to be typed rather than sent.
+
+    Only the words outside quoted arguments can carry the keyword: the command itself is
+    usually quoted, and a command that happens to read "tell prompt " is a command. A tag
+    whose whole command is the word "prompt" is sending that word, not asking for the flag.
+    """
+    outside = re.sub(r"\"[^\"]*\"|'[^']*'", " ", attrs)
+    found = re.findall(r"(?<![\w-])prompt(?![\w-])", outside, re.IGNORECASE)
+    if not found:
+        return False
+    return not (command.lower() == "prompt" and len(found) == 1)
 
 
 def _unquote(value: str) -> str:

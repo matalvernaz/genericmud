@@ -16,7 +16,11 @@ export class Output {
       // href is "#" only to earn native link behaviour (Enter activates a focused anchor);
       // navigating the page would lose the session.
       event.preventDefault();
-      this.onLink?.(anchor.dataset.words || anchor.textContent, anchor.dataset.command);
+      this.onLink?.(
+        anchor.dataset.words || anchor.textContent,
+        anchor.dataset.command,
+        anchor.dataset.insert === "true",
+      );
     });
   }
 
@@ -38,8 +42,8 @@ export class Output {
   // sends offsets into text it already decided is text, so nothing is re-parsed here and no
   // markup can leak into the page.
   _fill(div, text, links, images) {
-    const spans = (links || []).map(([start, end, command]) => ({
-      start, end, kind: "link", command,
+    const spans = (links || []).map(([start, end, command, insert]) => ({
+      start, end, kind: "link", command, insert,
     }));
     // An image is zero-width: it sits at a point in the text rather than covering words.
     for (const [offset, url] of images || []) {
@@ -68,6 +72,8 @@ export class Output {
       // be able to change what gets sent.
       anchor.dataset.command = span.command;
       anchor.dataset.words = words;
+      // Following this one types its command into the box instead of sending it.
+      if (span.insert) anchor.dataset.insert = "true";
       div.appendChild(anchor);
       at = Math.max(at, span.end);
     }

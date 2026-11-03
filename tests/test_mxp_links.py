@@ -10,7 +10,7 @@ from __future__ import annotations
 from genericmud.app import EngineApp, _link_positions
 from genericmud.bridge import protocol
 from genericmud.config.keymap import load_keymap
-from genericmud.model.buffer import Buffer, Line
+from genericmud.model.buffer import Buffer, Line, Link
 from genericmud.protocol.mxp import MxpParser
 from genericmud.protocol.telnet import OPT_MXP, WILL, DataReceived, Negotiation
 from genericmud.review.cursor import ReviewCursor
@@ -71,7 +71,7 @@ def _say(app: EngineApp, line: str) -> None:
 def test_a_secure_link_is_recorded_with_its_text_and_command():
     outcome = MxpParser().feed(SECURE + 'You see a <send href="drink fountain">fountain</send>.')
     assert outcome.text == "You see a fountain."
-    assert outcome.links == [("fountain", "drink fountain")]
+    assert outcome.links == [Link("fountain", "drink fountain")]
 
 
 def test_a_link_on_an_open_line_is_never_acted_on():
@@ -86,7 +86,7 @@ def test_a_link_on_an_open_line_is_never_acted_on():
 def test_a_bare_argument_is_the_command_too():
     # The spec allows <SEND "north"> as well as HREF="north".
     outcome = MxpParser().feed(SECURE + '<send "north">north</send>')
-    assert outcome.links == [("north", "north")]
+    assert outcome.links == [Link("north", "north")]
 
 
 def test_the_support_reply_advertises_links_now_that_they_work():
@@ -100,7 +100,7 @@ def test_the_link_rides_along_to_the_buffer_line():
     _say(app, SECURE + 'Exits: <send href="north">north</send>')
     line = app.buffer.lines()[-1]
     assert line.plain_text == "Exits: north"
-    assert line.links == [("north", "north")]
+    assert line.links == [Link("north", "north")]
 
 
 def test_a_link_on_a_joined_paragraph_is_not_duplicated():
@@ -110,7 +110,7 @@ def test_a_link_on_a_joined_paragraph_is_not_duplicated():
     _say(app, SECURE + '<P>Look: <send href="look">look</send>')
     _say(app, SECURE + "</P>")
     links = app.buffer.lines()[-1].links
-    assert links == [("look", "look")]
+    assert links == [Link("look", "look")]
 
 
 # --- following one ----------------------------------------------------------
@@ -239,7 +239,7 @@ def test_a_link_with_no_command_is_not_recorded_at_all():
 # --- the cursor on its own --------------------------------------------------
 
 
-def _cursor(*links: tuple[str, str]) -> ReviewCursor:
+def _cursor(*links: Link) -> ReviewCursor:
     buffer = Buffer()
     buffer.append(Line("Exits: north, south", links=list(links)))
     cursor = ReviewCursor(buffer)
@@ -248,23 +248,23 @@ def _cursor(*links: tuple[str, str]) -> ReviewCursor:
 
 
 def test_the_cursor_reports_a_lines_links():
-    assert _cursor(("north", "north")).links() == [("north", "north")]
+    assert _cursor(Link("north", "north")).links() == [Link("north", "north")]
     assert _cursor().links() == []
 
 
 def test_the_cursor_has_no_link_when_several_and_the_word_matches_none():
-    cursor = _cursor(("north", "north"), ("south", "south"))
+    cursor = _cursor(Link("north", "north"), Link("south", "south"))
     assert cursor.link() is None
 
 
 def test_the_cursor_takes_the_only_link():
-    assert _cursor(("north", "north")).link() == ("north", "north")
+    assert _cursor(Link("north", "north")).link() == Link("north", "north")
 
 
 def test_the_cursor_matches_the_word_inside_a_multi_word_link():
-    cursor = _cursor(("wooden door", "open door"))
+    cursor = _cursor(Link("wooden door", "open door"))
     cursor.next_word()  # "Exits:"
-    assert cursor.link() == ("wooden door", "open door")
+    assert cursor.link() == Link("wooden door", "open door")
 
 
 def test_the_keymap_binds_the_follow_key():
@@ -287,13 +287,15 @@ def test_the_line_message_carries_link_positions():
     _say(app, SECURE + 'You see a <send href="drink fountain">fountain</send> here.')
     message = _line_message(posted)
     assert message["text"] == "You see a fountain here."
-    assert message["links"] == [[10, 18, "drink fountain"]]
+    assert message["links"] == [[10, 18, "drink fountain", False]]
 
 
 def test_two_links_keep_the_order_the_mud_sent_them():
     app, _sent, _backend, posted = _build()
     _say(app, SECURE + '<send href="first">a</send> <send href="second">a</send> again')
-    assert _line_message(posted)["links"] == [[0, 1, "first"], [2, 3, "second"]]
+    assert _line_message(posted)["links"] == [
+        [0, 1, "first", False], [2, 3, "second", False]
+    ]
 
 
 def test_a_line_without_links_sends_none():
@@ -305,7 +307,7 @@ def test_a_line_without_links_sends_none():
 def test_a_link_whose_words_are_gone_gets_no_position():
     # What a pack substitution leaves behind: guessing a position would make the wrong words
     # clickable, so the link is dropped from the rendering rather than misplaced.
-    assert _link_positions("a pack's own text", [("fountain", "drink fountain")]) == []
+    assert _link_positions("a pack's own text", [Link("fountain", "drink fountain")]) == []
 
 
 def test_a_clicked_link_sends_its_command():

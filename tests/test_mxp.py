@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from genericmud.model.buffer import Link
 from genericmud.protocol.mxp import MxpParser
 
 ESC = "\x1b"
@@ -77,12 +78,12 @@ def test_secure_tags_do_nothing_on_an_open_line():
 def test_a_secure_line_records_a_send_link():
     out = _feed(SECURE + '<send "buy bread">bread</send>')
     assert out.text == "bread"
-    assert out.links == [("bread", "buy bread")]
+    assert out.links == [Link("bread", "buy bread")]
 
 
 def test_href_is_the_command_when_given():
     out = _feed(SECURE + '<send href="buy water">water</send>')
-    assert out.links == [("water", "buy water")]
+    assert out.links == [Link("water", "buy water")]
 
 
 def test_sound_and_music_are_read_as_msp_cues():
