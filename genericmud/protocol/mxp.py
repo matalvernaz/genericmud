@@ -26,7 +26,8 @@ given that servers only see a benefit once nothing leaks:
 
 What this client acts on: line breaks (``<BR>``, ``<SBR>``, ``<P>``, ``<NOBR>``),
 ``<SOUND>``/``<MUSIC>`` cues, ``<IMAGE>``/``<IMG>`` (recorded so a window can show one, and a
-text client can at least offer it as a link), and the ``<VERSION>``/``<SUPPORT>`` handshake.
+text client can at least offer it as a link), MUD-defined variables (``<!ENTITY>``, ``<VAR>``
+and ``&name;``), and the ``<VERSION>``/``<SUPPORT>`` handshake.
 Everything else is parsed, stripped and ignored -- including ``<SEND>``/``<A>`` links, which
 are recorded so a later window can make them reachable without a mouse, but not acted on
 here.
@@ -86,8 +87,8 @@ _KNOWN_TAGS = _OPEN_TAGS | frozenset(
         "hr", "small", "tt",
     }
 )
-# The named entities MXP inherits from HTML. Anything else is left alone: the server may
-# have defined it with <!ENTITY>, and inventing a value would be worse than showing it.
+# The named entities MXP inherits from HTML. Anything else is left alone unless the MUD
+# defined it, and inventing a value would be worse than showing it.
 _ENTITIES = {
     "lt": "<", "gt": ">", "amp": "&", "quot": '"', "apos": "'", "nbsp": " ",
 }
@@ -95,6 +96,19 @@ _ENTITIES = {
 # How many commands a <SEND> menu may offer. A MUD could otherwise hand a player a list
 # nobody could read out, and each entry is another line in a dialog.
 _MAX_MENU_ITEMS = 20
+# MUD-defined variables (<!ENTITY>, <VAR>): how many are kept, and how much of a value. A
+# server re-defining an entity on every prompt must not grow this without bound, and a value
+# is text on a line, not a document.
+_MAX_ENTITIES = 256
+_MAX_ENTITY_VALUE = 512
+# The words that follow an <!ENTITY> definition and describe it rather than giving its value.
+_ENTITY_FLAGS = frozenset({"PRIVATE", "PUBLISH", "DELETE", "ADD", "REMOVE"})
+# What a stored value may never carry into the output: control characters (which is where an
+# ANSI or line-mode escape would come from) and this module's own image marker, which the
+# engine uses to place a picture. A value is text, so it may not become either.
+_ENTITY_UNSAFE = re.compile("[\x00-\x1f\x7f-\x9f" + IMAGE_MARK + "]")
+# An entity name has to be one &name; can actually refer to, or it could never be expanded.
+_ENTITY_NAME = re.compile(r"[A-Za-z][A-Za-z0-9]{0,31}")
 
 CLIENT_NAME = "genericMud"
 MXP_VERSION = "1.0"
@@ -143,6 +157,10 @@ class MxpParser:
         self._paragraph_ends_with_line = False
         self._nobr = False  # <NOBR> swallows the next newline
         self._client_version = client_version
+        # Variables this MUD defined for the session, in the order they were first set; the
+        # oldest is dropped once the cap is reached, so a busy prompt cannot lock the rest out.
+        # They belong to one connection, and the engine makes a new parser on every connect.
+        self._entities: dict[str, str] = {}
 
     # --- modes ---------------------------------------------------------------
 
@@ -264,9 +282,61 @@ class MxpParser:
             if name.startswith("#"):
                 code = int(name[1:])
                 return chr(code) if _printable_code_point(code) else ""
-            return _ENTITIES.get(name.lower(), match.group(0))
+            # The HTML names first and always: a MUD redefining &lt; could otherwise write a
+            # "<" into text that was already read for tags, which is how escaped markup is
+            # meant to stay escaped.
+            known = _ENTITIES.get(name.lower())
+            if known is not None:
+                return known
+            # MUD-defined names are case sensitive, as the spec says, and an unknown one stays
+            # as it was written rather than becoming nothing.
+            return self._entities.get(name, match.group(0))
 
         return _ENTITY_RE.sub(replace, text)
+
+    # --- MUD-defined variables ------------------------------------------------
+
+    def _set_entity(self, name: str, value: str) -> None:
+        """Store one variable's value, within the caps that keep a session from growing."""
+        if _ENTITY_NAME.fullmatch(name) is None:
+            return  # could never be referred to as &name;
+        if name not in self._entities and len(self._entities) >= _MAX_ENTITIES:
+            del self._entities[next(iter(self._entities))]  # the oldest gives way
+        self._entities[name] = _ENTITY_UNSAFE.sub("", value)[:_MAX_ENTITY_VALUE]
+
+    def _define_entity(self, attrs: str) -> None:
+        """Act on ``<!ENTITY Name Value [DESC=...] [PRIVATE] [PUBLISH] [DELETE] [ADD] [REMOVE]>``.
+
+        The value is text, never markup: it is expanded after the line has been read for tags,
+        so a definition cannot smuggle a tag of its own past the security rule that decides
+        which tags run on which kind of line.
+        """
+        tokens = _tokens(attrs.strip())
+        if not tokens:
+            return
+        name = _unquote(tokens[0])
+        flags: set[str] = set()
+        value = ""
+        for token in tokens[1:]:
+            upper = token.upper()
+            if upper in _ENTITY_FLAGS:
+                flags.add(upper)
+            elif "=" in token and token[0] not in "\"'":
+                continue  # DESC= and the like describe the variable; nothing here uses them
+            elif not value:
+                value = _unquote(token)
+        if "DELETE" in flags:
+            self._entities.pop(name, None)
+            return
+        if "ADD" in flags or "REMOVE" in flags:
+            items = [item for item in self._entities.get(name, "").split("|") if item]
+            if "ADD" in flags:
+                items.append(value)
+            else:
+                items = [item for item in items if item != value]
+            self._set_entity(name, "|".join(items))
+            return
+        self._set_entity(name, value)
 
     def _parse_tags(
         self,
@@ -283,6 +353,8 @@ class MxpParser:
         # The text of a <SEND>/<A> link, so it can be paired with its command and with
         # whether following it sends that command or types it.
         pending_link: tuple[int, Link] | None = None
+        # The text of a <VAR>, which is both the variable's value and what the player sees.
+        pending_var: tuple[int, str] | None = None
         for match in _TAG_RE.finditer(text):
             name = match.group("name").lower()
             closing = bool(match.group("closing"))
@@ -299,8 +371,13 @@ class MxpParser:
                 continue
             out.append(text[position:match.start()])
             position = match.end()
-            if name == "!":
-                continue  # <!ELEMENT>, <!ENTITY>, <!ATTLIST>: definitions, not output
+            if name.startswith("!"):
+                # <!ELEMENT>, <!ATTLIST>, <!TAG>: definitions, never output. Of those, only the
+                # variables are used here, and only on a line the MUD owns -- a definition is a
+                # secure command, so one arriving on an open line is left as the text it is.
+                if secure_ok and name in ("!entity", "!en"):
+                    self._define_entity(match.group("attrs"))
+                continue
             if name in _OPEN_TAGS or secure_ok:
                 self._act(
                     name, match.group("attrs"), closing, cues, replies, out, links, images,
@@ -308,6 +385,14 @@ class MxpParser:
                 )
             # A secure tag on an open line is dropped without action, exactly as the
             # security rule requires; its text stays, which is the safe half.
+            if name == "var" and secure_ok:
+                if closing:
+                    if pending_var is not None:
+                        index, var_name = pending_var
+                        self._set_entity(var_name, "".join(out[index:]))
+                        pending_var = None
+                else:
+                    pending_var = (len(out), _first_token(match.group("attrs")))
             if name in ("send", "a") and not closing and secure_ok:
                 pending_link = (len(out), _link(match.group("attrs")))
             elif name in ("send", "a") and closing and pending_link is not None:
@@ -522,6 +607,17 @@ def _unquote(value: str) -> str:
     if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
         return value[1:-1]
     return value
+
+
+def _first_token(attrs: str) -> str:
+    """The name a tag carries bare or named: both ``<VAR Hp>`` and ``<VAR Name=Hp>``."""
+    tokens = _tokens(attrs.strip())
+    if not tokens:
+        return ""
+    token = tokens[0]
+    if "=" in token and token[0] not in "\"'":
+        return _unquote(token.split("=", 1)[1])
+    return _unquote(token)
 
 
 def _tokens(attrs: str) -> list[str]:
