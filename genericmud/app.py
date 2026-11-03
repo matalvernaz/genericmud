@@ -39,7 +39,7 @@ from genericmud.config.worlds import (
 )
 from genericmud.logpaths import diagnostic_log_dir, log_count, world_log_dir
 from genericmud.mapping import RoomMap, load_map, save_map, spoken_count
-from genericmud.model.buffer import Buffer, Line
+from genericmud.model.buffer import Buffer, Line, Link
 from genericmud.navigation import Navigator, SafeWalk, expand_speedwalk
 from genericmud.packs import ActivationResult, PackStore, activate_world, user_rules
 from genericmud.packs.pack_updates import PackUpdates
@@ -186,8 +186,8 @@ def _strip_image_marks(text: str) -> tuple[str, list[int]]:
     return "".join(kept), positions
 
 
-def _link_positions(text: str, links: list[tuple[str, str]]) -> list[tuple[int, int, str]]:
-    """Where each link's words sit inside the finished line, as (start, end, command).
+def _link_positions(text: str, links: list[Link]) -> list[tuple[int, int, str, bool]]:
+    """Where each link's words sit inside the finished line: (start, end, command, insert).
 
     The parser reports a link by its words, not by position, because everything between the
     parser and here (ANSI, MSP, redaction) rewrites the text. Searching forward from the
@@ -195,16 +195,16 @@ def _link_positions(text: str, links: list[tuple[str, str]]) -> list[tuple[int, 
     right occurrence, in the order the MUD sent them. A link whose words are gone -- a pack
     substituted the line -- is dropped: a wrong position would make the wrong words clickable.
     """
-    spans: list[tuple[int, int, str]] = []
+    spans: list[tuple[int, int, str, bool]] = []
     cursor = 0
-    for words, command in links:
-        if not words:
+    for link in links:
+        if not link.text:
             continue
-        start = text.find(words, cursor)
+        start = text.find(link.text, cursor)
         if start < 0:
             continue
-        cursor = start + len(words)
-        spans.append((start, cursor, command))
+        cursor = start + len(link.text)
+        spans.append((start, cursor, link.command, link.insert))
     return spans
 
 
@@ -1582,7 +1582,7 @@ class EngineApp:
         # same thing MUSHclient does with one (it turns <IMAGE> into a hyperlink), and the
         # only form in which a picture can be reached without seeing it.
         for _offset, url in shown:
-            line_links.append((url.rsplit("/", 1)[-1], url))
+            line_links.append(Link(url.rsplit("/", 1)[-1], url))
         line = Line(plain, spans=spans, links=line_links)
         self.engine.process_line(line)  # may set line.channel and gag flags
         self._log(line.plain_text)  # full session log, including gagged-from-speech
@@ -1984,7 +1984,9 @@ class EngineApp:
             # The web renderer drew a real anchor and the player activated it. Only the
             # command comes back: what it may do is decided here, not in the renderer.
             self._follow_link(
-                str(message.get("text", "")), str(message.get("command", ""))
+                str(message.get("text", "")),
+                str(message.get("command", "")),
+                insert=message.get("insert") is True,
             )
         elif kind == protocol.LINK_AT:
             from_end = message.get("from_end")
@@ -2485,12 +2487,12 @@ class EngineApp:
             # more Alt+Right lands on a word that picks the intended one. A link with no
             # words of its own (an image, or an empty <SEND>) is named by what it does.
             named = "; ".join(
-                f"{number} {text or command}"
-                for number, (text, command) in enumerate(links, 1)
+                f"{number} {link.text or link.command}"
+                for number, link in enumerate(links, 1)
             )
             self._speak_review(f"{len(links)} links: {named}")
             return
-        self._follow_link(*chosen)
+        self._follow_link(chosen.text, chosen.command, insert=chosen.insert)
 
     def _activate_link_at(self, text: str, from_end: int) -> None:
         """Follow the link on the output line the reader is on (Enter in the output box).
@@ -2509,13 +2511,22 @@ class EngineApp:
         self.review.go_to(min(matches, key=lambda index: abs(index - near)))
         self._activate_link()
 
-    def _follow_link(self, text: str, command: str) -> None:
+    def _follow_link(self, text: str, command: str, *, insert: bool = False) -> None:
         """Do what a link asks, whoever asked it: the review cursor or a click in the browser."""
-        command = command.strip()
-        if not command:
+        if not command.strip():
             return
         if self._diag is not None:
-            self._diag.event("mxp.link", text=text, command=command)
+            self._diag.event("mxp.link", text=text, command=command, insert=insert)
+        if insert:
+            # <SEND PROMPT>: the command is the opening of one the player finishes, so it
+            # belongs in their command box, not on the wire -- sent as it stands it would
+            # reach the MUD as a command they never gave. Nothing leaves until they press
+            # Enter themselves. The trailing space the MUD wrote is kept: "tell Ariadne " is
+            # meant to have a name typed after it.
+            self._post(protocol.input_text(command))
+            self._speak_system(f"in the command box: {command.strip()}")
+            return
+        command = command.strip()
         if command.lower().startswith(_LINK_URL_SCHEMES):
             self._open_link(command)
             return

@@ -19,6 +19,20 @@ from genericmud.render.ansi import Span
 DEFAULT_CAPACITY = 50_000
 
 
+@dataclass(frozen=True)
+class Link:
+    """One MXP link: the words it shows, and what following it does.
+
+    ``insert`` is ``<SEND PROMPT>``: the command belongs in the player's own command box, to
+    finish or abandon, rather than going to the MUD as it stands. A link that carried half a
+    command ("tell Ariadne ") would otherwise send that half the moment it was followed.
+    """
+
+    text: str
+    command: str
+    insert: bool = False
+
+
 @dataclass
 class Line:
     plain_text: str
@@ -31,11 +45,11 @@ class Line:
     # A pack's replacement (VIPMud #Sub), shown and spoken instead once every trigger has
     # seen the line the MUD sent.
     substitute: str | None = None
-    # (displayed text, command) for each MXP link on this line, so review can follow one
-    # without a mouse. Keeping them here rather than in a session-wide list means a link
-    # stays with the line it came from: reading back through the scrollback still finds it,
-    # and no expiry bookkeeping can leave an entry pointing at the wrong message.
-    links: list[tuple[str, str]] = field(default_factory=list)
+    # Each MXP link on this line, so review can follow one without a mouse. Keeping them here
+    # rather than in a session-wide list means a link stays with the line it came from: reading
+    # back through the scrollback still finds it, and no expiry bookkeeping can leave an entry
+    # pointing at the wrong message.
+    links: list[Link] = field(default_factory=list)
 
 
 class Buffer:

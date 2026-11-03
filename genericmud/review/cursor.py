@@ -10,7 +10,7 @@ anti-flooding split).
 
 from __future__ import annotations
 
-from genericmud.model.buffer import Buffer
+from genericmud.model.buffer import Buffer, Link
 
 RECALL_MAX = 10  # VIPMud's Ctrl+1-9 covers nine; Ctrl+0 recalls the tenth
 
@@ -178,13 +178,13 @@ class ReviewCursor:
 
     # --- MXP links ---
 
-    def links(self) -> list[tuple[str, str]]:
-        """(displayed text, command) for each MXP link on the current line."""
+    def links(self) -> list[Link]:
+        """Each MXP link on the current line, as the words it shows and what it does."""
         if len(self._buffer) == 0:
             return []
         return list(self._buffer[self._index()].links)
 
-    def link(self) -> tuple[str, str] | None:
+    def link(self) -> Link | None:
         """The link the cursor's word sits in, or the line's only link, or ``None``.
 
         Matching on the word is what makes a line carrying several links usable from the
@@ -198,9 +198,9 @@ class ReviewCursor:
             return None
         word = _word_key(self.current_word())
         if word:
-            for text, command in links:
-                if word in _word_key(text):
-                    return (text, command)
+            for link in links:
+                if word in _word_key(link.text):
+                    return link
         return links[0] if len(links) == 1 else None
 
 

@@ -22,6 +22,9 @@ CONNECTED = "connected"
 DISCONNECTED = "disconnected"
 FIND_RESULT = "find_result"  # outcome of a FIND, so the renderer can follow with its caret
 INPUT_MASKED = "input_masked"  # the server is hiding typed input (a password prompt)
+# Engine -> renderer: put this text in the command box and send nothing. What <SEND PROMPT>
+# asks for, and what a menu of commands will ask for later.
+INPUT_TEXT = "input_text"
 # Engine -> renderer: open this URL. Used where there is no native window to ask (the web UI
 # runs inside the browser), so the resource is opened by the page rather than by the engine.
 OPEN_URL = "open_url"
@@ -44,14 +47,15 @@ def line(
     channel: str = "main",
     gagged: bool = False,
     display_when_gagged: bool = False,
-    links: list[tuple[int, int, str]] | None = None,
+    links: list[tuple[int, int, str, bool]] | None = None,
     images: list[tuple[int, str]] | None = None,
 ) -> dict[str, Any]:
-    """One rendered line. ``links`` are (start, end, command) offsets into ``text``.
+    """One rendered line. ``links`` are (start, end, command, insert) offsets into ``text``.
 
     Sent as offsets rather than as markup so the renderer builds real anchors from plain
     text -- the engine has already decided what is text and what is a link, and re-parsing
-    markup in the renderer would be a second, divergent answer to that question.
+    markup in the renderer would be a second, divergent answer to that question. ``insert``
+    says following the link types its command rather than sending it.
 
     ``images`` are (offset, url) for inline graphics whose address the player's world could
     resolve. Only http/https arrives here: anything else is refused before it is sent.
@@ -136,6 +140,15 @@ def disconnected() -> dict[str, Any]:
 def input_masked(masked: bool) -> dict[str, Any]:
     """Whether what the user types now is a secret the renderer must not keep in history."""
     return {"type": INPUT_MASKED, "masked": masked}
+
+
+def input_text(text: str) -> dict[str, Any]:
+    """Put ``text`` in the command box, replacing what is there; nothing is sent.
+
+    A link that carries half a command is the case this exists for: the player finishes it,
+    or clears it, and decides when (and whether) it goes to the MUD.
+    """
+    return {"type": INPUT_TEXT, "text": text}
 
 
 def input_message(text: str) -> dict[str, Any]:

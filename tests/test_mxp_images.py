@@ -11,6 +11,7 @@ from genericmud.app import EngineApp
 from genericmud.bridge import protocol
 from genericmud.config.keymap import load_keymap
 from genericmud.config.worlds import World, load_worlds, save_worlds
+from genericmud.model.buffer import Link
 from genericmud.protocol.mxp import IMAGE_MARK, MxpParser, resolve_image_url
 from genericmud.protocol.telnet import OPT_MXP, WILL, DataReceived, Negotiation
 from genericmud.voice.router import VoiceRouter
@@ -158,7 +159,7 @@ def test_a_text_client_gets_a_link_to_the_picture_instead():
     # can't see it: the file name is the link's words, the address is what it does.
     app, _sent, _backend, _posted = _app(images_url=ART)
     _say(app, SECURE + 'A <IMAGE fname="map.gif"> map is here.')
-    assert app.buffer.lines()[-1].links == [("map.gif", ART + "map.gif")]
+    assert app.buffer.lines()[-1].links == [Link("map.gif", ART + "map.gif")]
 
 
 def test_following_that_link_opens_the_picture():
@@ -166,7 +167,7 @@ def test_following_that_link_opens_the_picture():
     _say(app, SECURE + '<IMAGE fname="map.gif">')
     app.on_ws_message({"type": "key", "key": "alt+enter"})  # the line's only link
     assert sent == []  # a web address is opened, never typed at the MUD
-    assert app.buffer.lines()[-1].links[0][1] == ART + "map.gif"
+    assert app.buffer.lines()[-1].links[0].command == ART + "map.gif"
 
 
 def test_an_image_that_cannot_be_located_is_dropped_quietly():
@@ -195,10 +196,10 @@ def test_images_and_links_on_one_line_both_survive():
     _say(app, SECURE + '<send href="north">north</send> and <IMAGE fname="map.gif">')
     message = _line_message(posted)
     assert message["text"] == "north and "
-    assert message["links"] == [[0, 5, "north"]]
+    assert message["links"] == [[0, 5, "north", False]]
     assert message["images"] == [[10, ART + "map.gif"]]
     # Both are reachable from the keyboard: the link by its word, the image by its file name.
-    assert [text for text, _command in app.buffer.lines()[-1].links] == ["north", "map.gif"]
+    assert [link.text for link in app.buffer.lines()[-1].links] == ["north", "map.gif"]
 
 
 def test_an_image_inside_a_link_does_not_become_the_links_name():
@@ -206,7 +207,9 @@ def test_an_image_inside_a_link_does_not_become_the_links_name():
     # by what it does rather than by the marker that stood for the picture.
     app, _sent, _backend, _posted = _app(images_url=ART)
     _say(app, SECURE + '<send "drink"><IMAGE fname="fountain.gif"></send>')
-    assert app.buffer.lines()[-1].links == [("", "drink"), ("fountain.gif", ART + "fountain.gif")]
+    assert app.buffer.lines()[-1].links == [
+        Link("", "drink"), Link("fountain.gif", ART + "fountain.gif")
+    ]
 
 
 def test_mxp_off_means_images_are_text_like_anything_else():

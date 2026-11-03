@@ -48,6 +48,15 @@ export class Input {
     this.masked = Boolean(masked);
   }
 
+  // A link's half-written command: replaces what is in the box and puts the caret after it,
+  // so the next keystroke extends it. Nothing is sent -- the player finishes it or clears it.
+  setText(text) {
+    this.element.value = String(text);
+    const end = this.element.value.length;
+    this.element.setSelectionRange(end, end);
+    this.element.focus();
+  }
+
   addOutput(text) {
     for (const word of String(text).match(OUTPUT_WORD) ?? []) {
       if (word.length < MIN_COMPLETION_WORD_LENGTH) continue;
