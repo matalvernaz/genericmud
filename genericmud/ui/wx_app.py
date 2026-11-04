@@ -601,6 +601,36 @@ class SessionPanel(wx.Panel):
         self.input.SetInsertionPointEnd()
         self.input.SetFocus()
 
+    def _choose_from_menu(self, message: dict) -> None:
+        """Ask which of a menu's commands was meant, and send only the one picked.
+
+        The answer goes back through the engine, which decides what a command from the MUD may
+        do; the window never sends anything itself. Closing the dialog, or Escape, sends
+        nothing -- a menu is a question, and "never mind" is a fair answer to it.
+        """
+        choices: list[tuple[str, str]] = []
+        for item in message.get("choices", []):
+            if isinstance(item, (list, tuple)) and len(item) >= 1:
+                command = str(item[0])
+                caption = str(item[1]) if len(item) > 1 else ""
+                if command:
+                    choices.append((command, caption))
+        if not choices or self.app is None:
+            return
+        dialog = ChooseDialog(self, str(message.get("text", "")), choices)
+        try:
+            picked = dialog.chosen() if dialog.ShowModal() == wx.ID_OK else None
+        finally:
+            dialog.Destroy()
+        self.input.SetFocus()
+        if picked is None:
+            return
+        command, caption = picked
+        self._loop.call_soon_threadsafe(
+            self.app.on_ws_message,
+            {"type": protocol.MENU_CHOICE, "text": caption or command, "command": command},
+        )
+
     def paste_command(self, text: str) -> str:
         def paste() -> str:
             start, end = self.input.GetSelection()
@@ -793,6 +823,8 @@ class SessionPanel(wx.Panel):
             self._input_masked = bool(message.get("masked"))
         elif kind == protocol.INPUT_TEXT:
             self._fill_command(str(message.get("text", "")))
+        elif kind == protocol.MENU:
+            self._choose_from_menu(message)
         # Sound/status messages are ignored here for now (native SFX is a follow-up).
 
     def _flush_output(self) -> None:
@@ -1525,6 +1557,49 @@ class _PackQuestion:
         if not self.done.is_set():
             self.answer = answer
             self.done.set()
+
+
+class ChooseDialog(wx.Dialog):
+    """Pick one of the commands an MXP menu offers.
+
+    Following a menu link never sends anything: it asks. The MUD's own words for the link are
+    in the title, so the question arrives with its context, and each row is numbered so a
+    number key picks it -- the same "type the number" the rest of the client answers to.
+    Arrow keys and Enter work the ordinary way, and Cancel sends nothing at all.
+    """
+
+    def __init__(self, parent: wx.Window, text: str, choices: list[tuple[str, str]]) -> None:
+        super().__init__(parent, title=f"Choose: {text}" if text else "Choose")
+        self._choices = list(choices)
+        outer = wx.BoxSizer(wx.VERTICAL)
+        rows = [
+            f"{number}. {caption or command}"
+            for number, (command, caption) in enumerate(self._choices, 1)
+        ]
+        self._list = wx.ListBox(self, choices=rows, style=wx.LB_SINGLE)
+        self._list.SetName("Choices")
+        outer.Add(self._list, 1, wx.EXPAND | wx.ALL, 10)
+        outer.Add(self.CreateButtonSizer(wx.OK | wx.CANCEL), 0, wx.EXPAND | wx.ALL, 10)
+        self.SetSizer(outer)
+        self.SetMinSize((420, 280))
+        self._list.SetSelection(0)
+        self._list.SetFocus()
+        self._list.Bind(wx.EVT_CHAR, self._on_char)
+
+    def _on_char(self, event: wx.KeyEvent) -> None:
+        code = event.GetKeyCode()
+        if ord("1") <= code <= ord("9"):
+            index = code - ord("1")
+            if index < len(self._choices):
+                self._list.SetSelection(index)
+                self.EndModal(wx.ID_OK)
+                return
+        event.Skip()
+
+    def chosen(self) -> tuple[str, str] | None:
+        """The (command, caption) the player picked, or None if the list has no choice."""
+        index = self._list.GetSelection()
+        return self._choices[index] if 0 <= index < len(self._choices) else None
 
 
 class FindDialog(wx.Dialog):

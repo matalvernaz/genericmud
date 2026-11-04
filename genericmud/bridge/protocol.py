@@ -25,6 +25,9 @@ INPUT_MASKED = "input_masked"  # the server is hiding typed input (a password pr
 # Engine -> renderer: put this text in the command box and send nothing. What <SEND PROMPT>
 # asks for, and what a menu of commands will ask for later.
 INPUT_TEXT = "input_text"
+# Engine -> renderer: ask which of a <SEND> menu's commands the player meant. Nothing is sent
+# until the answer comes back as a MENU_CHOICE.
+MENU = "menu"
 # Engine -> renderer: open this URL. Used where there is no native window to ask (the web UI
 # runs inside the browser), so the resource is opened by the page rather than by the engine.
 OPEN_URL = "open_url"
@@ -40,6 +43,8 @@ LINK = "link"  # the player activated an MXP link the renderer drew; the engine 
 # Enter on a line of the output box: follow that line's link. Carries the line's text and how
 # far it is from the end, since the box holds fewer lines than the buffer.
 LINK_AT = "link_at"
+# Renderer -> engine: the command picked from a MENU, sent by the engine and not the renderer.
+MENU_CHOICE = "menu_choice"
 
 
 def line(
@@ -47,15 +52,16 @@ def line(
     channel: str = "main",
     gagged: bool = False,
     display_when_gagged: bool = False,
-    links: list[tuple[int, int, str, bool]] | None = None,
+    links: list[tuple[int, int, str, bool, list[list[str]]]] | None = None,
     images: list[tuple[int, str]] | None = None,
 ) -> dict[str, Any]:
-    """One rendered line. ``links`` are (start, end, command, insert) offsets into ``text``.
+    """One rendered line. ``links`` are (start, end, command, insert, choices) into ``text``.
 
     Sent as offsets rather than as markup so the renderer builds real anchors from plain
     text -- the engine has already decided what is text and what is a link, and re-parsing
     markup in the renderer would be a second, divergent answer to that question. ``insert``
-    says following the link types its command rather than sending it.
+    says following the link types its command rather than sending it, and ``choices`` is
+    empty for a plain link and a list of (command, caption) pairs for a menu.
 
     ``images`` are (offset, url) for inline graphics whose address the player's world could
     resolve. Only http/https arrives here: anything else is refused before it is sent.
@@ -140,6 +146,11 @@ def disconnected() -> dict[str, Any]:
 def input_masked(masked: bool) -> dict[str, Any]:
     """Whether what the user types now is a secret the renderer must not keep in history."""
     return {"type": INPUT_MASKED, "masked": masked}
+
+
+def menu(text: str, choices: list[tuple[str, str]]) -> dict[str, Any]:
+    """Ask which of a menu's commands the player meant. Nothing is sent by asking."""
+    return {"type": MENU, "text": text, "choices": [list(choice) for choice in choices]}
 
 
 def input_text(text: str) -> dict[str, Any]:
