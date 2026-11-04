@@ -196,7 +196,7 @@ def test_images_and_links_on_one_line_both_survive():
     _say(app, SECURE + '<send href="north">north</send> and <IMAGE fname="map.gif">')
     message = _line_message(posted)
     assert message["text"] == "north and "
-    assert message["links"] == [[0, 5, "north", False, []]]
+    assert message["links"] == [[0, 5, "north", False, [], ""]]
     assert message["images"] == [[10, ART + "map.gif"]]
     # Both are reachable from the keyboard: the link by its word, the image by its file name.
     assert [link.text for link in app.buffer.lines()[-1].links] == ["north", "map.gif"]

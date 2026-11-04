@@ -26,6 +26,7 @@ export class Output {
         anchor.dataset.words || anchor.textContent,
         anchor.dataset.command,
         anchor.dataset.insert === "true",
+        anchor.dataset.hint || "",
       );
     });
   }
@@ -48,8 +49,8 @@ export class Output {
   // sends offsets into text it already decided is text, so nothing is re-parsed here and no
   // markup can leak into the page.
   _fill(div, text, links, images) {
-    const spans = (links || []).map(([start, end, command, insert, choices]) => ({
-      start, end, kind: "link", command, insert, choices,
+    const spans = (links || []).map(([start, end, command, insert, choices, hint]) => ({
+      start, end, kind: "link", command, insert, choices, hint,
     }));
     // An image is zero-width: it sits at a point in the text rather than covering words.
     for (const [offset, url] of images || []) {
@@ -82,6 +83,8 @@ export class Output {
       if (span.insert) anchor.dataset.insert = "true";
       // A menu's (command, caption) pairs, as data rather than markup.
       if (span.choices?.length) anchor.dataset.choices = JSON.stringify(span.choices);
+      // What the MUD says following this will do, spoken when it is followed.
+      if (span.hint) anchor.dataset.hint = span.hint;
       div.appendChild(anchor);
       at = Math.max(at, span.end);
     }

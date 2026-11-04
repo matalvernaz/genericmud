@@ -109,7 +109,7 @@ def test_the_line_message_tells_the_renderer_which_links_type():
     app, _sent, posted = _app()
     _say(app, SECURE + '<send "buy sword" PROMPT>a sword</send>')
     message = next(m for m in posted if m.get("type") == protocol.LINE)
-    assert message["links"] == [[0, 7, "buy sword", True, []]]
+    assert message["links"] == [[0, 7, "buy sword", True, [], ""]]
 
 
 def test_a_typed_link_through_the_output_box_types_rather_than_sends():

@@ -196,8 +196,8 @@ def _menu_note(link: Link) -> str:
 
 def _link_positions(
     text: str, links: list[Link]
-) -> list[tuple[int, int, str, bool, list[list[str]]]]:
-    """Where each link's words sit in the finished line: (start, end, command, insert, menu).
+) -> list[tuple[int, int, str, bool, list[list[str]], str]]:
+    """Where each link's words sit: (start, end, command, insert, menu, hint).
 
     The parser reports a link by its words, not by position, because everything between the
     parser and here (ANSI, MSP, redaction) rewrites the text. Searching forward from the
@@ -205,7 +205,7 @@ def _link_positions(
     right occurrence, in the order the MUD sent them. A link whose words are gone -- a pack
     substituted the line -- is dropped: a wrong position would make the wrong words clickable.
     """
-    spans: list[tuple[int, int, str, bool, list[list[str]]]] = []
+    spans: list[tuple[int, int, str, bool, list[list[str]], str]] = []
     cursor = 0
     for link in links:
         if not link.text:
@@ -215,7 +215,14 @@ def _link_positions(
             continue
         cursor = start + len(link.text)
         spans.append(
-            (start, cursor, link.command, link.insert, [list(item) for item in link.choices])
+            (
+                start,
+                cursor,
+                link.command,
+                link.insert,
+                [list(item) for item in link.choices],
+                link.hint,
+            )
         )
     return spans
 
@@ -596,6 +603,9 @@ class EngineApp:
         # output with one.
         self._mxp_negotiated = False
         self._mxp_join_links = []  # links gathered in that held text, emitted with it
+        # The link the review cursor is standing in, so its caption is said once on arrival
+        # rather than on every word inside it.
+        self._link_announced: Link | None = None
         self._mxp_join_images = []  # ditto for images, whose markers ride in the text itself
         self._mxp_held_lines = 0  # how many lines that hold has swallowed so far
         # One deadline, not one per <P>: paragraphs do not nest and the stream is sequential,
@@ -1999,6 +2009,7 @@ class EngineApp:
                 str(message.get("text", "")),
                 str(message.get("command", "")),
                 insert=message.get("insert") is True,
+                hint=str(message.get("hint", "")),
             )
         elif kind == protocol.MENU_CHOICE:
             # The player picked one command from a menu. It is still the MUD's text, so it
@@ -2448,6 +2459,7 @@ class EngineApp:
             if not self.review.active:
                 self.review.enter()
             self._speak_review(getattr(self.review, argument)())
+            self._announce_link_under_cursor()
         elif namespace == "voice" and argument == "flush":
             self.voice.flush()
         elif namespace == "voice" and argument in _TOGGLE_ACTIONS:
@@ -2483,6 +2495,26 @@ class EngineApp:
             f"world logs in {worlds} ({_files(log_count(worlds))}); "
             f"diagnostics in {diagnostics} ({_files(log_count(diagnostics))})"
         )
+
+    def _announce_link_under_cursor(self) -> None:
+        """Say what the link the follow key would act on does: the keyboard's version of hovering.
+
+        The link here is the same one Alt+Enter would follow -- including a line's only link,
+        which is followed from any word on it. Announcing the caption by a stricter rule than
+        the one that follows it meant the key could act on a link the reader had never heard
+        described.
+
+        Said once per link, so walking the words of one link says it on arrival and not again.
+        """
+        link = self.review.link()
+        if link == self._link_announced:
+            return
+        self._link_announced = link
+        if link is not None and link.hint:
+            # Queued behind the word rather than barging in on it: the word the cursor just
+            # reached is the thing being read, and the caption explains it -- cutting it off
+            # left the reader hearing only "link" and never the word it was about.
+            self.voice.speak(f"link: {link.hint}", channel=REVIEW_CHANNEL, interrupt=False)
 
     def _activate_link(self) -> None:
         """Follow the MXP link under the review cursor.
@@ -2521,7 +2553,9 @@ class EngineApp:
                 )
             self._post(protocol.menu(chosen.text or chosen.command, list(chosen.choices)))
             return
-        self._follow_link(chosen.text, chosen.command, insert=chosen.insert)
+        self._follow_link(
+            chosen.text, chosen.command, insert=chosen.insert, hint=chosen.hint
+        )
 
     def _activate_link_at(self, text: str, from_end: int) -> None:
         """Follow the link on the output line the reader is on (Enter in the output box).
@@ -2540,12 +2574,21 @@ class EngineApp:
         self.review.go_to(min(matches, key=lambda index: abs(index - near)))
         self._activate_link()
 
-    def _follow_link(self, text: str, command: str, *, insert: bool = False) -> None:
-        """Do what a link asks, whoever asked it: the review cursor or a click in the browser."""
+    def _follow_link(
+        self, text: str, command: str, *, insert: bool = False, hint: str = ""
+    ) -> None:
+        """Do what a link asks, whoever asked it: the review cursor or a click in the browser.
+
+        ``hint`` is the caption the MUD gave the link -- what following it is meant to do. It is
+        said with the command, because "a sword: buy sword" leaves out what the MUD was
+        offering, and the reader is about to send a command on the strength of it.
+        """
         if not command.strip():
             return
         if self._diag is not None:
-            self._diag.event("mxp.link", text=text, command=command, insert=insert)
+            self._diag.event(
+                "mxp.link", text=text, command=command, insert=insert, hint=hint
+            )
         if insert:
             refusal = self._typed_link_refusal(command)
             if refusal is not None:
@@ -2561,16 +2604,20 @@ class EngineApp:
             # Enter themselves. The trailing space the MUD wrote is kept: "tell Ariadne " is
             # meant to have a name typed after it.
             self._post(protocol.input_text(command))
-            self._speak_system(f"in the command box: {command.strip()}")
+            said = f"in the command box: {command.strip()}"
+            self._speak_system(f"{said}. {hint}" if hint else said)
             return
         command = command.strip()
         if command.lower().startswith(_LINK_URL_SCHEMES):
             self._open_link(command)
             return
+        # Said before the command goes, so the caption explains what is being sent rather
+        # than arriving behind it.
+        said = f"{text}: {command}" if text else f"link: {command}"
+        self._speak_system(f"{said}. {hint}" if hint else said)
         # A link is the MUD's text, not the player's, so it may not run a client command:
         # a MUD could otherwise tag any word with <SEND HREF="/quit"> and end the session.
         self._dispatch_command(command, allow_client=False)
-        self._speak_system(f"{text}: {command}" if text else f"link: {command}")
 
     def _typed_link_refusal(self, command: str) -> str | None:
         """Why a link's text may not be typed into the command box, or None when it may.

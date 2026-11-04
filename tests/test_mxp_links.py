@@ -287,14 +287,14 @@ def test_the_line_message_carries_link_positions():
     _say(app, SECURE + 'You see a <send href="drink fountain">fountain</send> here.')
     message = _line_message(posted)
     assert message["text"] == "You see a fountain here."
-    assert message["links"] == [[10, 18, "drink fountain", False, []]]
+    assert message["links"] == [[10, 18, "drink fountain", False, [], ""]]
 
 
 def test_two_links_keep_the_order_the_mud_sent_them():
     app, _sent, _backend, posted = _build()
     _say(app, SECURE + '<send href="first">a</send> <send href="second">a</send> again')
     assert _line_message(posted)["links"] == [
-        [0, 1, "first", False, []], [2, 3, "second", False, []]
+        [0, 1, "first", False, [], ""], [2, 3, "second", False, [], ""]
     ]
 
 
