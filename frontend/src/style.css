@@ -55,3 +55,16 @@ main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
   clip: rect(0 0 0 0); clip-path: inset(50%);
   overflow: hidden; white-space: nowrap;
 }
+
+/* A <SEND> menu: the choices along the bottom, where they cannot cover the text being read.
+   Each is a real button, so Tab reaches them and Enter presses them. */
+.mxp-menu {
+  position: fixed;
+  inset: auto 0 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  border-top: 1px solid #555;
+  background: #101010;
+}

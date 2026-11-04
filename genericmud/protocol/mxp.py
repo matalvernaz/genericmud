@@ -35,7 +35,7 @@ here.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from urllib.parse import urlparse
 
 from genericmud.model.buffer import Link
@@ -91,6 +91,10 @@ _KNOWN_TAGS = _OPEN_TAGS | frozenset(
 _ENTITIES = {
     "lt": "<", "gt": ">", "amp": "&", "quot": '"', "apos": "'", "nbsp": " ",
 }
+
+# How many commands a <SEND> menu may offer. A MUD could otherwise hand a player a list
+# nobody could read out, and each entry is another line in a dialog.
+_MAX_MENU_ITEMS = 20
 
 CLIENT_NAME = "genericMud"
 MXP_VERSION = "1.0"
@@ -278,7 +282,7 @@ class MxpParser:
         position = 0
         # The text of a <SEND>/<A> link, so it can be paired with its command and with
         # whether following it sends that command or types it.
-        pending_link: tuple[int, str, bool] | None = None
+        pending_link: tuple[int, Link] | None = None
         for match in _TAG_RE.finditer(text):
             name = match.group("name").lower()
             closing = bool(match.group("closing"))
@@ -305,15 +309,14 @@ class MxpParser:
             # A secure tag on an open line is dropped without action, exactly as the
             # security rule requires; its text stays, which is the safe half.
             if name in ("send", "a") and not closing and secure_ok:
-                command, insert = _link_command(match.group("attrs"))
-                pending_link = (len(out), command, insert)
+                pending_link = (len(out), _link(match.group("attrs")))
             elif name in ("send", "a") and closing and pending_link is not None:
-                index, command, insert = pending_link
-                if command:
+                index, link = pending_link
+                if link.command:
                     # An image inside a link leaves a marker where it sits; that is not words,
                     # so it must not become the link's name.
                     words = "".join(out[index:]).replace(IMAGE_MARK, "")
-                    links.append(Link(words, command, insert))
+                    links.append(replace(link, text=words))
                 pending_link = None
         out.append(text[position:])
         return "".join(out)
@@ -413,14 +416,18 @@ def _support_reply(attrs: str) -> str:
     return "<SUPPORTS " + " ".join(answers) + ">"
 
 
-def _link_command(attrs: str) -> tuple[str, bool]:
-    """The command a ``<SEND>``/``<A>`` link carries, and whether it is typed rather than sent.
+def _link(attrs: str) -> Link:
+    """What a ``<SEND>``/``<A>`` tag asks for, before its words are known.
 
     The command is ``HREF=`` or the first bare argument. A bare ``PROMPT`` argument, which the
     spec puts after the command, asks for the text to land in the player's own command line
     instead of going to the MUD -- so a link can offer to start a command without finishing
-    it, and the player completes or abandons it. Sent as it stands, half a command would reach
-    the MUD as a command they never gave.
+    it, and the player completes or abandons it.
+
+    A command with ``|`` in it is a menu of several, and ``HINT=`` captions them: its first
+    caption belongs to the link itself and the rest follow the commands in order. A menu lets
+    a MUD offer a choice without spending a line on every option, and following one asks which
+    rather than assuming the first.
     """
     tokens = _tokens(attrs.strip())
     href = re.search(
@@ -435,7 +442,41 @@ def _link_command(attrs: str) -> tuple[str, bool]:
                 continue  # EXPIRE= and any other named argument comes before or after
             command = _unquote(token)
             break
-    return command, _has_prompt_flag(attrs, command)
+    captions = _attribute(attrs, "HINT").split("|")
+    parts = [item for item in command.split("|") if item.strip()]
+    choices: tuple[tuple[str, str], ...] = ()
+    if len(parts) > 1:
+        # A menu's entries are trimmed: the separators are what matter, not the spacing round
+        # them. (command, caption), captions following the link's own, so the first command's
+        # is captions[1]. A command the MUD gave no caption is still offered, by its command.
+        items = [item.strip() for item in parts]
+        choices = tuple(
+            (item, captions[number + 1] if number + 1 < len(captions) else "")
+            for number, item in enumerate(items[:_MAX_MENU_ITEMS])
+        )
+        single = items[0]
+    else:
+        # One command, kept exactly as the MUD wrote it: PROMPT's trailing space is the whole
+        # point of that tag, and trimming here would glue the player's next word onto it.
+        single = command if parts else ""
+    return Link(
+        "",
+        single,
+        # A menu is not a typed command: PROMPT belongs to the one command it describes.
+        False if choices else _has_prompt_flag(attrs, command),
+        captions[0] if captions else "",
+        choices,
+    )
+
+
+def _attribute(attrs: str, name: str) -> str:
+    """One named argument's value, quoted or bare, or "" when the tag hasn't got it."""
+    found = re.search(
+        name + r"\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s>]+))", attrs, re.IGNORECASE
+    )
+    if found is None:
+        return ""
+    return next((group for group in found.groups() if group is not None), "")
 
 
 # A named argument with its value, quoted or bare: HINT="Buy it", EXPIRE=shop.

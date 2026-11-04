@@ -27,6 +27,34 @@ const audio = new Audio((e) =>
 const status = new Status(statusEl);
 let input;
 
+// A <SEND> menu asks which command was meant. The strip stays until one is picked; nothing
+// is sent without a click, and the engine still decides what the command may do.
+let menuBar = null;
+function showMenu(message) {
+  if (menuBar) menuBar.remove();
+  menuBar = document.createElement("div");
+  menuBar.className = "mxp-menu";
+  menuBar.setAttribute("role", "group");
+  menuBar.setAttribute("aria-label", `Choose: ${message.text}`);
+  const labels = [];
+  for (const [command, caption] of message.choices) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = caption || command;
+    button.addEventListener("click", () => {
+      bridge.send({ type: "menu_choice", text: caption || command, command });
+      if (menuBar) menuBar.remove();
+      menuBar = null;
+      inputEl.focus();
+    });
+    labels.push(button.textContent);
+    menuBar.appendChild(button);
+  }
+  document.body.appendChild(menuBar);
+  menuBar.querySelector("button")?.focus();
+  announceEl.textContent = `Choose: ${labels.join(", ")}`;
+}
+
 const handlers = {
   line: (m) => {
     output.addLine(m);
@@ -45,6 +73,7 @@ const handlers = {
   input_masked: (m) => input.setMasked(m.masked),
   // A link that carries half a command: put it in the box, send nothing.
   input_text: (m) => input.setText(m.text),
+  menu: (m) => showMenu(m),
   // A link to a web page, when there is no native window to hand it to. noopener/noreferrer
   // keep the opened page from reaching back into the game tab.
   open_url: (m) => window.open(m.url, "_blank", "noopener,noreferrer"),

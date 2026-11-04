@@ -189,8 +189,15 @@ def _strip_image_marks(text: str) -> tuple[str, list[int]]:
     return "".join(kept), positions
 
 
-def _link_positions(text: str, links: list[Link]) -> list[tuple[int, int, str, bool]]:
-    """Where each link's words sit inside the finished line: (start, end, command, insert).
+def _menu_note(link: Link) -> str:
+    """What to say after a link's words when following it asks rather than acts."""
+    return f" (menu of {len(link.choices)})" if link.choices else ""
+
+
+def _link_positions(
+    text: str, links: list[Link]
+) -> list[tuple[int, int, str, bool, list[list[str]]]]:
+    """Where each link's words sit in the finished line: (start, end, command, insert, menu).
 
     The parser reports a link by its words, not by position, because everything between the
     parser and here (ANSI, MSP, redaction) rewrites the text. Searching forward from the
@@ -198,7 +205,7 @@ def _link_positions(text: str, links: list[Link]) -> list[tuple[int, int, str, b
     right occurrence, in the order the MUD sent them. A link whose words are gone -- a pack
     substituted the line -- is dropped: a wrong position would make the wrong words clickable.
     """
-    spans: list[tuple[int, int, str, bool]] = []
+    spans: list[tuple[int, int, str, bool, list[list[str]]]] = []
     cursor = 0
     for link in links:
         if not link.text:
@@ -207,7 +214,9 @@ def _link_positions(text: str, links: list[Link]) -> list[tuple[int, int, str, b
         if start < 0:
             continue
         cursor = start + len(link.text)
-        spans.append((start, cursor, link.command, link.insert))
+        spans.append(
+            (start, cursor, link.command, link.insert, [list(item) for item in link.choices])
+        )
     return spans
 
 
@@ -1991,6 +2000,12 @@ class EngineApp:
                 str(message.get("command", "")),
                 insert=message.get("insert") is True,
             )
+        elif kind == protocol.MENU_CHOICE:
+            # The player picked one command from a menu. It is still the MUD's text, so it
+            # goes down the same road as a followed link: no client commands, same speech.
+            self._follow_link(
+                str(message.get("text", "")), str(message.get("command", ""))
+            )
         elif kind == protocol.LINK_AT:
             from_end = message.get("from_end")
             self._activate_link_at(
@@ -2490,10 +2505,21 @@ class EngineApp:
             # more Alt+Right lands on a word that picks the intended one. A link with no
             # words of its own (an image, or an empty <SEND>) is named by what it does.
             named = "; ".join(
-                f"{number} {link.text or link.command}"
+                f"{number} {link.text or link.command}{_menu_note(link)}"
                 for number, link in enumerate(links, 1)
             )
             self._speak_review(f"{len(links)} links: {named}")
+            return
+        if chosen.choices:
+            # A menu is a question, not an answer: following it asks which command was meant,
+            # and nothing goes to the MUD until the player picks one. The question is traced
+            # as well as the answer, so a session's log says what was offered and what was
+            # taken.
+            if self._diag is not None:
+                self._diag.event(
+                    "mxp.menu", text=chosen.text, choices=len(chosen.choices)
+                )
+            self._post(protocol.menu(chosen.text or chosen.command, list(chosen.choices)))
             return
         self._follow_link(chosen.text, chosen.command, insert=chosen.insert)
 

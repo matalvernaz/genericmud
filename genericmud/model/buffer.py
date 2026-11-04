@@ -26,11 +26,18 @@ class Link:
     ``insert`` is ``<SEND PROMPT>``: the command belongs in the player's own command box, to
     finish or abandon, rather than going to the MUD as it stands. A link that carried half a
     command ("tell Ariadne ") would otherwise send that half the moment it was followed.
+
+    ``choices`` is a ``<SEND>`` menu: several commands instead of one, each with the caption
+    the MUD gave it. Following a menu never sends anything by itself -- it asks which of them
+    the player meant. ``command`` stays the first choice, so anything that does not know about
+    menus still has a sensible answer.
     """
 
     text: str
     command: str
     insert: bool = False
+    hint: str = ""  # the caption the link carries for itself ("Click to buy a sword")
+    choices: tuple[tuple[str, str], ...] = ()  # (command, caption) for a menu
 
 
 @dataclass
