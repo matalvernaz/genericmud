@@ -184,6 +184,20 @@ class ReviewCursor:
             return []
         return list(self._buffer[self._index()].links)
 
+    def _link_at(self, word: str) -> Link | None:
+        """The link one of whose own words is ``word``.
+
+        Compared word by word, not as a substring: "a" is inside "fountain", and a cursor on
+        "a" is not on the link.
+        """
+        key = _word_key(word)
+        if not key:
+            return None
+        for link in self.links():
+            if key in {_word_key(part) for part in link.text.split()}:
+                return link
+        return None
+
     def link(self) -> Link | None:
         """The link the cursor's word sits in, or the line's only link, or ``None``.
 
@@ -196,11 +210,9 @@ class ReviewCursor:
         links = self.links()
         if not links:
             return None
-        word = _word_key(self.current_word())
-        if word:
-            for link in links:
-                if word in _word_key(link.text):
-                    return link
+        under = self._link_at(self.current_word())
+        if under is not None:
+            return under
         return links[0] if len(links) == 1 else None
 
 

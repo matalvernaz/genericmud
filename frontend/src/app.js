@@ -20,7 +20,7 @@ const announceEl = document.getElementById("sr-announce");
 // policy (no client commands, web URLs only). `bridge` is reached lazily for the same reason
 // `audio`'s error callback is: it only fires on a later click, by which point it is assigned.
 const output = new Output(outputEl,
-  (text, command, insert) => bridge.send({ type: "link", text, command, insert }),
+  (text, command, insert, hint) => bridge.send({ type: "link", text, command, insert, hint }),
   (text, choices) => openMenu({ text, choices }));
 // A <SEND> menu: from a click on its link, or from the engine when the review keys follow it.
 const openMenu = (message) => showMenu(document, message, { send: (m) => bridge.send(m) });
