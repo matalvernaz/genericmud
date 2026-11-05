@@ -482,6 +482,14 @@ def test_a_drop_that_reconnects_by_itself_leaves_the_timers_running(tmp_path):
     # Losing the connection and getting it back doesn't cancel the pack's timers, so they
     # aren't scheduled again: that would restart every countdown.
     app, _backend, handles = _heartbeat_session(tmp_path)
+    heartbeat = _heartbeats(handles)
+    before = len(handles)
     app.on_connection_status("connection lost; reconnecting in 5s (attempt 1)")
     app.on_connection_status("reconnected")
-    assert len(_heartbeats(handles)) == 1
+    # Settle new presentation callbacks, without confusing their delay with the pack's
+    # one-second heartbeat. A duplicate pack timer would reschedule itself and fail below.
+    for handle in handles[before:]:
+        handle.fired = True
+        handle.callback()
+    assert len(heartbeat) == 1
+    assert _heartbeats(handles) == heartbeat

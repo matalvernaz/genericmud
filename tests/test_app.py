@@ -404,6 +404,42 @@ def test_a_reconnect_names_the_world_it_rejoined():
     assert backend.spoken[-1] == "Reconnected to Aardwolf."
 
 
+def test_manual_recovery_announces_immediately_and_invalidates_old_confirmation():
+    timers = []
+    backend = RecordingBackend()
+    app = EngineApp(
+        VoiceRouter(backend), name="Test",
+        schedule=lambda delay, callback: timers.append(callback),
+    )
+    loss = "connection lost; reconnecting every 5s"
+    app.on_connection_status(loss)
+    app.on_connection_status("reconnected")
+    assert app.engine.connected and backend.spoken == [loss]
+    app.on_connection_status("disconnected")
+    app.on_connection_status(loss)
+    before = len(timers)
+    app.on_connection_status("reconnected", manual=True)
+    assert len(timers) == before
+    assert backend.spoken[-1] == "Reconnected to Test."
+    for callback in timers:
+        callback()  # a delayed callback from a replaced socket must stay silent
+    assert backend.spoken.count("Reconnected to Test.") == 1
+
+
+def test_shutdown_prevents_a_pending_recovery_confirmation():
+    timers = []
+    backend = RecordingBackend()
+    app = EngineApp(
+        VoiceRouter(backend), schedule=lambda delay, callback: timers.append(callback),
+    )
+    app.on_connection_status("connection lost; reconnecting every 5s")
+    app.on_connection_status("reconnected")
+    app.shutdown()
+    for callback in timers:
+        callback()
+    assert not any("Reconnected" in text for text in backend.spoken)
+
+
 def test_pack_variables_persist_across_sessions(tmp_path):
     # MUSHclient SaveState equivalent: user-adjusted pack settings (volumes, toggles)
     # must survive a restart. Saved at shutdown, seeded before packs load on connect
