@@ -138,6 +138,10 @@ INTERACTIVE_SOURCE = "user-interactive"
 # An <A HREF> link is opened, never typed at the MUD: only these schemes are followed, so a
 # MUD can't send the platform off to launch a local application through the shell.
 _LINK_URL_SCHEMES = ("http://", "https://")
+# Ports a game may send a player to over MSSP: the ordinary range, plus HTTPS, which games do
+# use for TLS. Anything else privileged is refused -- taking a status reply's word for it would
+# write the number into the world file and dial it.
+_ALLOWED_LOW_PORTS = frozenset({443})
 # The longest text a link may type into the command box. Starting a command is what the
 # spec has in mind ("tell Ariadne "); nobody needs a paragraph begun for them.
 _MAX_TYPED_LINK = 200
@@ -611,6 +615,11 @@ class EngineApp:
         # output with one.
         self._mxp_negotiated = False
         self._mxp_join_links = []  # links gathered in that held text, emitted with it
+        # The encrypted port this MUD advertised over MSSP, if it did and this link isn't on
+        # it. `None` means no offer stands, which is the answer /secure acts on.
+        self._secure_port: int | None = None
+        self._world_port = 0
+        self._world_tls = False
         # The link the review cursor is standing in, so its caption is said once on arrival
         # rather than on every word inside it.
         self._link_announced: Link | None = None
@@ -730,6 +739,10 @@ class EngineApp:
         self.log_files = world.log_files
         self.log_commands = world.log_commands
         self.echo_input = world.echo_input
+        # How this session reached the world: an offer of an encrypted port has to know whether
+        # this link is already encrypted, and whether the offered port is even a change.
+        self._world_port = world.port
+        self._world_tls = world.tls
         # How this world logs in, and what it types once connected. A reconnect from this tab
         # reads both again, so an edit has to reach the running session and not just the file.
         self.connect_method = world.connect_method
@@ -749,6 +762,7 @@ class EngineApp:
         """
         if not socket_open:
             self.engine.connected = False  # packs' IsConnected(), until it opens
+        self._secure_port = None  # an offer belongs to the connection that made it
         # A new connection starts MXP from nothing: the server has to offer it again, and no
         # mode, paragraph or held text carries over from the last one.
         self._mxp_negotiated = False
@@ -1701,9 +1715,67 @@ class EngineApp:
                 self.engine.set_mud_var(name, value)
                 self.engine.set_mud_var(f"mssp.{name}", value)
                 self.engine.data_arrived("mssp", name, value)
+            self._note_secure_port(result.data)
             self._post(protocol.status(self._gauges))
         if sub.option == T.OPT_MSDP and self._mush_packs:
             self._route_msdp(sub.payload)
+
+    def _note_secure_port(self, data: dict[str, str]) -> None:
+        """Offer the encrypted port the MUD advertises, when this link isn't already on it.
+
+        MSSP is where a game puts the port it never prints in its banner -- both MUDs checked
+        by hand here hid it there, one behind an in-game FAQ and one behind nothing at all. It
+        is the one thing a player cannot guess, so it is said once, in passing, with the
+        command that takes it. Nothing is changed on the strength of it: moving a world to a
+        different port is the player's decision.
+        """
+        if self._secure_port is not None or self._world_tls:
+            return
+        advertised = ""
+        for name, value in data.items():
+            if name.strip().upper() in ("SSL", "TLS"):
+                advertised = str(value).strip()
+                break
+        port = int(advertised) if advertised.isdigit() else 0
+        plausible = port in _ALLOWED_LOW_PORTS or 1024 <= port <= 65535
+        if not plausible or port == self._world_port:
+            if advertised and self._diag is not None:
+                self._diag.event("mssp.secure_ignored", value=advertised)
+            return
+        self._secure_port = port
+        if self._diag is not None:
+            self._diag.event("mssp.secure_offered", port=port, mssp=sorted(data)[:6])
+        self._speak_system(
+            f"this game offers an encrypted connection on port {port}; /secure switches this "
+            "world to it",
+            interrupt=False,
+        )
+
+    def _use_secure_port(self) -> None:
+        """Take up the encrypted port the MUD offered: the window saves the world and reconnects.
+
+        The window owns the world file and the connection, so the engine asks rather than
+        acting; where there is no window to ask (the web UI), it says what to change by hand.
+        """
+        port = self._secure_port
+        if port is None:
+            self._speak_system("this game has not offered an encrypted port")
+            return
+        if self._world_tls and self._world_port == port:
+            # Already taken: the offer stood before this world was moved onto that port.
+            self._speak_system(f"this world is already using its encrypted port, {port}")
+            return
+        hook = getattr(self.pack_window, "use_secure_port", None)
+        if hook is not None and hook(port):
+            if self._diag is not None:
+                self._diag.event("mssp.secure_taken", port=port)
+            self._speak_system(f"switching this world to port {port}, encrypted")
+            return
+        if self._diag is not None:
+            self._diag.event("mssp.secure_unavailable", port=port)
+        self._speak_system(
+            f"set this world's port to {port} and tick Use TLS in its details"
+        )
 
     def _route_msdp(self, payload: bytes) -> None:
         """Hand a raw MSDP payload to each MUSHclient pack's telnet-subnegotiation
@@ -2446,6 +2518,8 @@ class EngineApp:
             self.update_packs()
         elif verb == "logs":
             self._speak_logs()
+        elif verb == "secure":
+            self._use_secure_port()
         else:
             return False  # unknown /verb -> let the MUD have it (some use slash commands)
         return True
@@ -2929,6 +3003,9 @@ class EngineApp:
         auto-login stranded at the login screen.
         """
         self.engine.connected = True
+        # An offer belongs to the connection that made it: a reconnect asks the MUD again,
+        # because a game can move its port and a stale offer would point at nothing.
+        self._secure_port = None
         # A fresh socket is a fresh byte stream: drop any half-decoded multibyte tail and
         # the legacy-encoding latch, or a drop mid-character mis-decodes the whole reconnect.
         self.codec.reset()

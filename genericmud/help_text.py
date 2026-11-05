@@ -318,4 +318,5 @@ Automation menu   Manage per-world automation; list MUD variables; automation he
 Alt+Shift+L       Log this session to a file
 Alt+Shift+D       Speak the diagnostic log location and summary
 /logs             Where the log files are: world logs, and diagnostics
+/secure           Switch this world to the encrypted port the game advertised
 """

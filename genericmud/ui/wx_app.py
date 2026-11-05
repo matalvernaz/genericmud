@@ -1255,6 +1255,49 @@ class SessionPanel(wx.Panel):
         if self.app is not None:
             self.app.on_focus_changed(focused)
 
+    def use_secure_port(self, port: int) -> bool:  # UI thread
+        """Move this world to the encrypted port the MUD advertised, save it, and reconnect.
+
+        The engine asks and the window acts, because the world file and the connection live
+        here. Saving the change is the point rather than a side effect: the next session is
+        encrypted too, without anyone having to remember a port number.
+        """
+        if port <= 0 or (self.world.tls and self.world.port == port):
+            return False
+        self.world = replace(self.world, port=port, tls=True)
+        frame = wx.GetTopLevelParent(self)
+        save = getattr(frame, "_save_world", None)
+        if save is not None:
+            # `replacing` is its own name: editing the world, not clobbering a different one.
+            save(self.world, replacing=self.world.name)
+        # The engine's own picture of this link decides whether to offer again: without telling
+        # it, the next connect would offer the same port a second time and then /secure would
+        # answer "set it by hand" about a world already on it.
+        if self.app is not None:
+            self._loop.call_soon_threadsafe(self.app.apply_world_settings, self.world)
+        # reconnect() is written for a dead link and returns at once while the connection is
+        # up, which is exactly what a /secure from a live session is. So the live link goes
+        # first, and the new port is taken on the loop thread once it has gone.
+        self._loop.call_soon_threadsafe(lambda: asyncio.create_task(self._switch_secure_port()))
+        return True
+
+    async def _switch_secure_port(self) -> None:  # loop thread
+        """Close the live link and open it again on the world's new port.
+
+        The close has to finish before the connect starts: reconnect() refuses to begin while
+        the old socket still counts as connected, and two read loops over one tab tear each
+        other down.
+        """
+        if not self._alive or self._connection is None or self.app is None:
+            return
+        self._do_disconnect()
+        for _ in range(200):  # five seconds, far longer than closing a local socket takes
+            if not self._connection.connected and not self._connection.connecting:
+                break
+            await asyncio.sleep(0.025)
+        self._reconnecting = False
+        await self._reconnect()
+
     def apply_world_settings(self, world: World) -> None:  # UI thread
         """Take a world's edited stacking, logging, echo, login, MXP and sound downloads now. How
         the tab connects (host, port, TLS, encoding, sounds) stays as it opened, so a reconnect
