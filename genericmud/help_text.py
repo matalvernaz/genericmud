@@ -258,6 +258,8 @@ Alt+Left / Right  Review word by word
 Alt+Shift+Left / Right   Review character by character
 Alt+Home / End    Oldest / newest line
 Alt+Shift+Enter   Spell the current line character by character
+Ctrl+Shift+C      Copy all or part of the current line: a box opens with the
+                  whole line selected, so Enter copies it all
 Alt+Enter         Follow the link on this line: the keyboard form of clicking it
                   (Enter does the same while the output box has focus). On a
                   line with several links, Alt+Left / Right into one first

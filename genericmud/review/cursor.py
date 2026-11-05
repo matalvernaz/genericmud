@@ -162,6 +162,10 @@ class ReviewCursor:
     def copy_word(self) -> str:
         return self.current_word()
 
+    def current_line(self) -> str:
+        """The whole text of the line the cursor is on, for copying (Ctrl+Shift+C)."""
+        return self._line_text()
+
     def spell_line(self) -> str:
         """The current line spelled character by character (screen-reader review aid).
 

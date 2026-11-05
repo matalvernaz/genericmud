@@ -2470,6 +2470,8 @@ class EngineApp:
                 self._speak_review(self.review.recall(n, channel=channel or None))
         elif namespace == "review" and argument == "link":
             self._activate_link()
+        elif namespace == "review" and argument == "copy_line":
+            self._copy_review_line()
         elif namespace == "review" and argument in _REVIEW_VERBS:
             if not self.review.active:
                 self.review.enter()
@@ -2532,6 +2534,21 @@ class EngineApp:
             # reached is the thing being read, and the caption explains it -- cutting it off
             # left the reader hearing only "link" and never the word it was about.
             self.voice.speak(f"link: {link.hint}", channel=REVIEW_CHANNEL, interrupt=False)
+
+    def _copy_review_line(self) -> None:
+        """Offer the reviewed line for copying, all of it or any part (Ctrl+Shift+C).
+
+        Like every review key, it starts on the newest line when review isn't running yet. The
+        window owns the clipboard and the box the words are picked from; the engine only says
+        which line.
+        """
+        if not self.review.active:
+            self.review.enter()
+        text = self.review.current_line()
+        if not text.strip():
+            self._speak_review("nothing to copy")
+            return
+        self._post(protocol.copy_line(text))
 
     def _activate_link(self) -> None:
         """Follow the MXP link under the review cursor.

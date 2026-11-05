@@ -43,6 +43,10 @@
 # Spell the current review line (or the newest line) character by character.
 "alt+shift+enter" = "review:spell_line"
 
+# Copy from the current review line (or the newest line): a small box opens with the whole
+# line selected, so Enter copies all of it, or select any part first. MUDBall's key.
+"ctrl+shift+c" = "review:copy_line"
+
 # Switch worlds by the order their tabs were opened: Alt+1 is the first tab, Alt+0 the
 # tenth. The window announces the world it switched to, and Ctrl+Tab announces too.
 # These are window-side actions, so they work whatever tab you're typing in. A world whose

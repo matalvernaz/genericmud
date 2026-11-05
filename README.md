@@ -179,6 +179,10 @@ always in the output box.
   **Alt+Shift+Left/Right** by character; **Alt+Home/End** jump to the oldest or
   newest line.
 - **Alt+Shift+Enter** spells the current line out character by character.
+- **Ctrl+Shift+C** copies from the line you're on, or the newest line if you
+  haven't started reviewing. A small box opens with the whole line selected, so
+  Enter copies all of it; to copy a name or a number, select just that part
+  first with Shift and the arrow keys. Focus goes back where it was afterwards.
 - **Alt+Enter** follows the link on the line you're reading. For MUDs that send
   MXP links (an exit or an item that does something when clicked), this is the
   keyboard form of clicking it: the command is sent as if you'd typed it. When a
@@ -565,6 +569,7 @@ View, **Alt+H** Help.
 | Alt+Shift+Left / Right | Review character by character |
 | Alt+Home / Alt+End | Oldest / newest line |
 | Alt+Shift+Enter | Spell the current line |
+| Ctrl+Shift+C | Copy all or part of the current line |
 | Alt+Enter | Follow the link on this line (Enter does it too in the output) |
 | Alt+T / Alt+C | Last tell / last chat |
 | Ctrl+F | Find in the output (while the output has focus) |

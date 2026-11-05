@@ -7,6 +7,7 @@ import { Input } from "./input.js";
 import { Audio } from "./audio.js";
 import { Status } from "./status.js";
 import { showMenu } from "./menu.js";
+import { showCopyLine } from "./copyline.js";
 
 const params = new URLSearchParams(location.search);
 const port = params.get("port") || "8731";
@@ -44,6 +45,11 @@ const handlers = {
   music: (m) => audio.play({ ...m, loop: true, channel: m.channel || "music" }),
   status: (m) => status.update(m.gauges),
   review: () => { /* speech is native; visual reflection can be added later */ },
+  // Ctrl+Shift+C: the reviewed line, to copy all of it or any part.
+  copy_line: (m) => showCopyLine(document, m.text, {
+    announce: (text) => { announceEl.textContent = text; },
+    writeClipboard: (text) => navigator.clipboard.writeText(text),
+  }),
   connected: (m) => { announceEl.textContent = `Connected to ${m.world || "server"}`; },
   disconnected: () => { announceEl.textContent = "Disconnected"; },
   input_masked: (m) => input.setMasked(m.masked),

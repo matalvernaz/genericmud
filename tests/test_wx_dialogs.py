@@ -1673,3 +1673,63 @@ def test_a_new_world_starts_on_no_auto_connect(frame):
         assert chosen.startswith("No auto-connect")
     finally:
         dialog.Destroy()
+
+
+def test_the_copy_box_opens_with_the_whole_line_selected_and_copies_a_part(frame):
+    from genericmud.ui import wx_app
+
+    line = "Zugg tells you, the code is 4521"
+    dialog = wx_app.CopyLineDialog(frame, line)
+    try:
+        assert dialog._line.GetValue() == line
+        assert dialog._line.GetStringSelection() == line  # Enter alone copies all of it
+        assert dialog.chosen() == line
+        dialog._line.SetSelection(28, 32)
+        assert dialog.chosen() == "4521"
+        dialog._line.SetSelection(0, 0)  # nothing selected is the whole line again
+        assert dialog.chosen() == line
+    finally:
+        dialog.Destroy()
+
+
+@pytest.mark.parametrize(
+    ("answer", "clipboard_free", "copied", "said"),
+    [
+        (wx.ID_OK, True, ["A wolf howls"], ["Copied"]),
+        (wx.ID_OK, False, ["A wolf howls"], ["The clipboard is busy; try again."]),
+        (wx.ID_CANCEL, True, [], []),
+    ],
+)
+def test_the_copy_box_fills_the_clipboard_and_says_so(
+    frame, monkeypatch, answer, clipboard_free, copied, said
+):
+    import asyncio
+
+    from genericmud.bridge import protocol
+    from genericmud.ui import wx_app
+
+    async def no_session(_panel):
+        return None
+
+    monkeypatch.setattr(wx_app.SessionPanel, "_start", no_session)
+    monkeypatch.setattr(wx_app.CopyLineDialog, "ShowModal", lambda _self: answer)
+    clipboard: list[str] = []
+
+    def set_clipboard(text: str) -> bool:
+        clipboard.append(text)
+        return clipboard_free
+
+    monkeypatch.setattr(wx_app, "_set_clipboard_text", set_clipboard)
+    spoken: list[str] = []
+    frame.announce = spoken.append  # the real window speaks through its announcer
+    loop = asyncio.new_event_loop()
+    panel = wx_app.SessionPanel(frame, loop, {}, World("Test", "mud.example", 4000))
+    try:
+        panel._handle_message(protocol.copy_line("A wolf howls"))
+        assert clipboard == copied
+        assert spoken == said
+    finally:
+        del frame.announce
+        panel.Destroy()
+        loop.run_until_complete(asyncio.sleep(0.01))
+        loop.close()

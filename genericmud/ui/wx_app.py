@@ -828,7 +828,34 @@ class SessionPanel(wx.Panel):
             self._fill_command(str(message.get("text", "")))
         elif kind == protocol.MENU:
             self._choose_from_menu(message)
+        elif kind == protocol.COPY_LINE:
+            self._offer_line_for_copying(str(message.get("text", "")))
         # Sound/status messages are ignored here for now (native SFX is a follow-up).
+
+    def _offer_line_for_copying(self, text: str) -> None:
+        """Ctrl+Shift+C: the reviewed line in a box, to copy all of it or any part.
+
+        Focus goes back to wherever the key was pressed, the command box or the output, and
+        the copy is confirmed out loud, since nothing on screen changes to say it happened.
+        """
+        if not text:
+            return
+        focused = wx.Window.FindFocus()
+        frame = wx.GetTopLevelParent(self)
+        dialog = CopyLineDialog(frame, text)
+        try:
+            copied = dialog.ShowModal() == wx.ID_OK
+            chosen = dialog.chosen()
+        finally:
+            dialog.Destroy()
+        if focused is not None:
+            focused.SetFocus()
+        if not copied or not chosen:
+            return
+        message = "Copied" if _set_clipboard_text(chosen) else "The clipboard is busy; try again."
+        announce = getattr(frame, "announce", None)
+        if announce is not None:
+            announce(message)
 
     def _flush_output(self) -> None:
         self._flush_scheduled = False
@@ -1376,15 +1403,17 @@ def _clipboard_text() -> str:  # UI thread
         clipboard.Close()
 
 
-def _set_clipboard_text(text: str) -> None:  # UI thread
+def _set_clipboard_text(text: str) -> bool:  # UI thread
+    """Put ``text`` on the clipboard; False when another program is holding it open."""
     clipboard = wx.TheClipboard
     if not clipboard.Open():
-        return
+        return False
     try:
         clipboard.SetData(wx.TextDataObject(text))
         clipboard.Flush()  # Windows keeps it after genericMud closes
     finally:
         clipboard.Close()
+    return True
 
 
 class PackNotepadFrame(wx.Frame):
@@ -1652,6 +1681,43 @@ class FindDialog(wx.Dialog):
             forward=self._direction.GetSelection() == 1,
             case_sensitive=self._case.GetValue(),
         )
+
+
+class CopyLineDialog(wx.Dialog):
+    """Copy all or part of the line being reviewed (Ctrl+Shift+C), an idea from MUDBall.
+
+    The line sits in a read-only box with all of it selected, so Enter copies the whole line,
+    and the ordinary selection keys (Shift with the arrows, Ctrl+Shift for whole words) pick
+    out part of it first: a name, a number, an address. The label comes straight before the
+    box and the box is named as well, the pattern NVDA reads reliably here.
+    """
+
+    def __init__(self, parent: wx.Window, line: str) -> None:
+        super().__init__(parent, title="Copy from line")
+        outer = wx.BoxSizer(wx.VERTICAL)
+
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        row.Add(wx.StaticText(self, label="&Line:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
+        self._line = wx.TextCtrl(self, value=line, style=wx.TE_READONLY)
+        self._line.SetName("Line")
+        self._line.SetMinSize((480, -1))  # MUD lines run long; it is still one line
+        row.Add(self._line, 1, wx.EXPAND)
+        outer.Add(row, 0, wx.ALL | wx.EXPAND, 10)
+
+        buttons = wx.StdDialogButtonSizer()
+        copy = wx.Button(self, wx.ID_OK, "&Copy")
+        copy.SetDefault()
+        buttons.AddButton(copy)
+        buttons.AddButton(wx.Button(self, wx.ID_CANCEL, "Close"))
+        buttons.Realize()
+        outer.Add(buttons, 0, wx.ALL | wx.EXPAND, 10)
+        self.SetSizerAndFit(outer)
+        self._line.SetFocus()
+        self._line.SelectAll()
+
+    def chosen(self) -> str:
+        """What to copy: the part selected, or the whole line when nothing is."""
+        return self._line.GetStringSelection() or self._line.GetValue()
 
 
 # What a world's log file choices are called in its details, in LOG_FILES order.

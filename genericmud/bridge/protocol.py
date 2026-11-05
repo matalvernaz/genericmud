@@ -18,6 +18,8 @@ MUSIC = "music"
 STATUS = "status"
 ECHO = "echo"
 REVIEW = "review"
+# Engine -> renderer: offer this line for copying, all of it or any part (Ctrl+Shift+C).
+COPY_LINE = "copy_line"
 CONNECTED = "connected"
 DISCONNECTED = "disconnected"
 FIND_RESULT = "find_result"  # outcome of a FIND, so the renderer can follow with its caret
@@ -101,6 +103,11 @@ def echo(text: str, channel: str = "main") -> dict[str, Any]:
 
 def review(text: str) -> dict[str, Any]:
     return {"type": REVIEW, "text": text}
+
+
+def copy_line(text: str) -> dict[str, Any]:
+    """The line the review cursor is on, for the renderer to offer for copying."""
+    return {"type": COPY_LINE, "text": text}
 
 
 def open_url(url: str) -> dict[str, Any]:
