@@ -8,6 +8,44 @@ fails the build on purpose.
 
 Entries start at 0.7.1. Earlier releases were tagged before this file existed.
 
+## 0.22.0 — 2026-11-05
+
+**MXP links that do more**
+
+* A link can start a command for you to finish, such as a name that starts a
+  tell to that player. Following it puts the start of the command in the
+  command box and sends nothing until you press Enter. A link that would type
+  a genericMud command, or more than one command, is refused and says why.
+* A link can offer a menu, such as buying or examining something in a shop.
+  Following it asks which one you meant: a numbered list, where a number key
+  picks a row, or buttons along the bottom in the web UI. Escape sends nothing.
+* When a MUD gives a link a caption saying what it does, you hear the caption
+  as the review cursor arrives on the link, and again with the command when you
+  follow it.
+* MUDs that keep their own values for the session, such as your hit points,
+  show the values in the text instead of their names, and links can use them.
+  A new connection starts without the old one's values.
+
+**Aliases take the rest of the line**
+
+* An alias with no * in it takes whatever you type after it: an alias sh that
+  sends shoot turns sh goblin into shoot goblin. The words go on the end of the
+  last command, or wherever a command puts ${1}. An alias with a *, one written
+  as a regular expression, or a soundpack's own alias still comes first, and
+  typed /alias shortcuts work the same way.
+
+**Copying**
+
+* Ctrl+Shift+C copies from the line you're reviewing, or the newest line. A
+  small box opens with the whole line selected, so Enter copies all of it, or
+  select just a name or a number first.
+
+**Logging in**
+
+* The MUSH and MOO login is now sent as connect name password in lowercase, the
+  way connect screens print it. Some servers ignore it in capitals and leave you
+  sitting at the connect screen with no error.
+
 ## 0.21.3 — 2026-11-02
 
 **Typing from the output keeps your command**
