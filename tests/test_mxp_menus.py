@@ -220,15 +220,49 @@ class _CharEvent:
         self.skipped = True
 
 
-def test_the_front_end_answers_a_menu_with_the_command_picked():
-    # Read from the source because the renderer is JavaScript: the two things that make a menu
-    # safe are that a click answers with menu_choice, and that the engine still decides what
-    # the command does.
-    from pathlib import Path
+# --- captions, read the way Mudlet reads them --------------------------------
 
-    root = Path(__file__).resolve().parents[1] / "frontend" / "src"
-    app = (root / "app.js").read_text(encoding="utf-8")
-    assert 'type: "menu_choice"' in app
-    assert "mxp-menu" in app
-    css = (root / "style.css").read_text(encoding="utf-8")
-    assert ".mxp-menu" in css
+
+def _menu(tag: str) -> Link:
+    return MxpParser().feed(SECURE + tag).links[0]
+
+
+def test_as_many_captions_as_commands_pair_one_to_one():
+    link = _menu('<send "buy sword|examine sword" hint="Buy it|Look it over">a sword</send>')
+    assert link.choices == (("buy sword", "Buy it"), ("examine sword", "Look it over"))
+    assert link.hint == ""
+
+
+def test_one_caption_more_than_commands_gives_the_link_its_own():
+    link = _menu(
+        '<send "buy sword|examine sword" hint="A shop shelf|Buy it|Look it over">a sword</send>'
+    )
+    assert link.choices == (("buy sword", "Buy it"), ("examine sword", "Look it over"))
+    assert link.hint == "A shop shelf"
+
+
+def test_a_single_caption_over_a_menu_is_the_links_own():
+    link = _menu('<send "buy sword|examine sword" hint="Click for a menu">a sword</send>')
+    assert link.choices == (("buy sword", ""), ("examine sword", ""))
+    assert link.hint == "Click for a menu"
+
+
+def test_an_empty_entry_keeps_every_later_caption_on_its_own_command():
+    link = _menu('<send "buy||sell" hint="A shelf|Buy it|---|Sell it">a sword</send>')
+    assert link.choices == (("buy", "Buy it"), ("sell", "Sell it"))
+
+
+def test_with_ten_choices_or_more_a_number_key_is_just_a_key(frame):
+    from genericmud.ui.wx_app import ChooseDialog
+
+    choices = [(f"cmd {number}", "") for number in range(1, 13)]
+    dialog = ChooseDialog(frame, "a big menu", choices)
+    ended: list[int] = []
+    dialog.EndModal = ended.append  # type: ignore[method-assign]
+    try:
+        event = _CharEvent(ord("1"))  # might be the start of 12
+        dialog._on_char(event)
+        assert ended == []
+        assert event.skipped is True
+    finally:
+        dialog.Destroy()

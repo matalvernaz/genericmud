@@ -5,9 +5,10 @@
 const MAX_LINES = 5000;
 
 export class Output {
-  constructor(element, onLink = null) {
+  constructor(element, onLink = null, onMenu = null) {
     this.element = element;
     this.onLink = onLink;
+    this.onMenu = onMenu;
     // Delegated, so a link anchors itself to nothing beyond its own data and lines trimmed
     // off the top of the scrollback take their handlers with them.
     element.addEventListener("click", (event) => {
@@ -16,6 +17,11 @@ export class Output {
       // href is "#" only to earn native link behaviour (Enter activates a focused anchor);
       // navigating the page would lose the session.
       event.preventDefault();
+      // A menu asks which of its commands was meant; following it must never send the first.
+      if (anchor.dataset.choices) {
+        this.onMenu?.(anchor.dataset.words || anchor.textContent, JSON.parse(anchor.dataset.choices));
+        return;
+      }
       this.onLink?.(
         anchor.dataset.words || anchor.textContent,
         anchor.dataset.command,
@@ -42,8 +48,8 @@ export class Output {
   // sends offsets into text it already decided is text, so nothing is re-parsed here and no
   // markup can leak into the page.
   _fill(div, text, links, images) {
-    const spans = (links || []).map(([start, end, command, insert]) => ({
-      start, end, kind: "link", command, insert,
+    const spans = (links || []).map(([start, end, command, insert, choices]) => ({
+      start, end, kind: "link", command, insert, choices,
     }));
     // An image is zero-width: it sits at a point in the text rather than covering words.
     for (const [offset, url] of images || []) {
@@ -74,6 +80,8 @@ export class Output {
       anchor.dataset.words = words;
       // Following this one types its command into the box instead of sending it.
       if (span.insert) anchor.dataset.insert = "true";
+      // A menu's (command, caption) pairs, as data rather than markup.
+      if (span.choices?.length) anchor.dataset.choices = JSON.stringify(span.choices);
       div.appendChild(anchor);
       at = Math.max(at, span.end);
     }

@@ -192,6 +192,14 @@ always in the output box.
   press Enter. What replaces the box's contents is only ever one plain command: a
   link that would type a genericMud command such as `/alias`, or several commands
   joined by your separator, is refused and says why.
+- A link can also offer a menu of commands, such as buying or examining an item in
+  a shop. When a line's links are read out, such a link has "menu of 3" after it,
+  and following it asks which one you meant instead of sending anything: a
+  numbered list opens,
+  where a number key picks a row straight away when there are nine or fewer,
+  arrows and Enter work as usual, and Escape sends nothing. In the web UI the
+  choices appear as buttons along the bottom, with a Cancel button, and Escape
+  works there too.
 - In the **web UI** those links are real links in the page as well, so they can be
   focused and activated like any other link, in addition to the keys above. A link
   to a web page opens in a new tab.

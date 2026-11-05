@@ -617,12 +617,15 @@ class SessionPanel(wx.Panel):
                     choices.append((command, caption))
         if not choices or self.app is None:
             return
+        # Back to wherever the player followed the link from: the command box after Alt+Enter,
+        # or the output box after Enter on a line, where they were part way through reading.
+        focused = wx.Window.FindFocus()
         dialog = ChooseDialog(self, str(message.get("text", "")), choices)
         try:
             picked = dialog.chosen() if dialog.ShowModal() == wx.ID_OK else None
         finally:
             dialog.Destroy()
-        self.input.SetFocus()
+        (focused or self.input).SetFocus()
         if picked is None:
             return
         command, caption = picked
@@ -1588,7 +1591,9 @@ class ChooseDialog(wx.Dialog):
 
     def _on_char(self, event: wx.KeyEvent) -> None:
         code = event.GetKeyCode()
-        if ord("1") <= code <= ord("9"):
+        # A number picks its row at once only while every row has a one-digit number: with ten
+        # or more, "1" could be the start of "12", so the list keeps its ordinary keys.
+        if len(self._choices) <= 9 and ord("1") <= code <= ord("9"):
             index = code - ord("1")
             if index < len(self._choices):
                 self._list.SetSelection(index)
