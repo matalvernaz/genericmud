@@ -129,14 +129,16 @@ def test_output_caret_survives_appends_while_find_dialog_is_open():
     assert "preserve = self.output.HasFocus() or self._keep_caret_on_focus" in source
 
 
-def test_history_recall_parks_and_restores_the_unsent_draft():
-    # Up parks the live edit line; Down past the newest entry restores it instead of
-    # blanking the field (silent data loss for a blind typist).
+def test_history_moves_only_from_an_empty_box_or_a_message_already_in_history():
+    # The draft stays put: an arrow that replaced typed-but-unsent text would be silent data
+    # loss for a blind typist. History moves only from an empty box or from a message that is
+    # itself in history, which is why no draft needs parking.
     source = (
         Path(__file__).resolve().parents[1] / "genericmud/ui/wx_app.py"
     ).read_text(encoding="utf-8")
-    assert "self._history_draft = self.input.GetValue()" in source
-    assert "else self._history_draft" in source
+    assert "def _history_step" in source
+    assert "if value not in self._history:" in source
+    assert "_history_draft" not in source
 
 
 def _wx_source() -> str:

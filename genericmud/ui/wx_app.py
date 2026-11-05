@@ -386,7 +386,8 @@ class SessionPanel(wx.Panel):
         self._voice: VoiceRouter | None = None
         self._history: list[str] = []
         self._hist_index = 0
-        self._history_draft = ""  # unsent input, parked while Up browses history
+        # No parked draft: history moves only from an empty box or from a message that is
+        # itself in history, so nothing unsent is ever replaced.
         self._input_masked = False  # the server hides typed input: keep it out of history
         self._alive = True
         self._connect_finished = False  # the first connect attempt has returned (either way)
@@ -1146,7 +1147,6 @@ class SessionPanel(wx.Panel):
         if text and not self._input_masked:
             self._history.append(text)
         self._hist_index = len(self._history)
-        self._history_draft = ""
         if self.app is not None:
             self._loop.call_soon_threadsafe(self.app.on_ws_message, {"type": "input", "text": text})
 
@@ -1159,7 +1159,9 @@ class SessionPanel(wx.Panel):
         self._completion.reset()  # any other key ends a completion run
         plain = not (event.ControlDown() or event.AltDown() or event.ShiftDown())
         if plain and code in (wx.WXK_UP, wx.WXK_DOWN):
-            self._recall_history(-1 if code == wx.WXK_UP else 1)
+            if self._history_step(-1 if code == wx.WXK_UP else 1):
+                return
+            event.Skip()  # not history: leave the arrows to the field and the reader
             return
         if plain and self._prefs.numpad_compass and code in _NUMPAD_COMPASS:
             self._send_command(_NUMPAD_COMPASS[code])
@@ -1258,26 +1260,60 @@ class SessionPanel(wx.Panel):
             return
         event.Skip()  # arrows etc. -> native screen-reader review of the output
 
-    def _recall_history(self, direction: int) -> None:
-        if not self._history:
-            return
-        if direction < 0 and self._hist_index == len(self._history):
-            # Leaving the live edit line for history: park the unsent draft so Down
-            # brings it back instead of a blank field (losing typed-but-unsent input
-            # is silent data loss for someone who can't glance at the box).
-            self._history_draft = self.input.GetValue()
-        self._hist_index = max(0, min(len(self._history), self._hist_index + direction))
-        value = (
-            self._history[self._hist_index]
-            if self._hist_index < len(self._history)
-            else self._history_draft
-        )
-        self.input.SetValue(value)
+    def _history_step(self, direction: int) -> bool:
+        """Move one entry through command history, or leave the key to the field.
+
+        History moves only from an empty box or from a message that is itself in history, and
+        only from the caret's first or last position. Anything else is a draft the player is
+        still writing: an arrow that replaced it would be silent data loss for someone who
+        cannot glance at the box, so the key is left alone and moves the caret instead.
+
+        Down from the newest entry empties the box, which is where Up starts again. Nothing is
+        lost by that: what was there is a history entry, one arrow away.
+
+        Deliberately silent -- Up and Down are caret-movement gestures, so the screen reader
+        runs its own line-reading script whatever this handler does with the key. Speaking as
+        well raced that read: the user heard the empty field and then our text on every recall.
+        """
+        value = self.input.GetValue()
+        caret = self.input.GetInsertionPoint()
+        if caret not in (0, len(value)):
+            return False  # the caret is inside the message: this is editing, not history
+        if not value:
+            if direction > 0 or not self._history:
+                return False  # nothing newer than an empty field, and nothing to go back to
+            self._show_history_entry(len(self._history) - 1)
+            return True
+        if value not in self._history:
+            return False  # a draft that matches nothing sent: leave it where it is
+        index = self._entry_index(value)
+        target = index + direction
+        if target < 0:
+            return False  # the oldest entry: the arrow has nowhere older to go
+        if target >= len(self._history):
+            self.input.SetValue("")  # past the newest: an empty box, as it was before the first Up
+            self.input.SetInsertionPointEnd()
+            self._hist_index = len(self._history)
+            return True
+        self._show_history_entry(target)
+        return True
+
+    def _entry_index(self, value: str) -> int:
+        """Which history entry the box is showing.
+
+        The stored position while it still agrees with the text keeps repeated presses walking
+        the same way; otherwise the newest matching entry is taken, because a recall lands on
+        the entry it recalled.
+        """
+        if 0 <= self._hist_index < len(self._history):
+            if self._history[self._hist_index] == value:
+                return self._hist_index
+        return max(number for number, entry in enumerate(self._history) if entry == value)
+
+    def _show_history_entry(self, index: int) -> None:
+        self._hist_index = index
+        self.input.SetValue(self._history[index])
         self.input.SetInsertionPointEnd()
-        # Deliberately silent -- do not add a self-voice call back here. Up/Down are
-        # caret-movement gestures, so NVDA runs its own move-by-line script and reads the
-        # field regardless of this handler consuming the key. Speaking as well raced that
-        # read: the user heard NVDA's "blank" and then our text on every recall.
 
     def _speak_system(self, text: str) -> None:  # loop thread
         if self._voice is not None:

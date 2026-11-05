@@ -23,7 +23,8 @@ export class Input {
     this.announce = announce || (() => {});  // speak UI feedback via the SR live region
     this.history = [];
     this.historyIndex = 0;
-    this.historyDraft = "";  // unsent input, parked while Up browses history
+    // No parked draft: history moves only from an empty box or from a message that is itself
+  // in history, so nothing unsent is ever replaced.
     this.masked = false;  // the server hides typed input (a password): no history
     this.words = [];
     this.completion = null;
@@ -39,7 +40,6 @@ export class Input {
     this.bridge.send({ type: "input", text });
     if (text && !this.masked) this.history.push(text);
     this.historyIndex = this.history.length;
-    this.historyDraft = "";
     this.completion = null;
     this.element.value = "";
   }
@@ -83,8 +83,8 @@ export class Input {
     if (event.metaKey) return; // preserve Command+C/V/A/Q and other platform shortcuts
 
     if (!hasCommandModifier && !isFunctionKey && key !== "Escape") {
-      if (key === "ArrowUp") { event.preventDefault(); this._recallHistory(-1); }
-      else if (key === "ArrowDown") { event.preventDefault(); this._recallHistory(1); }
+      if (key === "ArrowUp") { if (this._historyStep(-1)) event.preventDefault(); }
+      else if (key === "ArrowDown") { if (this._historyStep(1)) event.preventDefault(); }
       return; // ordinary typing
     }
 
@@ -95,13 +95,44 @@ export class Input {
     }
   }
 
-  _recallHistory(direction) {
-    if (!this.history.length) return;
-    if (direction < 0 && this.historyIndex === this.history.length) {
-      this.historyDraft = this.element.value;  // park the unsent draft; Down restores it
+  // Move one entry through history, or leave the key to the field.
+  //
+  // History moves only from an empty box or from a message that is itself in history, and only
+  // from the caret's first or last position. Anything else is a draft still being written, and
+  // an arrow that replaced it would lose typed text -- the whole reason this is not simply
+  // "up is older". Down from the newest entry empties the box, which is where Up starts again;
+  // what was there is a history entry, one arrow away.
+  _historyStep(direction) {
+    const value = this.element.value;
+    const caret = this.element.selectionStart ?? value.length;
+    if (caret !== 0 && caret !== value.length) return false;
+    if (!value) {
+      if (direction > 0 || !this.history.length) return false;
+      this._showHistory(this.history.length - 1);
+      return true;
     }
-    this.historyIndex = Math.max(0, Math.min(this.history.length, this.historyIndex + direction));
-    this.element.value = this.history[this.historyIndex] ?? this.historyDraft;
+    if (!this.history.includes(value)) return false;
+    let index = this.historyIndex;
+    if (!(index >= 0 && index < this.history.length && this.history[index] === value)) {
+      index = this.history.lastIndexOf(value);
+    }
+    const target = index + direction;
+    if (target < 0) return false;
+    if (target >= this.history.length) {
+      this.element.value = "";
+      this.element.setSelectionRange(0, 0);
+      this.historyIndex = this.history.length;
+      return true;
+    }
+    this._showHistory(target);
+    return true;
+  }
+
+  _showHistory(index) {
+    this.historyIndex = index;
+    this.element.value = this.history[index];
+    const end = this.element.value.length;
+    this.element.setSelectionRange(end, end);
   }
 
   _complete(backward) {
