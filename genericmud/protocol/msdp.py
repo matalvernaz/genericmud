@@ -106,18 +106,33 @@ class _MsdpParser:
         while self._i < self._n:
             b = self._data[self._i]
             if b == MSDP_TABLE_CLOSE:
-                if not top:
-                    self._i += 1
+                self._i += 1
+                if top:
+                    # A close with nothing open: a server's mistake. Drop just the stray byte;
+                    # ending the packet here lost every variable after it (HEALTH and all).
+                    continue
                 return out
             if b == MSDP_VAR:
                 self._i += 1
                 name = self._read_string()
                 if self._peek() == MSDP_VAL:
-                    self._i += 1
-                    out[name] = self._read_value(depth)
+                    out[name] = self._read_values(depth)
             else:
                 self._i += 1  # skip stray control byte
         return out
+
+    def _read_values(self, depth: int) -> Any:
+        """A variable's value, or a list when it has several VALs in a row.
+
+        The spec allows a variable to be sent as VAL a VAL b without an array around them
+        (AFFECTS VAL bless VAL sanctuary), and that is still a list. Keeping only one of
+        them dropped the rest, as Mudlet's no-array-marker handling takes care not to.
+        """
+        values = []
+        while self._peek() == MSDP_VAL:
+            self._i += 1
+            values.append(self._read_value(depth))
+        return values[0] if len(values) == 1 else values
 
     def _read_string(self) -> str:
         start = self._i

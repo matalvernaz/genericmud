@@ -203,6 +203,22 @@ def test_msdp_subscribes_to_the_variables_the_server_offers():
     assert all(b"REPORT" in line for line in raw)
 
 
+def test_msdp_subscribes_when_the_server_lists_its_variables_without_an_array():
+    # VAL a VAL b with no array around them is still a list; only the first name used to
+    # survive the parse, and a single name isn't a list, so nothing was subscribed at all.
+    raw: list[bytes] = []
+    voice = VoiceRouter(RecordingBackend(), clock=lambda: 0.0)
+    app = EngineApp(voice, post=lambda _m: None, send_raw=raw.append)
+    app.on_telnet_event(Negotiation(WILL, OPT_MSDP))
+    raw.clear()
+    payload = bytes([1]) + b"REPORTABLE_VARIABLES"
+    for name in ("HEALTH", "ROOM_NAME"):
+        payload += bytes([2]) + name.encode()
+    app.on_telnet_event(Subnegotiation(OPT_MSDP, payload))
+    requested = [line.split(b"\x02")[1].rstrip(b"\xff\xf0") for line in raw]
+    assert requested == [b"HEALTH", b"ROOM_NAME"]
+
+
 def test_msdp_room_variables_drive_navigation():
     app, _backend, _sent, _posted = _app()
     app.on_telnet_event(

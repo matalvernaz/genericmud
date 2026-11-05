@@ -145,3 +145,43 @@ def test_oob_mssp_normalizes_to_server_status():
 
 def test_oob_unknown_option_returns_none():
     assert from_subnegotiation(T.OPT_MXP, b"<send>") is None
+
+
+# --- what other clients' servers really send (cases from Mudlet's handling) ---
+
+
+def test_gmcp_colour_codes_inside_a_string_still_parse():
+    # IRE games put ANSI escapes inside Comm.Channel.Text; strict JSON refused the message.
+    payload = (
+        b'Comm.Channel.Text {"channel":"ct","talker":"Bo",'
+        b'"text":"\x1b[0;36m(Clan): Bo says, \\"hi.\\"\x1b[0;37m"}'
+    )
+    message = parse_gmcp(payload)
+    assert message.package == "Comm.Channel.Text"
+    assert message.data["talker"] == "Bo"
+    assert message.data["text"] == '\x1b[0;36m(Clan): Bo says, "hi."\x1b[0;37m'
+
+
+def test_gmcp_package_on_its_own_line():
+    assert parse_gmcp(b'Char.Vitals\n{"hp":"5"}') == GmcpMessage("Char.Vitals", {"hp": "5"})
+
+
+def test_gmcp_byte_order_mark_is_not_part_of_the_package():
+    assert parse_gmcp(b'\xef\xbb\xbfChar.Vitals {"hp":"5"}') == GmcpMessage(
+        "Char.Vitals", {"hp": "5"}
+    )
+
+
+def test_msdp_several_values_in_a_row_are_a_list():
+    payload = _wire(
+        MSDP_VAR, "AFFECTS", MSDP_VAL, "bless", MSDP_VAL, "sanctuary",
+        MSDP_VAR, "HEALTH", MSDP_VAL, "90",
+    )
+    assert parse_msdp(payload) == {"AFFECTS": ["bless", "sanctuary"], "HEALTH": "90"}
+
+
+def test_msdp_a_stray_table_close_loses_nothing_after_it():
+    payload = _wire(
+        MSDP_VAR, "A", MSDP_VAL, "1", MSDP_TABLE_CLOSE, MSDP_VAR, "HEALTH", MSDP_VAL, "90"
+    )
+    assert parse_msdp(payload) == {"A": "1", "HEALTH": "90"}
