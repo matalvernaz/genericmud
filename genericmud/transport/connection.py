@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import ssl
 import time
 from collections.abc import Callable
@@ -111,7 +112,14 @@ class ReconnectPolicy:
         """Seconds to wait before ``attempt`` (1-based), or None once exhausted."""
         if self.max_attempts and attempt > self.max_attempts:
             return None
-        return min(self.max_delay, self.base_delay * (2 ** (attempt - 1)))
+        if self.base_delay == 0:
+            return min(self.max_delay, 0.0)
+        try:
+            delay = math.ldexp(self.base_delay, attempt - 1)
+        except OverflowError:
+            # The exponential delay (or its exponent) has outgrown a float, past the cap.
+            return self.max_delay
+        return min(self.max_delay, delay)
 
 
 class MudConnection:
