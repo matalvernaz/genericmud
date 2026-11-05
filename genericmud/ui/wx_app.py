@@ -1330,6 +1330,16 @@ class SessionPanel(wx.Panel):
         if self._voice is not None:
             self._voice.speak(text, channel="system", interrupt=False)
 
+    def take_world_name(self, name: str) -> None:  # UI thread
+        """Adopt a new name for this world, for a tab that is disconnected.
+
+        The name is the log file, the /to address and the tab's label, so all three follow it:
+        the log the last session wrote is closed, and the next connection opens the new one.
+        """
+        self.world = replace(self.world, name=name)
+        if self.app is not None:
+            self._loop.call_soon_threadsafe(self.app.rename_world, name)
+
     def apply_world_settings(self, world: World) -> None:  # UI thread
         """Take a world's edited stacking, logging, echo, login, MXP and sound downloads now. How
         the tab connects (host, port, TLS, encoding, sounds) stays as it opened, so a reconnect
@@ -1946,10 +1956,13 @@ class WorldDialog(wx.Dialog):
         credentials: CredentialStore | None = None,
         prefill_login: bool = True,
         note: str = "",
+        name_check: Callable[[str], str] | None = None,
     ) -> None:
         super().__init__(parent, title=title)
         self._world: World | None = None
         self._credentials = credentials
+        # Asked before anything is written: a name this world may not take, with the reason.
+        self._name_check = name_check
         # Whether the login boxes were filled from the store, i.e. they hold this world's own
         # login. Only then does a rename move it: a soundpack's setup that merely shares a
         # saved world's name must not take that world's login with it.
@@ -2185,6 +2198,14 @@ class WorldDialog(wx.Dialog):
             self._port.SetFocus()
             self._port.SelectAll()
             return
+        name = self._name.GetValue().strip() or host
+        if self._name_check is not None:
+            refusal = self._name_check(name)
+            if refusal:
+                wx.MessageBox(refusal, "World details", wx.OK | wx.ICON_ERROR, self)
+                self._name.SetFocus()
+                self._name.SelectAll()
+                return
         separator = self._separator.GetValue()
         problem = separator_problem(separator)
         if problem is not None and self._stacking.GetValue():
@@ -4886,37 +4907,87 @@ class GenericMudFrame(wx.Frame):
         finally:
             dialog.Destroy()
 
-    def _open_world_names(self) -> set[str]:
-        """The names of the worlds with a tab open, folded for comparison."""
+    def _connected_world_names(self) -> set[str]:
+        """The names of the worlds a tab is using right now, folded for comparison.
+
+        A disconnected tab does not count: nothing live is holding its name. Renaming closes
+        the log the last session wrote, and the next connection opens the new one.
+        """
         names: set[str] = set()
         for index in range(self.book.GetPageCount()):
-            open_world = getattr(self.book.GetPage(index), "world", None)
-            if open_world is not None:
+            panel = self.book.GetPage(index)
+            open_world = getattr(panel, "world", None)
+            connection = getattr(panel, "_connection", None)
+            busy = connection is not None and (
+                getattr(connection, "connected", False)
+                or getattr(connection, "connecting", False)
+            )
+            if open_world is not None and busy:
                 names.add(open_world.name.casefold())
         return names
 
     def _edit_saved_world(self, world: World) -> None:
-        """Edit a saved world, letting its name change only while no tab is using it.
+        """Edit a saved world, letting its name change while no tab is connected to it.
 
-        A tab keeps the name it opened with: that name is its log file, its /to address and its
-        label. Renaming an open world would leave the two disagreeing until the tab closed, so
-        the name waits for the tab and the dialog says why. Everything else about a world can be
-        edited while it is open, as it always could.
+        The name is the log file, the /to address and the tab's label, so a tab that is using
+        it keeps it: the box is locked and the dialog says why. A disconnected tab is using
+        nothing, so the name is free -- and such a tab follows the rename, opening the new log
+        the next time it connects.
         """
-        is_open = world.name.casefold() in self._open_world_names()
-        self._show_world_dialog(
-            initial=world,
+        connected = world.name.casefold() in self._connected_world_names()
+        dialog = WorldDialog(
+            self,
+            world,
             title=f"Edit {world.name}",
-            connect=False,
-            original_name=world.name,
+            save_default=True,
             show_save=False,
-            lock_name=is_open,
+            lock_name=connected,
+            credentials=self._credentials,
+            name_check=lambda name: self._rename_problem(world.name, name),
             note=(
-                f"{world.name} is open in a tab, which keeps the name it opened with. Close "
-                "the tab to rename the world."
-                if is_open
+                f"{world.name} is connected in a tab, which is using its name right now. "
+                "Disconnect it (Ctrl+D) to rename the world."
+                if connected
                 else ""
             ),
+        )
+        try:
+            if dialog.ShowModal() != wx.ID_OK:
+                return
+            edited = dialog.get_world()
+            if not self._save_world(edited, replacing=world.name):
+                return
+        finally:
+            dialog.Destroy()
+        self._apply_to_open_tabs(world.name, edited)
+        if edited.name.casefold() != world.name.casefold():
+            self._rename_open_tabs(world.name, edited.name)
+
+    def _rename_problem(self, old_name: str, new_name: str) -> str:
+        """Why this rename may not take that name, or "" when it may.
+
+        A rename onto a name another world already has would replace that world -- and take its
+        stored login with it, because logins are kept by world name. So it is refused where the
+        name is entered, rather than offered as a prompt to replace.
+        """
+        if new_name.casefold() == old_name.casefold():
+            return ""
+        if any(world.name.casefold() == new_name.casefold() for world in load_worlds()):
+            return f"There is already a world called {new_name}. Choose a different name."
+        return ""
+
+    def _rename_open_tabs(self, old_name: str, new_name: str) -> None:
+        """Let a disconnected tab take the world's new name, label and all."""
+        for index in range(self.book.GetPageCount()):
+            panel = self.book.GetPage(index)
+            panel_world = getattr(panel, "world", None)
+            if panel_world is None or panel_world.name.casefold() != old_name.casefold():
+                continue
+            panel.take_world_name(new_name)
+            self.book.SetPageText(index, new_name)
+        self._update_title()
+        self.announce(
+            f"Renamed {old_name} to {new_name}. Its tab follows on the next connection."
         )
 
     def _apply_to_open_tabs(self, name: str, world: World) -> None:

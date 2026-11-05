@@ -1,8 +1,9 @@
 """Renaming a saved world from its details.
 
 A world's name is not decoration: it is the log file's name, the /to address from another tab,
-and the label on the tab. That is why a tab keeps the name it opened with, and why renaming is
-allowed while no tab is using the world and locked while one is.
+and the label on the tab. A tab that is connected is using all three, so the name waits for it
+to disconnect; a disconnected tab is using nothing, so it takes the new name and opens the new
+log the next time it connects.
 """
 
 from __future__ import annotations
@@ -14,60 +15,196 @@ import pytest
 from genericmud.config.worlds import World
 
 
-def _frame(open_worlds: list[World]):
-    """A frame-shaped stub: the pages it holds, and the dialog it would open recorded."""
+class _Connection:
+    def __init__(self, *, connected: bool = False, connecting: bool = False) -> None:
+        self.connected = connected
+        self.connecting = connecting
+
+
+class _Panel:
+    def __init__(self, world: World, connection: _Connection) -> None:
+        self.world = world
+        self._connection = connection
+        self.renamed: list[str] = []
+
+    def take_world_name(self, name: str) -> None:
+        self.renamed.append(name)
+
+
+def _frame(panels: list[_Panel], saved: list[World]):
+    """A frame-shaped stub: its tabs, the worlds file, and where announcements went."""
     from genericmud.ui import wx_app
 
-    pages = [type("Page", (), {"world": world})() for world in open_worlds]
     frame = wx_app.GenericMudFrame.__new__(wx_app.GenericMudFrame)
-    frame.book = type("Book", (), {"GetPageCount": lambda _self: len(pages),
-                                   "GetPage": lambda _self, index: pages[index]})()
-    opened: list[dict] = []
-    frame._show_world_dialog = lambda **kwargs: opened.append(kwargs)
-    return frame, opened
+    frame.book = type(
+        "Book",
+        (),
+        {
+            "GetPageCount": lambda _self: len(panels),
+            "GetPage": lambda _self, index: panels[index],
+            "SetPageText": lambda _self, index, text: setattr(
+                panels[index], "label", text
+            ),
+        },
+    )()
+    frame._credentials = None
+    frame.said = []
+    frame.announce = frame.said.append
+    frame._update_title = lambda: None
+    frame._save_world = lambda world, replacing=None: (
+        frame.saved_calls.append((world, replacing)) or True
+    )
+    frame.saved_calls = []
+    return frame
 
 
-def test_a_world_nobody_has_open_can_be_renamed():
-    frame, opened = _frame([])
-    frame._edit_saved_world(World("Penultimate", "pen.example", 9500))
-    assert opened and opened[0]["lock_name"] is False
-    assert opened[0]["note"] == ""
-    assert opened[0]["original_name"] == "Penultimate"
-
-
-def test_a_world_open_in_a_tab_keeps_its_name_and_says_why():
-    # The tab's log file, /to address and label all carry this name, so renaming underneath it
-    # would leave them disagreeing until the tab closed.
-    world = World("Penultimate", "pen.example", 9500)
-    frame, opened = _frame([world])
-    frame._edit_saved_world(world)
-    assert opened[0]["lock_name"] is True
-    assert "open in a tab" in opened[0]["note"]
-    assert "Close the tab" in opened[0]["note"]
-
-
-def test_the_comparison_ignores_case_as_the_rest_of_the_client_does():
-    frame, opened = _frame([World("penultimate", "pen.example", 9500)])
-    frame._edit_saved_world(World("Penultimate", "pen.example", 9500))
-    assert opened[0]["lock_name"] is True
-
-
-def test_renaming_saves_the_new_name_and_forgets_the_old(monkeypatch):
+@pytest.fixture
+def dialog(monkeypatch):
+    """Replace the real dialog: records what it was asked for, and answers as the test says."""
+    wx = pytest.importorskip("wx")
     from genericmud.ui import wx_app
 
-    saved = [World("Old Name", "old.example", 4000)]
-    written: list[list[World]] = []
-    monkeypatch.setattr(wx_app, "load_worlds", lambda: list(saved))
-    monkeypatch.setattr(wx_app, "save_worlds", lambda worlds: written.append(list(worlds)))
+    class FakeDialog:
+        asked: list[dict] = []
+        edited: World | None = None
+        answer = wx.ID_OK
 
-    frame = wx_app.GenericMudFrame.__new__(wx_app.GenericMudFrame)
-    renamed = World("New Name", "old.example", 4000)
-    assert frame._save_world(renamed, replacing="Old Name") is True
-    assert [world.name for world in written[-1]] == ["New Name"]
+        def __init__(self, parent, initial=None, **kwargs):
+            FakeDialog.asked.append({"initial": initial, **kwargs})
+
+        def ShowModal(self):
+            return FakeDialog.answer
+
+        def get_world(self):
+            return FakeDialog.edited
+
+        def Destroy(self):
+            pass
+
+    FakeDialog.asked = []
+    FakeDialog.edited = None
+    FakeDialog.answer = wx.ID_OK
+    monkeypatch.setattr(wx_app, "WorldDialog", FakeDialog)
+    return FakeDialog
+
+
+def test_a_disconnected_world_can_be_renamed_and_its_tab_follows(dialog):
+    old = World("Penultimate", "pen.example", 9500)
+    panel = _Panel(old, _Connection(connected=False))
+    frame = _frame([panel], [old])
+    dialog.edited = World("Penultimate Destination", "pen.example", 9500)
+
+    frame._edit_saved_world(old)
+
+    assert dialog.asked[0]["lock_name"] is False
+    assert dialog.asked[0]["note"] == ""
+    assert panel.renamed == ["Penultimate Destination"]
+    assert getattr(panel, "label", "") == "Penultimate Destination"
+    assert frame.saved_calls and frame.saved_calls[0][1] == "Penultimate"
+    assert any("Renamed Penultimate to Penultimate Destination" in said for said in frame.said)
+
+
+def test_a_connected_tab_locks_the_name_and_says_how_to_free_it(dialog):
+    old = World("Penultimate", "pen.example", 9500)
+    panel = _Panel(old, _Connection(connected=True))
+    frame = _frame([panel], [old])
+    dialog.edited = World("Renamed", "pen.example", 9500)
+
+    frame._edit_saved_world(old)
+
+    assert dialog.asked[0]["lock_name"] is True
+    assert "connected in a tab" in dialog.asked[0]["note"]
+    assert "Ctrl+D" in dialog.asked[0]["note"]
+
+
+def test_a_tab_that_is_still_connecting_counts_as_using_the_name(dialog):
+    old = World("Penultimate", "pen.example", 9500)
+    panel = _Panel(old, _Connection(connecting=True))
+    frame = _frame([panel], [old])
+    dialog.edited = World("Renamed", "pen.example", 9500)
+
+    frame._edit_saved_world(old)
+    assert dialog.asked[0]["lock_name"] is True
+
+
+def test_cancelling_the_dialog_saves_and_renames_nothing(dialog):
+    old = World("Penultimate", "pen.example", 9500)
+    panel = _Panel(old, _Connection())
+    frame = _frame([panel], [old])
+    dialog.answer = pytest.importorskip("wx").ID_CANCEL
+    frame._edit_saved_world(old)
+    assert frame.saved_calls == []
+    assert panel.renamed == []
+
+
+def test_an_edit_that_only_changes_settings_never_touches_the_name(dialog):
+    old = World("Penultimate", "pen.example", 9500)
+    panel = _Panel(old, _Connection())
+    frame = _frame([panel], [old])
+    dialog.edited = World("Penultimate", "pen.example", 9501)  # same name, new port
+
+    frame._edit_saved_world(old)
+    assert panel.renamed == []  # nothing to follow: the name did not change
+    assert frame.saved_calls[0][1] == "Penultimate"
+
+
+def test_the_engine_takes_the_new_name_and_closes_the_old_log():
+    from genericmud.app import EngineApp
+    from genericmud.config.keymap import load_keymap
+    from genericmud.session.hub import SessionHub
+    from genericmud.voice.router import VoiceRouter
+    from tests.helpers import RecordingBackend
+
+    stopped: list[bool] = []
+
+    class Logger:
+        active = True
+
+        def stop(self) -> None:
+            stopped.append(True)
+
+    hub = SessionHub()
+    app = EngineApp(
+        VoiceRouter(RecordingBackend(), clock=lambda: 0.0),
+        send=[].append,
+        post=[].append,
+        keymap=load_keymap("vipmud"),
+        name="Penultimate",
+        hub=hub,
+    )
+    app.logger = Logger()
+    app.rename_world("Penultimate Destination")
+
+    assert stopped == [True]  # the old log is closed, not left appending
+    assert app.logger is None
+    assert app.name == "Penultimate Destination"
+    assert "Penultimate Destination" in hub.sessions()
+    assert "Penultimate" not in hub.sessions()
+
+
+def test_renaming_to_the_same_name_changes_nothing():
+    from genericmud.app import EngineApp
+    from genericmud.config.keymap import load_keymap
+    from genericmud.voice.router import VoiceRouter
+    from tests.helpers import RecordingBackend
+
+    app = EngineApp(
+        VoiceRouter(RecordingBackend(), clock=lambda: 0.0),
+        send=[].append,
+        post=[].append,
+        keymap=load_keymap("vipmud"),
+        name="Penultimate",
+    )
+    app.logger = object()  # not a real logger: it must not be touched
+    app.rename_world("Penultimate")
+    assert app.logger is not None
+
+
+# --- the dialog's own name box --------------------------------------------------
 
 
 @pytest.fixture(scope="module")
-def frame_window():
+def window():
     wx = pytest.importorskip("wx")
     if sys.platform == "darwin":
         pytest.skip("wx needs a framework-build Python on macOS")
@@ -81,21 +218,68 @@ def frame_window():
     del app
 
 
-def test_the_name_box_is_editable_for_a_world_nobody_has_open(frame_window):
+def test_the_name_box_is_editable_for_a_world_nobody_is_connected_to(window):
     from genericmud.ui.wx_app import WorldDialog
 
-    dialog = WorldDialog(frame_window, World("Penultimate", "pen.example", 9500), lock_name=False)
+    dialog = WorldDialog(window, World("Penultimate", "pen.example", 9500), lock_name=False)
     try:
         assert dialog._name.IsEnabled() is True
     finally:
         dialog.Destroy()
 
 
-def test_the_name_box_is_locked_while_the_world_is_open(frame_window):
+def test_the_name_box_is_locked_while_the_world_is_connected(window):
     from genericmud.ui.wx_app import WorldDialog
 
-    dialog = WorldDialog(frame_window, World("Penultimate", "pen.example", 9500), lock_name=True)
+    dialog = WorldDialog(window, World("Penultimate", "pen.example", 9500), lock_name=True)
     try:
         assert dialog._name.IsEnabled() is False
     finally:
         dialog.Destroy()
+
+
+def test_the_dialog_keeps_the_name_it_has_when_the_rule_refuses_it(window, monkeypatch):
+    # The refusal happens before anything is written, so no world and no login are touched.
+    wx = pytest.importorskip("wx")
+    from genericmud.ui import wx_app
+
+    told: list[str] = []
+    dialog = wx_app.WorldDialog(
+        window,
+        World("Penultimate", "pen.example", 9500),
+        name_check=lambda name: "" if name == "Penultimate" else "that name is taken",
+    )
+    ended: list[int] = []
+    dialog.EndModal = ended.append
+    monkeypatch.setattr(wx, "MessageBox", lambda text, *_a, **_k: told.append(text))
+    try:
+        dialog._name.SetValue("Aardwolf")
+        dialog._on_ok(None)
+        assert ended == []  # the dialog stayed open
+        assert told == ["that name is taken"]
+    finally:
+        dialog.Destroy()
+
+def test_renaming_onto_another_worlds_name_is_refused(monkeypatch):
+    # Logins are kept by world name, so this would replace that world and take its login with it.
+    from genericmud.ui import wx_app
+
+    worlds = [World("Penultimate", "pen.example", 9500), World("Aardwolf", "aard.example", 4000)]
+    monkeypatch.setattr(wx_app, "load_worlds", lambda: list(worlds))
+    frame = _frame([], worlds)
+
+    refusal = frame._rename_problem("Penultimate", "Aardwolf")
+    assert refusal.startswith("There is already a world called Aardwolf")
+    assert refusal.endswith("Choose a different name.")
+
+
+def test_its_own_name_is_no_clash_and_a_free_one_is_fine(monkeypatch):
+    from genericmud.ui import wx_app
+
+    worlds = [World("Penultimate", "pen.example", 9500)]
+    monkeypatch.setattr(wx_app, "load_worlds", lambda: list(worlds))
+    frame = _frame([], worlds)
+
+    assert frame._rename_problem("Penultimate", "Penultimate") == ""
+    assert frame._rename_problem("Penultimate", "penultimate") == ""  # case, as everywhere
+    assert frame._rename_problem("Penultimate", "Penultimate Destination") == ""
