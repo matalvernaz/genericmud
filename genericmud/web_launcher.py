@@ -15,6 +15,7 @@ from genericmud.bridge import protocol
 from genericmud.bridge.static_server import STATIC_HOST, serve_static
 from genericmud.bridge.ws_server import WsBridge
 from genericmud.config.keymap import load_keymap
+from genericmud.config.worlds import World
 from genericmud.protocol.charset import AUTO
 from genericmud.resources import resource_root
 from genericmud.session.crashlog import install_loop_exception_handler
@@ -73,6 +74,14 @@ def run(args) -> None:
                 encoding=getattr(args, "encoding", AUTO),
             )
             connection.text_codec = app.codec  # commands go out in the world's encoding too
+            # What this session is connected to, so a client-side offer -- MSSP's encrypted
+            # port, for one -- knows whether the link is already encrypted and on which port.
+            # There is no world file in this mode, so the command line stands in for it. With no
+            # host there is nothing to connect to and nothing to describe.
+            if args.host:
+                app.apply_world_settings(
+                    World(name=args.host, host=args.host, port=args.port, tls=args.tls)
+                )
             # This mode has no saved world to keep the pictures address in, so it comes from
             # the command line, exactly as --sounds and --encoding do.
             app.images_url = getattr(args, "images", "") or ""
