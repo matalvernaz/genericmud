@@ -622,6 +622,8 @@ class EngineApp:
         self._secure_port: int | None = None
         self._world_port = 0
         self._world_tls = False
+        # A rename closed this session's log; the next connection opens the world's new one.
+        self._reopen_log_after_rename = False
         # The link the review cursor is standing in, so its caption is said once on arrival
         # rather than on every word inside it.
         self._link_announced: Link | None = None
@@ -3012,6 +3014,27 @@ class EngineApp:
         self.encoding = encoding
         self.codec = ServerTextCodec(encoding, on_latch=self._on_encoding_latch)
 
+    def rename_world(self, name: str) -> None:
+        """Take a new name for this session's world: its log file, its /to address, its words.
+
+        Called only while the session is disconnected. The old log is closed rather than left
+        appending under a name the world no longer has, and the next connection opens the new
+        one -- which is where that file's fresh "Session started" line comes from.
+        """
+        if name == self.name:
+            return
+        if self.logger is not None:
+            self.logger.stop()
+            self.logger = None
+            # Closed for the rename, not because the player asked: the next connection opens
+            # the world's new log. A log stopped by hand stays stopped, as it always did.
+            self._reopen_log_after_rename = True
+        if self.hub is not None and self.name:
+            self.hub.unregister(self.name)
+        self.name = name
+        if self.hub is not None:
+            self.hub.register(self.name, self._dispatch_remote)
+
     def after_reconnect(self) -> None:
         """Reattach this session to a socket that is live again.
 
@@ -3024,6 +3047,11 @@ class EngineApp:
         # An offer belongs to the connection that made it: a reconnect asks the MUD again,
         # because a game can move its port and a stale offer would point at nothing.
         self._secure_port = None
+        # Logging survives a reconnect because its logger is still open. Only a rename closes
+        # it, so only a rename reopens it -- under the name the world has now.
+        if self._reopen_log_after_rename and self.log_automatically:
+            self.start_logging(announce=False)
+        self._reopen_log_after_rename = False
         # A fresh socket is a fresh byte stream: drop any half-decoded multibyte tail and
         # the legacy-encoding latch, or a drop mid-character mis-decodes the whole reconnect.
         self.codec.reset()
