@@ -37,7 +37,12 @@ import wx
 from genericmud import __version__, help_text
 from genericmud.app import CLIENT_PREFIX, EngineApp
 from genericmud.automation.engine import AutomationEngine
-from genericmud.automation.variables import VariableEntry, filter_variables
+from genericmud.automation.variables import (
+    SCRIPT,
+    VariableEntry,
+    filter_variables,
+    recent_first,
+)
 from genericmud.bridge import protocol
 from genericmud.completion import CompletionCycler
 from genericmud.config.keymap import load_keymap
@@ -86,6 +91,7 @@ from genericmud.packs.user_rules import (
     UserKey,
     UserRules,
     UserTrigger,
+    UserWatch,
     copy_sound_into_pack,
     load_rules,
     register_rules,
@@ -2836,6 +2842,7 @@ class VariablesDialog(wx.Dialog):
         world_name: str,
         pick: bool = False,
         announce: Callable[[str], None] | None = None,
+        on_watch: Callable[[wx.Window, str], None] | None = None,
     ) -> None:
         title = "Insert a Variable" if pick else f"MUD Variables — {world_name}"
         super().__init__(
@@ -2845,6 +2852,7 @@ class VariablesDialog(wx.Dialog):
         self._fetch = fetch
         self._pick = pick
         self._announce = announce or (lambda _text: None)
+        self._on_watch = None if pick else on_watch
         self._entries: list[VariableEntry] = []
         self._shown: list[VariableEntry] = []
         self._truncated = False
@@ -2878,6 +2886,12 @@ class VariablesDialog(wx.Dialog):
         filter_row.Add(self._filter, 1, wx.EXPAND)
         outer.Add(filter_row, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 10)
 
+        # Most recent first shows what the MUD just sent at the top, each row saying how long
+        # ago: the way to find out which value changes when you do something in the game.
+        self._recent = wx.CheckBox(self, label="&Most recent first")
+        self._recent.Bind(wx.EVT_CHECKBOX, lambda _event: self._populate())
+        outer.Add(self._recent, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
         self._list_label = wx.StaticText(self, label="&Variables:")
         outer.Add(self._list_label, 0, wx.LEFT | wx.RIGHT, 10)
         self._list = wx.ListBox(self, style=wx.LB_SINGLE)
@@ -2903,6 +2917,11 @@ class VariablesDialog(wx.Dialog):
             self._action = wx.Button(self, label="&Copy reference")
             self._action.Bind(wx.EVT_BUTTON, self._on_activate)
             buttons.Add(self._action, 0, wx.RIGHT, 6)
+        self._watch: wx.Button | None = None
+        if self._on_watch is not None:
+            self._watch = wx.Button(self, label="&Watch this...")
+            self._watch.Bind(wx.EVT_BUTTON, self._on_watch_selected)
+            buttons.Add(self._watch, 0, wx.RIGHT, 6)
         refresh = wx.Button(self, label="&Refresh")
         refresh.Bind(wx.EVT_BUTTON, lambda _event: self._refresh(announce=True))
         buttons.Add(refresh, 0, wx.RIGHT, 6)
@@ -2935,7 +2954,11 @@ class VariablesDialog(wx.Dialog):
     def _populate(self, keep: VariableEntry | None = None) -> None:
         keep = keep or self._selected()
         self._shown = filter_variables(self._entries, self._filter.GetValue())
-        self._list.Set([entry.row for entry in self._shown])
+        if self._recent.GetValue():
+            self._shown = recent_first(self._shown)
+            self._list.Set([entry.row_with_age for entry in self._shown])
+        else:
+            self._list.Set([entry.row for entry in self._shown])
         total = len(self._entries)
         if self._filter.GetValue().strip():
             count = f"{len(self._shown)} of {total}"
@@ -2966,6 +2989,18 @@ class VariablesDialog(wx.Dialog):
         else:
             self._details.SetValue(_NO_VARIABLES)
         self._action.Enable(entry is not None)
+        if self._watch is not None:
+            # Only what the MUD sends can be watched; a script's value has no arrival.
+            self._watch.Enable(entry is not None and entry.source != SCRIPT)
+
+    def _on_watch_selected(self, _event) -> None:
+        """Make a MUD data rule for the selected value, in the same editor the Automation
+        Manager uses."""
+        entry = self._selected()
+        if entry is None or entry.source == SCRIPT or self._on_watch is None:
+            return
+        self._on_watch(self, entry.name)
+        wx.CallAfter(_focus_if_alive, self._list)
 
     def _on_activate(self, _event) -> None:
         entry = self._selected()
@@ -3064,7 +3099,7 @@ class _RuleEditorBase(wx.Dialog):
         return ctrl
 
     def _command_text(
-        self, grid: wx.FlexGridSizer, value: str, *, captures: bool
+        self, grid: wx.FlexGridSizer, value: str, *, captures: bool, detail: str | None = None
     ) -> wx.TextCtrl:
         label = "&Commands to send, one per line:"
         grid.Add(wx.StaticText(self, label=label), 0, wx.ALIGN_TOP)
@@ -3074,7 +3109,7 @@ class _RuleEditorBase(wx.Dialog):
         )
         ctrl.SetName(self._field_name(label))
         grid.Add(ctrl, 1, wx.EXPAND)
-        detail = (
+        detail = detail or (
             "Variables: ${1} is the first matched part; ${script:name} is a script "
             "variable; ${mud:HEALTH} is data sent by the MUD."
             if captures else
@@ -3314,6 +3349,147 @@ class KeyEditorDialog(_RuleEditorBase):
         )
 
 
+def _data_rule_problem(pack_dir: Path, rule: UserWatch) -> str | None:
+    """Why a MUD data rule can't be saved, or None: the same check the Automation Manager
+    makes, registering it on a scratch engine, so one bad rule can't stop the rest loading."""
+    if not rule.name.strip():
+        return "it needs the name of a value the MUD sends"
+    try:
+        register_rules(
+            ScriptApi(AutomationEngine(), source="user-rule-validation", base_dir=str(pack_dir)),
+            UserRules(watches=[replace(rule, enabled=True)]),
+        )
+    except Exception as error:  # noqa: BLE001 - shown to the player, who can fix the field
+        return str(error)
+    return None
+
+
+def _add_data_rule(
+    parent: wx.Window, panel: SessionPanel, name: str, announce: Callable[[str], None]
+) -> bool:
+    """"Watch this" in the MUD variables list: a new MUD data rule for one value, made in the
+    Automation Manager's editor and saved with the world's other rules."""
+    app = panel.app
+    if app is None:
+        return False
+    pack_dir = app.user_rules_dir()
+    rule = UserWatch(name=name)
+    while True:
+        dialog = DataRuleEditorDialog(parent, pack_dir, rule, variables=panel.variable_snapshot)
+        try:
+            if dialog.ShowModal() != wx.ID_OK:
+                return False
+            rule = dialog.result()
+        finally:
+            dialog.Destroy()
+        problem = _data_rule_problem(pack_dir, rule)
+        if problem is None:
+            break
+        wx.MessageBox(
+            f"This MUD data rule needs a change before it can be saved: {problem}",
+            "Check automation", wx.OK | wx.ICON_ERROR, parent,
+        )
+    rules = load_rules(pack_dir)
+    rules.watches.append(rule)
+    save_rules(pack_dir, rules)
+    panel._loop.call_soon_threadsafe(app.reload_user_rules)
+    announce("MUD data rule added. It's in the Automation Manager under MUD data.")
+    return True
+
+
+class DataRuleEditorDialog(_RuleEditorBase):
+    """Create/edit one MUD data rule: something to do when the MUD sends a value.
+
+    The value is a GMCP package, an MSDP or MSSP variable, or a path inside one, such as
+    Char.Vitals.hp; the MUD variables list (Ctrl+Shift+V) shows what this MUD sends.
+    """
+
+    def __init__(
+        self, parent: wx.Window, pack_dir: Path, watch: UserWatch, *, variables=None
+    ) -> None:
+        super().__init__(
+            parent, title="MUD data rule",
+            style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER,
+        )
+        self._variables = variables
+        self._pack_dir = pack_dir
+        self._enabled = watch.enabled
+        outer = wx.BoxSizer(wx.VERTICAL)
+        grid = self._grid()
+        self._name = self._text(
+            grid, "When the MUD sends this &value (for example Char.Vitals.hp):", watch.name
+        )
+        if variables is not None:
+            choose = wx.Button(self, label="Choose from the values the MUD has s&ent...")
+            choose.Bind(wx.EVT_BUTTON, self._on_choose)
+            grid.Add(wx.StaticText(self, label=""))
+            grid.Add(choose)
+        self._only_changes = wx.CheckBox(
+            self, label="&Only when it changes (many MUDs send it with every prompt)"
+        )
+        self._only_changes.SetValue(watch.only_changes)
+        grid.Add(wx.StaticText(self, label=""))
+        grid.Add(self._only_changes)
+        self._sound = self._text(grid, "&Sound file (optional):", watch.sound)
+        browse = wx.Button(self, label="&Browse for sound...")
+        browse.Bind(wx.EVT_BUTTON, self._on_browse)
+        grid.Add(wx.StaticText(self, label=""))
+        grid.Add(browse)
+        self._volume = self._slider(grid, "Vol&ume (0-100):", watch.volume, 0, 100)
+        self._pan = self._slider(grid, "&Pan (-100 left to 100 right):", watch.pan, -100, 100)
+        self._speak = self._text(
+            grid, "Spea&k this text (${value} is the value, ${name} what arrived):", watch.speak
+        )
+        self._variable_button(grid, self._speak, "Insert a v&ariable into the speech...")
+        self._send = self._command_text(
+            grid, watch.send, captures=False,
+            detail=(
+                "Variables: ${value} is the value; ${name} is what arrived; ${mud:HEALTH} is "
+                "other data the MUD sent; ${script:name} is a script variable."
+            ),
+        )
+        self._interrupt = wx.CheckBox(self, label="&Interrupt current speech when this fires")
+        self._interrupt.SetValue(watch.interrupt)
+        grid.Add(wx.StaticText(self, label=""))
+        grid.Add(self._interrupt)
+        self._finish(outer, grid)
+
+    def _on_choose(self, _event: wx.CommandEvent) -> None:
+        """Pick a value the MUD has sent; the field takes its name, not a ${mud:...}."""
+        picker = VariablesDialog(self, self._variables, world_name="", pick=True)
+        try:
+            chosen = picker.chosen if picker.ShowModal() == wx.ID_OK else None
+        finally:
+            picker.Destroy()
+        if chosen is not None and chosen.source != SCRIPT:
+            self._name.SetValue(chosen.name)
+        wx.CallAfter(_focus_if_alive, self._name)
+
+    def _on_browse(self, _event: wx.CommandEvent) -> None:
+        dialog = wx.FileDialog(
+            self, "Choose a sound file",
+            wildcard="Sound files (*.wav;*.ogg;*.mp3;*.flac)|*.wav;*.ogg;*.mp3;*.flac|"
+                     "All files (*.*)|*.*",
+            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST,
+        )
+        if dialog.ShowModal() == wx.ID_OK:
+            self._sound.SetValue(copy_sound_into_pack(self._pack_dir, dialog.GetPath()))
+        dialog.Destroy()
+
+    def result(self) -> UserWatch:
+        return UserWatch(
+            name=self._name.GetValue().strip(),
+            only_changes=self._only_changes.GetValue(),
+            sound=self._sound.GetValue().strip(),
+            volume=self._volume.GetValue(),
+            pan=self._pan.GetValue(),
+            speak=self._speak.GetValue().strip(),
+            send=self._send.GetValue().strip(),
+            interrupt=self._interrupt.GetValue(),
+            enabled=self._enabled,
+        )
+
+
 class ChannelEditorDialog(_RuleEditorBase):
     def __init__(self, parent: wx.Window, channel: UserChannel) -> None:
         super().__init__(parent, title="Channel")
@@ -3368,6 +3544,15 @@ def _rule_summary(kind: str, rule) -> str:
     if kind == "key":
         action = commands or rule.speak or rule.sound or "nothing"
         return f"{status}Hotkey: {rule.key} runs {action}"
+    if kind == "data":
+        actions = [part for part in (
+            f"sound {Path(rule.sound).name}" if rule.sound else "",
+            f"speak {rule.speak}" if rule.speak else "",
+            f"send {commands}" if commands else "",
+            "interrupts speech" if rule.interrupt else "",
+        ) if part]
+        when = "when it changes" if rule.only_changes else "every time"
+        return f"{status}MUD data: {rule.name}, {when}: {'; '.join(actions) or 'no action'}"
     return (
         f"{status}Channel: {rule.name}"
         f" ({'speaks' if rule.speak else 'silent'},"
@@ -3404,26 +3589,35 @@ class AutomationManagerDialog(wx.Dialog):
             "A script handles automation that needs decisions, timers, saved variables, "
             "or shared functions. Scripts load alphabetically.",
         ),
+        (
+            "data", "MUD data — when the MUD sends a value",
+            "A MUD data rule reacts when the MUD sends a value over GMCP, MSDP or MSSP, "
+            "such as your health. It can play a sound, speak, or send commands. The MUD "
+            "variables list (Ctrl+Shift+V) shows what this MUD sends.",
+        ),
     )
     _CATEGORY_WORDS = {
         "trigger": "Triggers", "alias": "Aliases", "key": "Hotkeys",
-        "channel": "Channels", "script": "Scripts",
+        "channel": "Channels", "script": "Scripts", "data": "MUD data",
     }
     _KIND_WORD = {
         "trigger": "Trigger", "alias": "Alias", "key": "Hotkey", "channel": "Channel",
+        "data": "MUD data rule",
     }
     _RULE_TYPES = {
         "trigger": UserTrigger, "alias": UserAlias,
-        "key": UserKey, "channel": UserChannel,
+        "key": UserKey, "channel": UserChannel, "data": UserWatch,
     }
     _RULE_COLLECTIONS = {
         "trigger": "triggers", "alias": "aliases", "key": "keys", "channel": "channels",
+        "data": "watches",
     }
     _REQUIRED_FIELD = {
         "trigger": ("pattern", "text to match"),
         "alias": ("pattern", "the shortcut you will type"),
         "key": ("key", "a key combination"),
         "channel": ("name", "a name"),
+        "data": ("name", "the name of a value the MUD sends"),
     }
     _last_category = 0
 
@@ -3513,6 +3707,7 @@ class AutomationManagerDialog(wx.Dialog):
         return {
             "trigger": self._rules.triggers, "alias": self._rules.aliases,
             "key": self._rules.keys, "channel": self._rules.channels,
+            "data": self._rules.watches,
         }[kind]
 
     def _refresh(self, select: int | str | None = None, *, focus: bool = False) -> None:
@@ -3589,7 +3784,7 @@ class AutomationManagerDialog(wx.Dialog):
     def _on_manager_key(self, event: wx.KeyEvent) -> None:
         code = event.GetKeyCode()
         if event.ControlDown() and not event.AltDown() and not event.ShiftDown():
-            if ord("1") <= code <= ord("5"):
+            if ord("1") <= code < ord("1") + len(self._CATEGORIES):
                 self._category.SetSelection(code - ord("1"))
                 self._on_category(event)
                 return
@@ -3643,6 +3838,8 @@ class AutomationManagerDialog(wx.Dialog):
             dialog = AliasEditorDialog(self, rule, variables=variables)
         elif kind == "key":
             dialog = KeyEditorDialog(self, self._pack_dir, rule, variables=variables)
+        elif kind == "data":
+            dialog = DataRuleEditorDialog(self, self._pack_dir, rule, variables=variables)
         else:
             dialog = ChannelEditorDialog(self, rule)
         try:
@@ -4696,7 +4893,8 @@ class GenericMudFrame(wx.Frame):
             return
         panel = self.book.GetPage(index)
         dialog = VariablesDialog(
-            self, panel.variable_snapshot, world_name=panel.world.name, announce=self.announce
+            self, panel.variable_snapshot, world_name=panel.world.name, announce=self.announce,
+            on_watch=lambda parent, name: _add_data_rule(parent, panel, name, self.announce),
         )
         dialog.ShowModal()
         dialog.Destroy()

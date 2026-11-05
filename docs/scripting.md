@@ -12,7 +12,7 @@ not run in your other worlds.
 1. Connect to the saved world you want to change.
 2. Press **Ctrl+B**, or choose **Automation > Manage automation**.
 3. In the **Show** box, choose **Triggers**, **Aliases**, **Hotkeys**,
-   **Channels**, or **Scripts**.
+   **Channels**, **Scripts**, or **MUD data**.
 4. Choose **New**.
 
 These are categories in one manager, not separate simple and advanced tools:
@@ -22,6 +22,9 @@ These are categories in one manager, not separate simple and advanced tools:
 - A **hotkey** runs actions when you press a chosen key combination.
 - A **channel** controls whether routed lines are spoken, shown, or allowed to
   interrupt speech.
+- A **MUD data** rule reacts when the MUD sends a value over GMCP, MSDP or MSSP,
+  such as `Char.Vitals.hp`. `${value}` is the new value and `${name}` is what
+  arrived. **Only when it changes** is on for a new rule.
 - A **script** contains reusable Lua automation.
 
 Choose an item and press Enter to edit it. **Duplicate** opens a copy that you

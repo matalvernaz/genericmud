@@ -21,7 +21,7 @@ The server controls how much of this there is, so the walk itself stops at the l
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 GMCP, MSDP, MSSP, SCRIPT = "gmcp", "msdp", "mssp", "script"
 _MUD_SOURCES = (GMCP, MSDP, MSSP)
@@ -90,6 +90,12 @@ class VariableEntry:
     name: str  # the dotted path or script variable name
     value: str  # format_value() of the current value
     source: str  # GMCP, MSDP, MSSP or SCRIPT
+    age: float | None = None  # seconds since the MUD last sent it; None for script values
+
+    @property
+    def row_with_age(self) -> str:
+        """The list row with how long ago the value arrived, for the most-recent-first order."""
+        return f"{self.row}, {spoken_age(self.age)}" if self.age is not None else self.row
 
     @property
     def reference(self) -> str:
@@ -189,6 +195,8 @@ def list_variables(
     script_vars: dict[str, str],
     *,
     limit: int = MAX_ENTRIES,
+    arrivals: dict[str, float] | None = None,
+    now: float = 0.0,
 ) -> tuple[list[VariableEntry], bool]:
     """Rows for every variable, MUD data first (GMCP, MSDP, MSSP), then script values.
 
@@ -206,8 +214,53 @@ def list_variables(
             break
         walk.add(str(name), value, SCRIPT)
     entries = walk.rows
+    if arrivals:
+        entries = _with_ages(entries, arrivals, now)
     entries.sort(key=lambda entry: (_SOURCE_ORDER[entry.source], entry.name.casefold()))
     return entries[:limit], len(entries) > limit
+
+
+def spoken_age(seconds: float) -> str:
+    """How long ago, in words a screen reader says plainly: "just now", "5 seconds ago"."""
+    whole = int(seconds)
+    if whole < 2:
+        return "just now"
+    for size, unit in ((3600, "hour"), (60, "minute"), (1, "second")):
+        if whole >= size:
+            count = whole // size
+            return f"{count} {unit}{'' if count == 1 else 's'} ago"
+    return "just now"
+
+
+def recent_first(entries: list[VariableEntry]) -> list[VariableEntry]:
+    """The newest arrivals first; values with no arrival time (script values) after them."""
+    return sorted(
+        entries,
+        key=lambda entry: (entry.age is None, entry.age or 0.0, entry.name.casefold()),
+    )
+
+
+def _with_ages(
+    entries: list[VariableEntry], arrivals: dict[str, float], now: float
+) -> list[VariableEntry]:
+    """Each MUD value with the age of the message it came in: the longest arrived name that
+    is the value's own or a package above it (Char.Vitals.hp came in Char.Vitals)."""
+    aged = []
+    for entry in entries:
+        if entry.source == SCRIPT:
+            aged.append(entry)
+            continue
+        parts = entry.name.casefold().split(".")
+        arrived = next(
+            (
+                arrivals[".".join(parts[:depth])]
+                for depth in range(len(parts), 0, -1)
+                if ".".join(parts[:depth]) in arrivals
+            ),
+            None,
+        )
+        aged.append(replace(entry, age=max(0.0, now - arrived)) if arrived is not None else entry)
+    return aged
 
 
 def filter_variables(entries: list[VariableEntry], text: str) -> list[VariableEntry]:

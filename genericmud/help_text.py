@@ -69,7 +69,7 @@ how much you've mapped.
 
 Automation and sounds:
 Ctrl+B opens the Automation Manager. Its Show box contains Triggers, Aliases,
-Hotkeys, Channels, and Scripts. A trigger watches text from the MUD. An alias
+Hotkeys, Channels, Scripts, and MUD data. A trigger watches text from the MUD. An alias
 replaces a shortcut you type. A hotkey reacts to a chosen key combination.
 Each can send one command or several commands, one per line, without writing
 code. The Scripts category has the Lua editor for decisions, timers, saved
@@ -126,7 +126,13 @@ Ctrl+Shift+V, or Automation menu, MUD variables, lists every value this world ha
 GMCP, MSDP and MSSP data from the MUD, then values saved by scripts. Type to filter,
 press Enter to copy a value's reference, and F5 to refresh. In the trigger, alias,
 and hotkey editors, the Insert a variable buttons choose a value from the same list
-and put its reference in the speech or the commands.
+and put its reference in the speech or the commands. Most recent first puts what
+the MUD sent last at the top, with how long ago; Watch this makes a MUD data rule.
+
+A MUD data rule (MUD data in the Automation Manager) acts when the MUD sends a
+value such as Char.Vitals.hp: a sound, speech, commands. ${value} is the new
+value, so speaking ${value} health reads your health. Only when it changes is on
+for new rules.
 
 Choose Duplicate to start from a copy. Disable keeps an item saved without
 letting it run. Ctrl+1 through Ctrl+5 change categories, Ctrl+N creates an item,

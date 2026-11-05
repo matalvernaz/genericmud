@@ -669,7 +669,10 @@ class EngineApp:
         Reads live engine state, so call it on the loop thread; the rows are plain frozen
         values, safe to hand to the UI thread afterwards.
         """
-        return list_variables(self.engine.all_mud_vars(), self.engine.all_vars())
+        return list_variables(
+            self.engine.all_mud_vars(), self.engine.all_vars(),
+            arrivals=self.engine.data_arrival_times(), now=time.monotonic(),
+        )
 
     def pack_notepads(self) -> dict[str, str]:
         """The MUSHclient notepads this session's packs have written, by title (a copy).

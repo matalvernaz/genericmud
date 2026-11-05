@@ -176,3 +176,32 @@ def test_data_rules_are_saved_with_the_others_and_old_files_still_load():
     again = UserRules.from_json(rules.to_json())
     assert again.watches == rules.watches
     assert UserRules.from_json('{"version": 1, "triggers": []}').watches == []
+
+
+# --- the MUD variables list: how long ago, most recent first --------------------------
+
+
+def test_each_value_takes_the_age_of_the_message_it_came_in():
+    from genericmud.automation.variables import list_variables, recent_first, spoken_age
+
+    entries, _cut = list_variables(
+        {"Char.Vitals": {"hp": 90}, "gmcp.Char.Vitals": {"hp": 90}, "HEALTH": "5",
+         "msdp.HEALTH": "5"},
+        {"target": "orc"},
+        arrivals={"char.vitals": 99.0, "health": 30.0},
+        now=100.0,
+    )
+    ages = {entry.name: entry.age for entry in entries}
+    assert ages == {"Char.Vitals.hp": 1.0, "HEALTH": 70.0, "target": None}
+    assert [entry.name for entry in recent_first(entries)] == ["Char.Vitals.hp", "HEALTH", "target"]
+    assert [spoken_age(s) for s in (0.4, 5, 61, 7300)] == [
+        "just now", "5 seconds ago", "1 minute ago", "2 hours ago",
+    ]
+
+
+def test_the_app_lists_arrival_ages(tmp_path):
+    app, _backend, _sent = _app()
+    app.on_telnet_event(Subnegotiation(OPT_GMCP, b'Char.Vitals {"hp":42}'))
+    entries, _cut = app.variable_listing()
+    hp = next(entry for entry in entries if entry.name == "Char.Vitals.hp")
+    assert hp.age is not None and hp.age < 5

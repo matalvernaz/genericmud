@@ -1733,3 +1733,95 @@ def test_the_copy_box_fills_the_clipboard_and_says_so(
         panel.Destroy()
         loop.run_until_complete(asyncio.sleep(0.01))
         loop.close()
+
+
+# --- MUD data rules (the Automation Manager's sixth category) ---
+
+
+def test_the_mud_data_editor_round_trips_a_rule(frame, tmp_path):
+    from genericmud.packs.user_rules import UserWatch
+    from genericmud.ui import wx_app
+
+    rule = UserWatch(name="Char.Vitals.hp", only_changes=False, speak="${value} health")
+    dialog = wx_app.DataRuleEditorDialog(frame, tmp_path, rule)
+    try:
+        assert dialog.result() == rule
+        assert dialog._only_changes.GetValue() is False
+    finally:
+        dialog.Destroy()
+
+
+def test_the_manager_offers_mud_data_sixth_and_makes_a_rule(frame, tmp_path, monkeypatch):
+    import types
+
+    from genericmud.packs.user_rules import UserWatch
+    from genericmud.ui import wx_app
+
+    panel = types.SimpleNamespace(
+        world=World("Test", "mud.example", 4000),
+        app=types.SimpleNamespace(user_rules_dir=lambda: tmp_path),
+        variable_snapshot=None,
+        _keymap={},
+    )
+    monkeypatch.setattr(wx_app.DataRuleEditorDialog, "ShowModal", lambda _editor: wx.ID_OK)
+    manager = wx_app.AutomationManagerDialog(frame, panel)
+    try:
+        assert manager._category.GetString(5).startswith("MUD data")
+        rule = UserWatch(name="Char.Vitals.hp", speak="${value}")
+        assert manager._edit_rule("data", rule) == rule
+        told: list[str] = []
+        monkeypatch.setattr(wx_app.wx, "MessageBox", lambda text, *_args: told.append(text))
+        answers = iter([wx.ID_OK, wx.ID_CANCEL])
+        monkeypatch.setattr(wx_app.DataRuleEditorDialog, "ShowModal", lambda _e: next(answers))
+        assert manager._edit_rule("data", UserWatch(name="")) is None  # a name is required
+        assert told and "the name of a value the MUD sends" in told[0]
+    finally:
+        manager.Destroy()
+
+
+def _aged_rows():
+    from genericmud.automation.variables import list_variables
+
+    return list_variables(
+        {"Char.Vitals": {"hp": 90}, "gmcp.Char.Vitals": {"hp": 90}, "Room.Info": {"num": 7},
+         "gmcp.Room.Info": {"num": 7}},
+        {"target": "orc"},
+        arrivals={"char.vitals": 95.0, "room.info": 40.0},
+        now=100.0,
+    )
+
+
+def test_variables_most_recent_first_says_how_long_ago(frame):
+    from genericmud.ui.wx_app import VariablesDialog
+
+    dialog = VariablesDialog(frame, _aged_rows, world_name="Aard")
+    try:
+        dialog._recent.SetValue(True)
+        dialog._populate()
+        rows = [dialog._list.GetString(index) for index in range(dialog._list.GetCount())]
+        assert rows == [
+            "Char.Vitals.hp, 90, GMCP, 5 seconds ago",
+            "Room.Info.num, 7, GMCP, 1 minute ago",
+            "target, orc, script",
+        ]
+    finally:
+        dialog.Destroy()
+
+
+def test_watch_this_makes_a_rule_for_a_mud_value_but_not_a_script_one(frame):
+    from genericmud.ui.wx_app import VariablesDialog
+
+    watched: list[str] = []
+    dialog = VariablesDialog(
+        frame, _aged_rows, world_name="Aard",
+        on_watch=lambda _parent, name: watched.append(name),
+    )
+    try:
+        assert dialog._watch is not None and dialog._watch.IsEnabled()
+        dialog._on_watch_selected(None)
+        assert watched == ["Char.Vitals.hp"]
+        dialog._list.SetSelection(dialog._list.GetCount() - 1)  # the script value
+        dialog._show_details()
+        assert not dialog._watch.IsEnabled()
+    finally:
+        dialog.Destroy()

@@ -381,8 +381,8 @@ off its own map — some clan halls and quest rooms are deliberately unmapped.
 ## Automation: triggers, aliases, hotkeys, channels, and scripts
 
 **Ctrl+B** opens one Automation Manager for the current world. Choose
-**Triggers**, **Aliases**, **Hotkeys**, **Channels**, or **Scripts** from the
-**Show** box. There is no separate simple or advanced builder.
+**Triggers**, **Aliases**, **Hotkeys**, **Channels**, **Scripts** or **MUD data**
+from the **Show** box. There is no separate simple or advanced builder.
 
 A trigger reacts to text from the MUD. It can play a sound, speak something
 shorter, send commands, hide the matched line, interrupt speech, or route the
@@ -421,6 +421,24 @@ have saved. Type in **Filter** to narrow the list, and press **Enter** on a line
 to copy the reference that reads it, such as `${mud:Char.Vitals.hp}`. **F5**
 refreshes the values. The list fills only on MUDs that send GMCP, MSDP or MSSP,
 usually once you've logged in.
+
+**Most recent first** puts what the MUD sent last at the top, and each line says
+how long ago it arrived, so you can do something in the game, refresh, and see
+which values just changed. **Watch this** makes a MUD data rule for the value
+you're on (see below).
+
+### Reacting when the MUD sends a value
+
+A MUD data rule, the **MUD data** choice in the Automation Manager, does
+something whenever the MUD sends a value over GMCP, MSDP or MSSP, such as your
+health. Give it the value's name, like `Char.Vitals.hp` (the variables list
+shows the names this MUD uses), then any of a sound, speech and commands, the
+same as a trigger. `${value}` is the new value and `${name}` is what arrived, so
+speech of `${value} health` reads your health out. **Only when it changes** is on
+for a new rule, since many MUDs send your health with every prompt whether it
+moved or not. A rule for a package hears everything below it: `Char` hears
+`Char.Vitals`, `Char.Status` and the rest, the way Mudlet's GMCP events work.
+Scripts get the same with `mud.on_data`, described in the scripting guide.
 
 In the trigger, alias and hotkey editors, **Insert a variable into the speech**
 and **Insert a variable into the commands** open the same list; choose a value
@@ -602,7 +620,7 @@ View, **Alt+H** Help.
 | Ctrl+Shift+B | Browse soundpacks online |
 | Ctrl+B | Open the Automation Manager |
 | Ctrl+Shift+V | List the values the MUD has sent and scripts have saved |
-| Ctrl+1..5 in Automation Manager | Show triggers / aliases / hotkeys / channels / scripts |
+| Ctrl+1..6 in Automation Manager | Show triggers / aliases / hotkeys / channels / scripts / MUD data |
 | Ctrl+N in Automation Manager | Create an item in the category being shown |
 | Enter / Delete in an automation list | Edit / delete the selected item |
 | Enter / F5 in the variables list | Copy the reference / refresh the values |
