@@ -2736,6 +2736,13 @@ class EngineApp:
         # A fresh socket is a fresh byte stream: drop any half-decoded multibyte tail and
         # the legacy-encoding latch, or a drop mid-character mis-decodes the whole reconnect.
         self.codec.reset()
+        # MXP starts from nothing too, as on_connect does: the server has to offer it again, and
+        # no variable, mode, paragraph or held text carries over from the old socket. Safe to do
+        # here because both reconnect paths call this straight after connect(), before the new
+        # socket's read loop has run, so the server's fresh offer can't have arrived yet.
+        self._mxp_negotiated = False
+        self._mxp = MxpParser()
+        self._release_mxp_hold()
         # Echo state belongs to the dead socket: no WONT ECHO is coming for it. Through
         # forget_hidden_input, as on_connection_status does, so the window's history and
         # the hidden-input timeout hear about it too.

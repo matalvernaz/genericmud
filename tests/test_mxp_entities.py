@@ -144,3 +144,70 @@ def test_a_value_does_not_expand_entities_of_its_own():
     parser.feed(SECURE + '<!ENTITY b "kept">')
     assert parser.feed("&a;").text == "&b;"
     assert parser.feed("&b;").text == "kept"
+
+
+# --- variables in links ------------------------------------------------------
+
+
+def test_a_link_whose_words_use_a_variable_is_found_in_its_line():
+    # The line shows "orc", so the link has to be "orc" too, or the window can't place it.
+    parser = _parser()
+    parser.feed(SECURE + '<!ENTITY target "orc">')
+    outcome = parser.feed(SECURE + '<send "kill &target;">&target;</send> growls.')
+    assert outcome.text == "orc growls."
+    assert outcome.links[0].text == "orc"
+    assert outcome.links[0].command == "kill orc"
+
+
+def test_an_html_entity_in_a_links_words_matches_the_line_too():
+    outcome = _parser().feed(SECURE + '<send "look tom">Tom &amp; Jerry</send>')
+    assert outcome.text == "Tom & Jerry"
+    assert outcome.links[0].text == "Tom & Jerry"
+
+
+def test_text_in_a_link_is_its_own_words():
+    outcome = _parser().feed(
+        SECURE + '<send "examine &text;" hint="Look at the &text;">sword</send>'
+    )
+    link = outcome.links[0]
+    assert (link.command, link.hint) == ("examine sword", "Look at the sword")
+
+
+def test_a_variable_can_hold_a_whole_menu():
+    # Mudlet's shop example: one variable reused on every item, &text; naming each.
+    parser = _parser()
+    parser.feed(SECURE + '<!ENTITY acts "buy &text;|sell &text;">')
+    outcome = parser.feed(SECURE + '<send "&acts;">sword</send>')
+    assert outcome.links[0].choices == (("buy sword", ""), ("sell sword", ""))
+
+
+def test_text_cannot_be_defined_as_a_variable():
+    parser = _parser()
+    parser.feed(SECURE + '<!ENTITY text "gotcha">')
+    outcome = parser.feed(SECURE + '<send "examine &text;">sword</send>')
+    assert outcome.links[0].command == "examine sword"
+
+
+# --- a reconnect starts over ----------------------------------------------------
+
+
+def test_a_reconnect_forgets_the_old_connections_variables():
+    from genericmud.app import EngineApp
+    from genericmud.protocol.telnet import OPT_MXP, WILL, DataReceived, Negotiation
+    from genericmud.voice.router import VoiceRouter
+    from tests.helpers import RecordingBackend
+
+    shown: list[str] = []
+
+    def post(message: dict) -> None:
+        if message.get("type") == "line":
+            shown.append(message["text"])
+
+    app = EngineApp(VoiceRouter(RecordingBackend(), clock=lambda: 0.0), send=lambda _t: None,
+                    post=post, keymap={})
+    app.on_telnet_event(Negotiation(WILL, OPT_MXP))
+    app.on_telnet_event(DataReceived((SECURE + '<!ENTITY hp "50">\r\n').encode()))
+    app.after_reconnect()
+    app.on_telnet_event(Negotiation(WILL, OPT_MXP))  # the new connection offers MXP afresh
+    app.on_telnet_event(DataReceived(b"HP: &hp;\r\n"))
+    assert shown[-1] == "HP: &hp;"
