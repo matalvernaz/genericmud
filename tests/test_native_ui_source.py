@@ -177,6 +177,7 @@ def test_automation_manager_has_direct_categories_and_contextual_script_actions(
         "Hotkeys — when I press a key",
         "Channels — how matching lines are handled",
         "Scripts — reusable Lua automation",
+        "MUD data — when the MUD sends a value",
     ):
         assert category in source
     assert 'self._buttons["rename"].Enable(has_item and is_script)' in source
@@ -184,7 +185,8 @@ def test_automation_manager_has_direct_categories_and_contextual_script_actions(
     assert 'self._buttons["folder"].Enable(is_script)' in source
     assert 'self._buttons["new"].SetLabel(f"&New {singular}...")' in source
     assert "wx.EVT_LISTBOX_DCLICK, self._on_edit" in source
-    assert 'if ord("1") <= code <= ord("5")' in source
+    # Ctrl+1 to Ctrl+6: one per category, counted from the list so a new one gets its key.
+    assert 'if ord("1") <= code < ord("1") + len(self._CATEGORIES)' in source
     assert 'if code == ord("N")' in source
 
 
