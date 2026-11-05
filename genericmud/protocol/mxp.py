@@ -438,14 +438,20 @@ def _link_command(attrs: str) -> tuple[str, bool]:
     return command, _has_prompt_flag(attrs, command)
 
 
+# A named argument with its value, quoted or bare: HINT="Buy it", EXPIRE=shop.
+_NAMED_ARGUMENT = re.compile(r"""[A-Za-z_][\w-]*\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)""")
+
+
 def _has_prompt_flag(attrs: str, command: str) -> bool:
     """Whether a ``<SEND>`` asks for its command to be typed rather than sent.
 
-    Only the words outside quoted arguments can carry the keyword: the command itself is
-    usually quoted, and a command that happens to read "tell prompt " is a command. A tag
-    whose whole command is the word "prompt" is sending that word, not asking for the flag.
+    Only a bare keyword counts: not a quoted argument (the command itself is usually quoted,
+    and a command that happens to read "tell prompt " is a command), and not the value of a
+    named one (``hint=prompt`` is a caption). A tag whose whole command is the word "prompt"
+    is sending that word, not asking for the flag.
     """
-    outside = re.sub(r"\"[^\"]*\"|'[^']*'", " ", attrs)
+    outside = _NAMED_ARGUMENT.sub(" ", attrs)
+    outside = re.sub(r"\"[^\"]*\"|'[^']*'", " ", outside)
     found = re.findall(r"(?<![\w-])prompt(?![\w-])", outside, re.IGNORECASE)
     if not found:
         return False

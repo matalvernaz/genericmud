@@ -135,6 +135,9 @@ INTERACTIVE_SOURCE = "user-interactive"
 # An <A HREF> link is opened, never typed at the MUD: only these schemes are followed, so a
 # MUD can't send the platform off to launch a local application through the shell.
 _LINK_URL_SCHEMES = ("http://", "https://")
+# The longest text a link may type into the command box. Starting a command is what the
+# spec has in mind ("tell Ariadne "); nobody needs a paragraph begun for them.
+_MAX_TYPED_LINK = 200
 
 _REVIEW_VERBS = frozenset(
     {
@@ -2518,6 +2521,14 @@ class EngineApp:
         if self._diag is not None:
             self._diag.event("mxp.link", text=text, command=command, insert=insert)
         if insert:
+            refusal = self._typed_link_refusal(command)
+            if refusal is not None:
+                if self._diag is not None:
+                    self._diag.event(
+                        "mxp.link_refused", text=text, command=command, reason=refusal
+                    )
+                self._speak_system(f"Link not followed: {refusal}.")
+                return
             # <SEND PROMPT>: the command is the opening of one the player finishes, so it
             # belongs in their command box, not on the wire -- sent as it stands it would
             # reach the MUD as a command they never gave. Nothing leaves until they press
@@ -2534,6 +2545,26 @@ class EngineApp:
         # a MUD could otherwise tag any word with <SEND HREF="/quit"> and end the session.
         self._dispatch_command(command, allow_client=False)
         self._speak_system(f"{text}: {command}" if text else f"link: {command}")
+
+    def _typed_link_refusal(self, command: str) -> str | None:
+        """Why a link's text may not be typed into the command box, or None when it may.
+
+        Whatever lands in the box goes out as the player's own typing when they press Enter,
+        with genericMud's commands allowed and the separator splitting it. So a MUD may start
+        one plain command there and nothing more: not a genericMud command, which could plant
+        a trigger or an alias to fire later, and not a second command hidden behind the
+        separator, which the player would send without meaning to.
+        """
+        if command.lstrip().startswith(CLIENT_PREFIX):
+            return "it would type a genericMud command"
+        separator = self.command_separator
+        if separator and separator in command:
+            return "it would type more than one command"
+        if len(command) > _MAX_TYPED_LINK:
+            return "what it would type is too long for a command"
+        if not command.isprintable():
+            return "what it would type has control characters in it"
+        return None
 
     def _open_link(self, url: str) -> None:
         """Open an <A HREF> link in the browser, announcing it because focus moves."""
