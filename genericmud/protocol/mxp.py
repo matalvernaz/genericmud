@@ -36,6 +36,7 @@ here.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from urllib.parse import urlparse
 
@@ -109,6 +110,9 @@ _ENTITY_FLAGS = frozenset({"PRIVATE", "PUBLISH", "DELETE", "ADD", "REMOVE"})
 _ENTITY_UNSAFE = re.compile("[\x00-\x1f\x7f-\x9f" + IMAGE_MARK + "]")
 # An entity name has to be one &name; can actually refer to, or it could never be expanded.
 _ENTITY_NAME = re.compile(r"[A-Za-z][A-Za-z0-9]{0,31}")
+# Inside a <SEND>, &text; stands for the link's own words: <send "examine &text;">sword</send>
+# examines the sword. Reserved, so a MUD's own variable can never take its place.
+_TEXT_PLACEHOLDER = re.compile(r"&text;", re.IGNORECASE)
 
 CLIENT_NAME = "genericMud"
 MXP_VERSION = "1.0"
@@ -300,6 +304,8 @@ class MxpParser:
         """Store one variable's value, within the caps that keep a session from growing."""
         if _ENTITY_NAME.fullmatch(name) is None:
             return  # could never be referred to as &name;
+        if name.lower() == "text":
+            return  # &text; is a link's own words, not a variable
         if name not in self._entities and len(self._entities) >= _MAX_ENTITIES:
             del self._entities[next(iter(self._entities))]  # the oldest gives way
         self._entities[name] = _ENTITY_UNSAFE.sub("", value)[:_MAX_ENTITY_VALUE]
@@ -394,14 +400,16 @@ class MxpParser:
                 else:
                     pending_var = (len(out), _first_token(match.group("attrs")))
             if name in ("send", "a") and not closing and secure_ok:
-                pending_link = (len(out), _link(match.group("attrs")))
+                pending_link = (len(out), _link(match.group("attrs"), self._expand_entities))
             elif name in ("send", "a") and closing and pending_link is not None:
                 index, link = pending_link
                 if link.command:
                     # An image inside a link leaves a marker where it sits; that is not words,
-                    # so it must not become the link's name.
-                    words = "".join(out[index:]).replace(IMAGE_MARK, "")
-                    links.append(replace(link, text=words))
+                    # so it must not become the link's name. The words are expanded the way
+                    # the line itself is, or a link whose words use an entity (&amp;, or a
+                    # MUD's own &target;) could never be found in the line it sits in.
+                    words = self._expand_entities("".join(out[index:])).replace(IMAGE_MARK, "")
+                    links.append(_with_words(link, words))
                 pending_link = None
         out.append(text[position:])
         return "".join(out)
@@ -501,7 +509,22 @@ def _support_reply(attrs: str) -> str:
     return "<SUPPORTS " + " ".join(answers) + ">"
 
 
-def _link(attrs: str) -> Link:
+def _with_words(link: Link, words: str) -> Link:
+    """The finished link: its words, with &text; in what it does replaced by them."""
+
+    def fill(value: str) -> str:
+        return _TEXT_PLACEHOLDER.sub(lambda _match: words, value)
+
+    return replace(
+        link,
+        text=words,
+        command=fill(link.command),
+        hint=fill(link.hint),
+        choices=tuple((fill(command), fill(caption)) for command, caption in link.choices),
+    )
+
+
+def _link(attrs: str, expand: Callable[[str], str] = lambda value: value) -> Link:
     """What a ``<SEND>``/``<A>`` tag asks for, before its words are known.
 
     The command is ``HREF=`` or the first bare argument. A bare ``PROMPT`` argument, which the
@@ -526,7 +549,10 @@ def _link(attrs: str) -> Link:
                 continue  # EXPIRE= and any other named argument comes before or after
             command = _unquote(token)
             break
-    captions = _attribute(attrs, "HINT").split("|")
+    # The MUD's variables are filled in before a menu is split, as Mudlet does: a variable
+    # can hold a whole menu ("buy &text;|sell &text;") for a shop to reuse on every item.
+    command = expand(command)
+    captions = expand(_attribute(attrs, "HINT")).split("|")
     entries = command.split("|")
     parts = [entry for entry in entries if entry.strip()]
     choices: tuple[tuple[str, str], ...] = ()
