@@ -186,6 +186,12 @@ always in the output box.
   the cursor's word picks the link — and if the cursor isn't inside one, the
   links are read out rather than guessed. While the output box has focus, plain
   **Enter** does the same thing.
+- Some links start a command for you to finish instead of sending one, such as a
+  name that offers `tell Zugg ` for you to type the rest of the message. Following
+  one puts that text in the command box, says so, and sends nothing until you
+  press Enter. What replaces the box's contents is only ever one plain command: a
+  link that would type a genericMud command such as `/alias`, or several commands
+  joined by your separator, is refused and says why.
 - In the **web UI** those links are real links in the page as well, so they can be
   focused and activated like any other link, in addition to the keys above. A link
   to a web page opens in a new tab.

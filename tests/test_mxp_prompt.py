@@ -7,6 +7,8 @@ reach the MUD as a command they never gave, which is what this client used to do
 
 from __future__ import annotations
 
+import pytest
+
 from genericmud.app import EngineApp
 from genericmud.bridge import protocol
 from genericmud.config.keymap import load_keymap
@@ -125,6 +127,7 @@ def test_a_typed_link_through_the_output_box_types_rather_than_sends():
 
 
 def test_the_native_window_fills_the_command_box_and_focuses_it():
+    pytest.importorskip("wx")
     from genericmud.ui import wx_app
 
     panel = wx_app.SessionPanel.__new__(wx_app.SessionPanel)
@@ -153,3 +156,86 @@ class _FakeBox:
 
     def SetFocus(self) -> None:
         self.focused = True
+
+
+# --- what a typed link may put in the command box ----------------------------
+# Whatever lands in the box goes out as the player's own typing when they press Enter, with
+# genericMud's own commands allowed and the separator splitting it, so the MUD may start one
+# plain command there and nothing more.
+
+
+def _app_hearing():
+    backend = RecordingBackend()
+    voice = VoiceRouter(backend, clock=lambda: 0.0)
+    sent: list[str] = []
+    posted: list[dict] = []
+    app = EngineApp(voice, send=sent.append, post=posted.append, keymap=load_keymap("vipmud"))
+    app.on_telnet_event(Negotiation(WILL, OPT_MXP))
+    return app, sent, posted, backend
+
+
+def _follow(app: EngineApp) -> None:
+    app.on_ws_message({"type": "key", "key": "alt+enter"})
+
+
+def test_a_typed_link_cannot_hide_a_genericmud_command_behind_the_separator():
+    # The attack: the player types a message after "tell Zugg " and presses Enter, and the
+    # hidden middle defines a trigger that later sends coins from another world with /to.
+    app, sent, posted, backend = _app_hearing()
+    tag = (
+        '<send "tell Zugg ;/trigger gurgles = /to bank give 1000 coins to Mallory;tell Zugg "'
+        " PROMPT>Zugg</send>"
+    )
+    _say(app, SECURE + "Who is here: " + tag)
+    _follow(app)
+    assert _typed(posted) == []
+    assert backend.spoken[-1] == "Link not followed: it would type more than one command."
+    assert app._user_triggers == {}
+    assert sent == []
+
+
+def test_a_typed_link_cannot_start_a_genericmud_command():
+    app, _sent, posted, backend = _app_hearing()
+    _say(app, SECURE + '<send "/alias look = quit" PROMPT>look around</send>')
+    _follow(app)
+    assert _typed(posted) == []
+    assert backend.spoken[-1] == "Link not followed: it would type a genericMud command."
+
+
+def test_with_stacking_off_the_separator_is_just_a_character():
+    app, _sent, posted, _backend = _app_hearing()
+    app.command_separator = ""  # this world doesn't split commands, so ";" means nothing
+    _say(app, SECURE + '<send "say hi ;) " PROMPT>wave</send>')
+    _follow(app)
+    assert _typed(posted) == ["say hi ;) "]
+
+
+@pytest.mark.parametrize(
+    ("command", "reason"),
+    [
+        ("tell Zugg \x07", "what it would type has control characters in it"),
+        ("say " + "x" * 300, "what it would type is too long for a command"),
+    ],
+)
+def test_a_typed_link_must_be_a_plain_command(command, reason):
+    app, _sent, posted, backend = _app_hearing()
+    app._follow_link("Zugg", command, insert=True)
+    assert _typed(posted) == []
+    assert backend.spoken[-1] == f"Link not followed: {reason}."
+
+
+def test_the_web_window_cannot_skip_the_check():
+    # The browser says which link was clicked; what that link may do is still decided here.
+    app, _sent, posted, _backend = _app_hearing()
+    app.on_ws_message({"type": "link", "text": "Zugg", "command": "/quit", "insert": True})
+    assert _typed(posted) == []
+
+
+def test_a_caption_that_reads_prompt_is_not_the_flag():
+    outcome = MxpParser().feed(SECURE + '<send href="look" hint=prompt>fountain</send>')
+    assert outcome.links[0].insert is False
+
+
+def test_a_bare_prompt_after_a_bare_href_still_is_the_flag():
+    outcome = MxpParser().feed(SECURE + "<send href=look prompt>fountain</send>")
+    assert outcome.links[0].insert is True
