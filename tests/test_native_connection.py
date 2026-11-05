@@ -103,6 +103,16 @@ async def _close_panel(panel, monkeypatch):
             await _wait_for_close(started)
 
 
+def _capture_timers(panel):
+    timers = []
+    loop = panel._loop
+    panel._loop = SimpleNamespace(
+        call_later=lambda delay, callback: timers.append((delay, callback)),
+        call_soon_threadsafe=loop.call_soon_threadsafe,
+    )
+    return timers
+
+
 @pytest.mark.parametrize("drop", ["eof", "reset"])
 @pytest.mark.parametrize("queued", [True, False], ids=["queued-disconnect", "immediate-disconnect"])
 async def test_disconnect_with_a_ready_reader_announces_once(monkeypatch, drop, queued):
@@ -459,6 +469,7 @@ async def test_initial_failure_recovers_without_rebuilding_the_session(monkeypat
     monkeypatch.setattr(asyncio, "open_connection", open_connection)
     monkeypatch.setattr(asyncio, "sleep", no_wait)
     panel = Panel(monkeypatch)
+    timers = _capture_timers(panel)
     store = PackStore(tmp_path / "store")
     source = tmp_path / "hooks.xml"
     source.write_text(
@@ -478,9 +489,13 @@ async def test_initial_failure_recovers_without_rebuilding_the_session(monkeypat
         assert panel.is_connected() and app.engine.connected
         assert writer.sent == [b"look\r\n", b"hello\r\n"]
         assert len(opened) == 2
-        assert panel.backend.spoken.count("Reconnected to Test.") == 1
+        assert "Reconnected to Test." not in panel.backend.spoken
         assert panel.backend.spoken.count("installed") == 1
         assert panel.backend.spoken.count("plugin ready") == 1
+        for delay, callback in tuple(timers):
+            if delay < 5:
+                callback()
+        assert panel.backend.spoken.count("Reconnected to Test.") == 1
     finally:
         await _close_panel(panel, monkeypatch)
 
@@ -610,6 +625,7 @@ async def test_initial_recovery_restores_login_and_the_world_codec(monkeypatch):
     monkeypatch.setattr(asyncio, "open_connection", open_connection)
     monkeypatch.setattr(asyncio, "sleep", no_wait)
     panel = Panel(monkeypatch)
+    timers = _capture_timers(panel)
     panel.world.encoding = "cp1251"
     panel.world.connect_method = "diku"
     panel.world.post_connect_commands = "я"
@@ -620,6 +636,10 @@ async def test_initial_recovery_restores_login_and_the_world_codec(monkeypatch):
         await asyncio.wait_for(connected.wait(), 1)
         assert panel.app.engine.connected
         assert writer.sent == [b"hero\r\n", b"secret\r\n", b"\xff\xff\r\n"]
+        assert "Reconnected to Test." not in panel.backend.spoken
+        for delay, callback in tuple(timers):
+            if delay < 5:
+                callback()
         assert panel.backend.spoken.count("Reconnected to Test.") == 1
     finally:
         await _close_panel(panel, monkeypatch)

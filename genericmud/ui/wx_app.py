@@ -1469,7 +1469,7 @@ class SessionPanel(wx.Panel):
         # does, for the reason _do_disconnect reports through that path: the per-socket
         # reset, the wording and the VIPMud packs' OnConnect (run after the announcement,
         # so it can't cut off a pack's welcome) all come from one place, not a copy here.
-        self.app.on_connection_status("reconnected")
+        self.app.on_connection_status("reconnected", manual=True)
 
     def _prompt_reconnect(self) -> None:
         """Ask to reconnect after a command was typed into a dead session.

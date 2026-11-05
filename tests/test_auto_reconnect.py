@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
+from genericmud.app import EngineApp
 from genericmud.protocol.telnet import IAC, OPT_MCCP2, SB, SE, WILL
 from genericmud.transport.connection import MudConnection, ReconnectPolicy
+from genericmud.voice.router import VoiceRouter
+from tests.helpers import RecordingBackend
 from tests.test_reconnect import _ClosingWriter, _IdleReader
 
 
@@ -91,6 +95,107 @@ async def test_immediate_eof_still_waits_between_connections(monkeypatch):
             wake.set_result(None)
         await sleeps.next(5)
         assert len(calls) == 4
+    finally:
+        await conn.close()
+
+
+@pytest.mark.parametrize("initial_failure", [False, True])
+@pytest.mark.parametrize("recover", [False, True])
+async def test_flapping_does_not_repeat_speech_but_still_restores_each_socket(
+    monkeypatch, initial_failure, recover,
+):
+    opened = []
+    stable = False
+    timers = []
+    posted = []
+    sent = []
+    hooks = []
+
+    async def open_connection(*args, **kwargs):
+        if initial_failure and not opened:
+            opened.append(None)
+            raise OSError("unavailable")
+        reader = asyncio.StreamReader()
+        opened.append(reader)
+        if not stable:
+            reader.feed_eof()
+        return reader, _ClosingWriter()
+
+    conn, sleeps, statuses = setup(monkeypatch, open_connection)
+    backend = RecordingBackend()
+    app = EngineApp(
+        VoiceRouter(backend), name="Test", send=sent.append, post=posted.append,
+        schedule=lambda delay, callback: timers.append((delay, callback)),
+        credentials=SimpleNamespace(get=lambda world: ("hero", "secret")),
+        connect_method="diku", post_connect_commands="look",
+    )
+    app.engine.connected = not initial_failure
+    app._vip_connected = not initial_failure
+    app._vip_packs = [SimpleNamespace(connection_changed=hooks.append)]
+
+    def status(message):
+        statuses.append(message)
+        app.on_connection_status(message)
+
+    def run_notices():
+        # Run the short notification callbacks after EOF has been processed, without
+        # waiting on wall time or firing unrelated 30-second password timeouts.
+        due = [callback for delay, callback in timers if delay < 5]
+        timers[:] = [(delay, callback) for delay, callback in timers if delay >= 5]
+        for callback in due:
+            callback()
+
+    conn.on_status = status
+    if initial_failure:
+        with pytest.raises(OSError):
+            await conn.connect("mud.example", 23)
+        conn.start_reconnect()
+    else:
+        await conn.connect("mud.example", 23)
+    try:
+        wake = await sleeps.next(5)
+        first = backend.spoken[0]
+        assert first.startswith("connection unavailable" if initial_failure else "connection lost")
+        for _ in range(8):
+            wake.set_result(None)
+            wake = await sleeps.next(5)
+            run_notices()
+            assert backend.spoken == [first]
+            assert backend.stops == 1  # quiet flaps must not interrupt the screen reader
+        assert statuses.count("reconnected") == 8
+        assert hooks.count(True) == 8
+        assert sent == ["hero", "secret", "look"] * 8
+        assert not app.engine.connected
+        assert [message["text"] for message in posted if message["type"] == "echo"] == [
+            f"* {first}",
+        ]
+
+        if recover:
+            stable = True
+            retry = conn._reconnect_task
+            wake.set_result(None)
+            await asyncio.wait_for(asyncio.shield(retry), 1)
+            # Critical lifecycle work completes before the confirmation is announced.
+            assert conn.connected and app.engine.connected
+            assert hooks.count(True) == 9
+            assert sent == ["hero", "secret", "look"] * 9
+            assert backend.spoken == [first]
+            run_notices()
+            assert backend.spoken == [first, "Reconnected to Test."]
+            assert backend.stops == 1
+            opened[-1].feed_eof()  # a new outage after genuine recovery is meaningful again
+            await sleeps.next(5)
+            assert backend.spoken[-1].startswith("connection lost")
+
+        before_close = len(opened)
+        closed = conn.request_close()  # the native Disconnect path reports itself
+        app.on_connection_status("disconnected")
+        await closed
+        run_notices()
+        assert backend.spoken[-1] == "Disconnected from Test."
+        assert len(opened) == before_close
+        assert not conn.connected and not conn.connecting
+        assert conn._reconnect_task is None
     finally:
         await conn.close()
 

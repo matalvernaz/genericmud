@@ -123,6 +123,7 @@ _SOCKET_CHANGES = (
     "connection unavailable",
     "reconnected",
 )
+_RECONNECT_NOTICE_SECONDS = 1.0  # confirm stability for speech only, never delay socket setup
 _MEDIA_DEFAULT_VOLUME = 50  # Client.Media.Play's volume when the server leaves it out (spec)
 _MEDIA_FADEAWAY_MS = 5000  # Client.Media.Stop's fadeaway when neither Play nor Stop says (spec)
 _MEDIA_LONGEST_MS = 24 * 60 * 60 * 1000  # positions and fades past a day are a server's mistake
@@ -645,6 +646,8 @@ class EngineApp:
         self._focused = False  # this world is the one in front (see on_focus_changed)
         self._mush_connected = False  # the same for the MUSHclient packs' hooks
         self._pack_timers_cancelled = False  # a dropped connection cancelled the packs' timers
+        self._recovery_status: str | None = None  # one announcement per ongoing outage/interval
+        self._reconnect_notice_token = 0  # invalidate a confirmation when that socket drops
         self._simulate_depth = 0  # Simulate inside a line that was itself simulated
         self._save_scheduled = False  # a pack's SaveState is waiting to be written
         self._user_script_runtimes: list[user_scripts.LoadedUserScript] = []
@@ -3031,7 +3034,7 @@ class EngineApp:
         # this is where a blind login and the after-connect commands actually go out.
         self.after_connect()
 
-    def on_connection_status(self, message: str) -> None:
+    def on_connection_status(self, message: str, *, manual: bool = False) -> None:
         """Surface a transport status line (reconnecting, reconnected) to the user.
 
         The end of a session arrives here whatever caused it. A dropped link and a quit
@@ -3043,12 +3046,22 @@ class EngineApp:
         """
         spoken = message
         echoed = f"* {message}"
+        quiet = False
+        if manual or message.startswith(("disconnected", "protocol error", "reconnect failed")):
+            self._recovery_status = None
+            self._reconnect_notice_token += 1
         if message.startswith(_SOCKET_CHANGES):
             # Echo state belongs to the socket that just went away. Left armed, every
             # command after it would go out as a password: no client commands, aliases or
             # speedwalks, and "***" in the log, because no WONT ECHO is ever coming.
             self.forget_hidden_input()
         if message.startswith(("connection lost", "connection unavailable")):
+            # Keep one outage notice across sockets that repeatedly open and immediately
+            # close. A changed interval is still worth reporting, even during recovery.
+            status = message.partition(";")[2] or message
+            quiet = status == self._recovery_status
+            self._recovery_status = status
+            self._reconnect_notice_token += 1
             # IsConnected() and plugin ticks must see a dropped link as down even during
             # backoff. after_reconnect() restores it; transient loss keeps timers and packs.
             self.engine.connected = False
@@ -3080,9 +3093,25 @@ class EngineApp:
                 label = self.name or "the MUD"
                 spoken = f"Reconnected to {label}."
                 echoed = f"* Reconnected to {label}"
-        self.voice.speak(spoken, channel=SYSTEM_CHANNEL, interrupt=True)
-        self._post(protocol.echo(echoed))  # raw detail stays reviewable in the output
-        # After the status is said, so a pack's own goodbye or welcome isn't cut off by it.
+        if message.startswith("reconnected") and self._recovery_status is not None:
+            quiet = True
+            self._reconnect_notice_token += 1
+            token = self._reconnect_notice_token
+
+            def announce_recovery() -> None:
+                if (token != self._reconnect_notice_token or self._closed
+                        or not self.engine.connected or self._recovery_status is None):
+                    return
+                self._recovery_status = None
+                # Queue the confirmation, without cutting off a MUD/pack's welcome.
+                self.voice.speak(spoken, channel=SYSTEM_CHANNEL, interrupt=False)
+                self._post(protocol.echo(echoed))
+
+            self._schedule(_RECONNECT_NOTICE_SECONDS, announce_recovery)
+        if not quiet:
+            self.voice.speak(spoken, channel=SYSTEM_CHANNEL, interrupt=True)
+            self._post(protocol.echo(echoed))  # raw detail stays reviewable in the output
+        # Lifecycle hooks run now even if the user-facing confirmation is deferred.
         if message.startswith(("disconnected", "protocol error", "reconnect failed",
                                "connection lost")):
             self._vip_connection_changed(False)
