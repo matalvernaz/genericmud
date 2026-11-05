@@ -26,6 +26,8 @@ class Panel:
     close = wx_app.SessionPanel.close
     disconnect = wx_app.SessionPanel.disconnect
     is_connected = wx_app.SessionPanel.is_connected
+    apply_connection_settings = wx_app.SessionPanel.apply_connection_settings
+    _apply_connection_settings = wx_app.SessionPanel._apply_connection_settings
 
     def is_connecting(self):
         return wx_app.SessionPanel.is_connecting(self)
@@ -330,6 +332,7 @@ async def test_tab_close_alone_finishes_transport_cleanup(monkeypatch, backoff):
         connection.on_status = status
         await asyncio.wait_for(dropped.wait(), 1)
     before_close = list(statuses)
+    retry = connection._reconnect_task
     closed = _observe_close(monkeypatch, connection)
     panel.close()
     await _wait_for_close(closed)
@@ -337,7 +340,7 @@ async def test_tab_close_alone_finishes_transport_cleanup(monkeypatch, backoff):
     assert writer.closed
     assert connection._read_task.done()
     if backoff:
-        assert connection._reconnect_task.done()
+        assert retry.done()
     assert not connection.connected and not connection.connecting
     assert statuses == before_close
 
@@ -418,6 +421,7 @@ async def test_initial_success_and_failure_stay_one_shot(monkeypatch, connects):
 
     monkeypatch.setattr(asyncio, "open_connection", open_connection)
     panel = Panel(monkeypatch)
+    panel._prefs.auto_reconnect = False
     panel.world.post_connect_commands = "look"
     try:
         await panel._start()
@@ -433,3 +437,189 @@ async def test_initial_success_and_failure_stay_one_shot(monkeypatch, connects):
     finally:
         await _close_panel(panel, monkeypatch)
         assert not panel._connection.connected and not panel._connection.connecting
+
+
+async def test_initial_failure_recovers_without_rebuilding_the_session(monkeypatch, tmp_path):
+    from genericmud.packs import PackStore
+
+    recovered = asyncio.Event()
+    opened = []
+    writer = Writer()
+
+    async def open_connection(*args, **kwargs):
+        opened.append(args)
+        if len(opened) == 1:
+            raise OSError("unavailable")
+        recovered.set()
+        return Reader(), writer
+
+    async def no_wait(delay):
+        pass
+
+    monkeypatch.setattr(asyncio, "open_connection", open_connection)
+    monkeypatch.setattr(asyncio, "sleep", no_wait)
+    panel = Panel(monkeypatch)
+    store = PackStore(tmp_path / "store")
+    source = tmp_path / "hooks.xml"
+    source.write_text(
+        "<muclient><plugin id='hooks' name='hooks'/><script><![CDATA[\n"
+        "function OnPluginInstall() Note('installed') end\n"
+        "function OnPluginConnect() Note('plugin ready') Send('hello') end\n"
+        "]]></script></muclient>", encoding="utf-8",
+    )
+    store.install(source, world="Test", trust=True)
+    panel._packs = store
+    panel.world.post_connect_commands = "look"
+    await panel._start()
+    app = panel.app
+    try:
+        await asyncio.wait_for(recovered.wait(), 1)
+        assert panel.app is app
+        assert panel.is_connected() and app.engine.connected
+        assert writer.sent == [b"look\r\n", b"hello\r\n"]
+        assert len(opened) == 2
+        assert panel.backend.spoken.count("Reconnected to Test.") == 1
+        assert panel.backend.spoken.count("installed") == 1
+        assert panel.backend.spoken.count("plugin ready") == 1
+    finally:
+        await _close_panel(panel, monkeypatch)
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_manual_reconnect_respects_preference_on_next_drop(monkeypatch, enabled):
+    reader = asyncio.StreamReader()
+
+    async def open_connection(*args, **kwargs):
+        return reader, Writer()
+
+    monkeypatch.setattr(asyncio, "open_connection", open_connection)
+    panel = Panel(monkeypatch)
+    panel._prefs.auto_reconnect = enabled
+    panel._connect_finished = True  # initialize a stopped tab for manual reconnect
+    await panel._start()
+    try:
+        await panel._reconnect()
+        assert panel.is_connected()
+        assert panel._connection.auto_reconnect == enabled
+        reader.feed_eof()
+        await panel._connection._read_task
+        assert panel.is_connecting() == enabled
+    finally:
+        await _close_panel(panel, monkeypatch)
+
+
+@pytest.mark.parametrize("accepted", [False, True])
+async def test_connection_settings_save_and_reach_all_sessions(monkeypatch, tmp_path, accepted):
+    from genericmud.config.ui_prefs import load_ui_prefs, save_ui_prefs
+    from tests.test_auto_reconnect import Sleeps
+
+    async def open_connection(*args, **kwargs):
+        raise OSError("unavailable")
+
+    monkeypatch.setattr(asyncio, "open_connection", open_connection)
+    sleeps = Sleeps()
+    monkeypatch.setattr(asyncio, "sleep", sleeps)
+    prefs = UiPrefs(auto_reconnect=False)
+    panels = [Panel(monkeypatch), Panel(monkeypatch)]
+    for panel in panels:
+        panel._prefs = prefs
+        await panel._start()
+    path = tmp_path / "ui-prefs.toml"
+    monkeypatch.setattr(wx_app, "save_ui_prefs", lambda value: save_ui_prefs(value, path))
+    destroyed = []
+
+    class Dialog:
+        def __init__(self, parent, current):
+            assert current is prefs
+
+        def ShowModal(self):
+            return wx_app.wx.ID_OK if accepted else wx_app.wx.ID_CANCEL
+
+        def get_settings(self):
+            return True, 300
+
+        def Destroy(self):
+            destroyed.append(True)
+
+    monkeypatch.setattr(wx_app, "ConnectionSettingsDialog", Dialog)
+    frame = SimpleNamespace(
+        _prefs=prefs,
+        book=SimpleNamespace(GetPageCount=lambda: 2, GetPage=lambda index: panels[index]),
+    )
+    try:
+        wx_app.GenericMudFrame._on_connection_settings(frame, None)
+        assert destroyed == [True]
+        if accepted:
+            await sleeps.next(300)
+            await sleeps.next(300)
+            assert load_ui_prefs(path) == prefs
+            assert prefs.auto_reconnect and prefs.reconnect_interval == 300
+            assert all(panel.is_connecting() for panel in panels)
+            assert (panels[0]._connection._reconnect_task
+                    is not panels[1]._connection._reconnect_task)
+            added = Panel(monkeypatch)
+            added._prefs = prefs
+            panels.append(added)
+            await added._start()
+            await sleeps.next(300)
+            assert added._connection.auto_reconnect and added.is_connecting()
+        else:
+            assert not path.exists() and not prefs.auto_reconnect
+            assert all(not panel.is_connecting() for panel in panels)
+    finally:
+        for panel in panels:
+            await _close_panel(panel, monkeypatch)
+
+
+async def test_settings_on_cannot_revive_an_intentionally_disconnected_panel(monkeypatch):
+    async def open_connection(*args, **kwargs):
+        return Reader(), Writer()
+
+    monkeypatch.setattr(asyncio, "open_connection", open_connection)
+    panel = Panel(monkeypatch)
+    await panel._start()
+    closed = _observe_close(monkeypatch, panel._connection)
+    panel.disconnect()
+    await _wait_for_close(closed)
+    try:
+        assert panel._prefs.auto_reconnect is True
+        panel._apply_connection_settings(False, 5)
+        panel._apply_connection_settings(True, 5)
+        assert not panel.is_connected() and not panel.is_connecting()
+        await panel._reconnect()
+        assert panel.is_connected()
+    finally:
+        await _close_panel(panel, monkeypatch)
+
+
+async def test_initial_recovery_restores_login_and_the_world_codec(monkeypatch):
+    connected = asyncio.Event()
+    writer = Writer()
+    attempts = []
+
+    async def open_connection(*args, **kwargs):
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise OSError("unavailable")
+        connected.set()
+        return Reader(), writer
+
+    async def no_wait(delay):
+        pass
+
+    monkeypatch.setattr(asyncio, "open_connection", open_connection)
+    monkeypatch.setattr(asyncio, "sleep", no_wait)
+    panel = Panel(monkeypatch)
+    panel.world.encoding = "cp1251"
+    panel.world.connect_method = "diku"
+    panel.world.post_connect_commands = "я"
+    panel._credentials = SimpleNamespace(get=lambda world: ("hero", "secret"))
+    await panel._start()
+    assert writer.sent == []  # no blind login is typed before a socket exists
+    try:
+        await asyncio.wait_for(connected.wait(), 1)
+        assert panel.app.engine.connected
+        assert writer.sent == [b"hero\r\n", b"secret\r\n", b"\xff\xff\r\n"]
+        assert panel.backend.spoken.count("Reconnected to Test.") == 1
+    finally:
+        await _close_panel(panel, monkeypatch)

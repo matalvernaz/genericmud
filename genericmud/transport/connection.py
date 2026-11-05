@@ -102,16 +102,19 @@ _QUIT_GRACE_SECONDS = 30.0  # a quit older than this no longer suppresses reconn
 
 @dataclass
 class ReconnectPolicy:
-    """Exponential backoff schedule for auto-reconnect."""
+    """Backoff or fixed-interval schedule for auto-reconnect."""
 
     base_delay: float = 1.0
     max_delay: float = 30.0
     max_attempts: int = 6  # 0 = retry forever
+    fixed_interval: float | None = None  # native connection settings; None keeps backoff
 
     def delay_for(self, attempt: int) -> float | None:
         """Seconds to wait before ``attempt`` (1-based), or None once exhausted."""
         if self.max_attempts and attempt > self.max_attempts:
             return None
+        if self.fixed_interval is not None:
+            return self.fixed_interval
         if self.base_delay == 0:
             return min(self.max_delay, 0.0)
         try:
@@ -145,7 +148,7 @@ class MudConnection:
         self.auto_reconnect = False
         self.reconnect_policy = ReconnectPolicy()
         self.on_status: Callable[[str], None] | None = None
-        self._closing = False  # True only on a deliberate disconnect (suppresses reconnect)
+        self._closing = False  # intentional/terminal stop; only a manual connect clears it
         # Quit commands seen on this connection suppress reconnect on the close that follows.
         self.quit_commands = set(DEFAULT_QUIT_COMMANDS)
         self._quit_sent_at: float | None = None  # monotonic time of the last quit command
@@ -172,7 +175,8 @@ class MudConnection:
         whichever socket is newest, tear down each other's, and restart the backoff without
         end, so anything that offers to connect has to check this first.
         """
-        if self._closing and self._read_task is not None and not self._read_task.done():
+        if (self._read_task is not None and not self._read_task.done()
+                and (self._closing or self._writer is not None and self._writer.is_closing())):
             return True  # the cancelled reader must finish before a new socket can replace it
         if self._handshakes:
             return True
@@ -204,16 +208,17 @@ class MudConnection:
             ctx = ssl_context or ssl.create_default_context()
         task = asyncio.current_task()
         assert task is not None
+        cancellations = task.cancelling()
         self._handshakes.add(task)
         try:
             reader, writer = await asyncio.open_connection(host, port, ssl=ctx)
         except OSError:
-            if self._closing:
+            if self._closing or task.cancelling() > cancellations:
                 return  # a handshake that fails after cancellation is no longer reportable
             raise
         finally:
             self._handshakes.discard(task)
-        if self._closing:
+        if self._closing or task.cancelling() > cancellations:
             # A network operation may finish despite cancellation. Drop its late socket
             # instead of going live behind the user who just disconnected.
             writer.close()
@@ -250,12 +255,18 @@ class MudConnection:
             pass  # a network drop (TimeoutError/ConnectionReset are OSErrors): reconnect below
         finally:
             self._teardown()
+            closing = self._closing  # UI close already announced itself; server logout hasn't
+            if self._server_closing or (
+                self._quit_sent_at is not None
+                and time.monotonic() - self._quit_sent_at <= _QUIT_GRACE_SECONDS
+            ):
+                self._closing = True  # don't revive a completed logout when settings change
             if protocol_error is not None:
+                self._closing = True  # only a manual reconnect may retry an unreadable stream
                 self._status(f"protocol error, disconnected: {protocol_error}")
             elif self._should_reconnect():
-                # Kept, not fire-and-forget: `connecting` reads it to tell the backoff is running.
-                self._reconnect_task = asyncio.create_task(self._reconnect_loop())
-            elif not self._closing:
+                self.start_reconnect()
+            elif not closing:
                 # A drop we won't reconnect (quit/auto_reconnect off); confirm it to the user.
                 # A user-initiated close() stays quiet -- the UI already announced it.
                 self._status("disconnected")
@@ -426,16 +437,58 @@ class MudConnection:
         if self.on_status is not None:
             self.on_status(message)
 
+    def configure_reconnect(self, enabled: bool, interval: int) -> None:
+        """Apply native settings on the loop thread, without stopping a live/manual connection."""
+        if type(interval) is not int or not 1 <= interval <= 300:
+            raise ValueError("reconnect interval must be an integer from 1 to 300")
+        self.auto_reconnect = enabled
+        self.reconnect_policy = ReconnectPolicy(max_attempts=0, fixed_interval=interval)
+        if not enabled:
+            if self._reconnect_task is not None and not self.connected:
+                self._reconnect_task.cancel()  # interrupts both sleep and automatic handshake
+        else:
+            self.start_reconnect()
+
+    def start_reconnect(self) -> bool:
+        """Start one recovery task for this target, unless stopped or already busy."""
+        if (self._target is None or not self._should_reconnect()
+                or self.connected or self.connecting):
+            return False
+        if (self._read_task is not None and not self._read_task.done()
+                and self._read_task is not asyncio.current_task()):
+            return False
+        task = asyncio.create_task(self._reconnect_loop())
+        self._reconnect_task = task
+        task.add_done_callback(self._reconnect_finished)
+        return True
+
+    def _reconnect_finished(self, task: asyncio.Task[None]) -> None:
+        if self._reconnect_task is not task:
+            return
+        self._reconnect_task = None
+        if task.cancelling() and not self._closing:
+            if self.auto_reconnect:
+                # Off then On while cancellation was still draining: resume only once done.
+                self.start_reconnect()
+            elif not self.connected and not self._handshakes:
+                self._status("disconnected")
+
     async def _reconnect_loop(self) -> None:
         assert self._target is not None
         host, port, tls, ssl_context = self._target
         attempt = 1
-        while not self._closing:
+        reason = "connection unavailable" if self._read_task is None else "connection lost"
+        last_delay = None
+        while not self._closing and not asyncio.current_task().cancelling():
             delay = self.reconnect_policy.delay_for(attempt)
             if delay is None:
                 self._status("reconnect failed; giving up")
                 return
-            self._status(f"connection lost; reconnecting in {int(delay)}s (attempt {attempt})")
+            if self.reconnect_policy.fixed_interval is None:
+                self._status(f"{reason}; reconnecting in {int(delay)}s (attempt {attempt})")
+            elif delay != last_delay:
+                self._status(f"{reason}; reconnecting every {int(delay)}s")
+                last_delay = delay
             await asyncio.sleep(delay)
             if self._closing:  # user disconnected during the backoff wait
                 return
@@ -444,7 +497,7 @@ class MudConnection:
             except OSError:
                 attempt += 1
                 continue
-            if self._closing or not self.connected:
+            if self._closing or not self.connected or asyncio.current_task().cancelling():
                 # A cancelled handshake may still return; connect() drops its late socket.
                 return
             self._status("reconnected")

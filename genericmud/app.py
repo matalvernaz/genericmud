@@ -120,6 +120,7 @@ _SOCKET_CHANGES = (
     "protocol error",
     "reconnect failed",
     "connection lost",
+    "connection unavailable",
     "reconnected",
 )
 _MEDIA_DEFAULT_VOLUME = 50  # Client.Media.Play's volume when the server leaves it out (spec)
@@ -3047,7 +3048,7 @@ class EngineApp:
             # command after it would go out as a password: no client commands, aliases or
             # speedwalks, and "***" in the log, because no WONT ECHO is ever coming.
             self.forget_hidden_input()
-        if message.startswith("connection lost"):
+        if message.startswith(("connection lost", "connection unavailable")):
             # IsConnected() and plugin ticks must see a dropped link as down even during
             # backoff. after_reconnect() restores it; transient loss keeps timers and packs.
             self.engine.connected = False
