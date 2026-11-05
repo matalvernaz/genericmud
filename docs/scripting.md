@@ -56,6 +56,13 @@ Typing `combo goblin` now sends `stand`, `kill goblin`, and `consider goblin`.
 The older `%1` spelling still works, but `${1}` also works in Lua and is easier
 to use consistently.
 
+A shortcut with no asterisk takes whatever you type after it, too. An alias for
+`sh` that sends `shoot` turns `sh goblin` into `shoot goblin`. The extra words
+go on the end of the last command, unless a command has `${1}` in it to say
+where they belong. This only happens when no other alias wants the command, so
+an alias for `sh *`, or one from a soundpack, still comes first. Lua's
+`mud.alias` doesn't do this: a script's alias matches exactly what it says.
+
 ## Make a trigger without writing code
 
 1. Show **Triggers** and choose **New**.

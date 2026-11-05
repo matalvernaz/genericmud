@@ -101,6 +101,11 @@ consider ${1}
 Choose OK. Typing combo goblin now sends all three commands, with goblin in
 place of ${1}. The older %1 spelling still works.
 
+An alias with no * in it also takes whatever you type after it, when no other
+alias wants the command: an alias sh sending shoot turns sh goblin into shoot
+goblin. The words go on the end of the last command, unless a command has ${1}
+in it to say where they belong.
+
 Make a trigger without code:
 Show Triggers and choose New. Enter the text to watch for. The line contains
 this text is usually the right match choice. Add any commands, spoken text,

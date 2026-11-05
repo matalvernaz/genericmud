@@ -36,6 +36,15 @@ _GAG_CHOICES = ("none", "speech", "line")
 # sugar over regex (escaped literal, searched / anchored); "wildcard" is * and ?.
 MATCH_CHOICES = ("contains", "wildcard", "exact", "regex")
 _MAX_COMMANDS_PER_RULE = 100
+# A plain alias (no wildcards, not a regular expression) also takes a command with more words
+# after it and carries them along: "sh" sending "shoot" turns "sh goblin" into "shoot goblin".
+# That reading runs below every other alias, so it only takes a command nothing else would: a
+# "sh *" alias, or a soundpack's own, still wins. MUSHclient's speech commands sit at
+# -1,000,000, the lowest any pack uses.
+EXTRA_WORDS_PRIORITY = -2_000_000
+# A command that places the first capture itself, as %1 or ${1}, decides where the extra words
+# go; otherwise they go on the end of the last command.
+_FIRST_CAPTURE_RE = re.compile(r"%1|\$\{1\}")
 
 
 @dataclass
@@ -216,9 +225,13 @@ def _expand_commands(
 
 
 def _command_action(
-    api: ScriptApi, text: str
+    api: ScriptApi, text: str, *, carry_words: bool = False
 ) -> tuple[tuple[str, ...], Callable[[MatchContext | None], bool]]:
-    """A contained command-stack action plus whether the stack has any commands."""
+    """A contained command-stack action plus whether the stack has any commands.
+
+    ``carry_words`` puts the match's first capture, the words typed after a plain alias, on
+    the end of the last command.
+    """
     commands = _commands(text)
     spoken_errors: set[str] = set()
 
@@ -235,11 +248,24 @@ def _command_action(
                 spoken_errors.add(detail)
                 api.speak(f"Automation command not sent: {detail}", channel="system")
             return False
+        if carry_words and expanded and ctx is not None and len(ctx.wildcards) > 1:
+            # Added after expansion, so the player's own words go out as typed and are never
+            # read as a template.
+            expanded[-1] = f"{expanded[-1].rstrip()} {ctx.wildcards[1]}"
         for command in expanded:
             api.send(command)
         return True
 
     return commands, run
+
+
+def extra_words_pattern(shortcut: str) -> str:
+    """The regex for a plain alias with more words typed after it; those words are capture 1.
+
+    Matched from the start of the command and to its end, with at least one space between, so
+    "sh" takes "sh goblin" but never "shout".
+    """
+    return re.escape(shortcut) + r"[ \t]+(.*\S)[ \t]*\Z"
 
 
 def register_rules(api: ScriptApi, rules: UserRules) -> None:
@@ -330,7 +356,7 @@ _KEY_REPLY_CHANNEL = REVIEW_CHANNEL
 
 
 def _register_alias(api: ScriptApi, a: UserAlias) -> None:
-    _, send_commands = _command_action(api, a.send)
+    commands, send_commands = _command_action(api, a.send)
 
     def fire(ctx: MatchContext) -> None:
         sent = send_commands(ctx)
@@ -338,6 +364,23 @@ def _register_alias(api: ScriptApi, a: UserAlias) -> None:
             api.speak(_speech(api, a.speak, ctx))
 
     api.add_alias(a.pattern, fire, regex=a.regex, source=SOURCE)
+    # A plain alias also takes more words typed after it. Not one that only speaks: it has no
+    # command for the words to join, and taking the line would stop it reaching the MUD.
+    plain = not a.regex and not any(wildcard in a.pattern for wildcard in "*?")
+    if not plain or not commands:
+        return
+    places_words = any(_FIRST_CAPTURE_RE.search(command) for command in commands)
+    _, send_with_words = _command_action(api, a.send, carry_words=not places_words)
+
+    def fire_with_words(ctx: MatchContext) -> None:
+        sent = send_with_words(ctx)
+        if a.speak and sent:
+            api.speak(_speech(api, a.speak, ctx))
+
+    api.add_alias(
+        extra_words_pattern(a.pattern), fire_with_words, regex=True, source=SOURCE,
+        priority=EXTRA_WORDS_PRIORITY, fallback=True,
+    )
 
 
 def _register_key(api: ScriptApi, k: UserKey) -> None:

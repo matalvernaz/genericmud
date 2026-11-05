@@ -2380,6 +2380,15 @@ class EngineApp:
                 f"^{re.escape(pattern)}$", callback,
                 regex=True, name=pattern, source=INTERACTIVE_SOURCE, keep_evaluating=False,
             )
+            # Words typed after the shortcut go along on the end of the last command, as with
+            # a plain alias made in the Automation Manager, but only when no other alias takes
+            # the command. The same name, so /unalias removes both.
+            self.engine.add_alias(
+                user_rules.extra_words_pattern(pattern),
+                self._user_rule_callback(command, carry_words=True),
+                regex=True, name=pattern, source=INTERACTIVE_SOURCE,
+                priority=user_rules.EXTRA_WORDS_PRIORITY, fallback=True,
+            )
         else:
             self.engine.remove_trigger(pattern)
             self.engine.add_trigger(  # (?i): match the MUD's output regardless of case
@@ -2415,18 +2424,24 @@ class EngineApp:
         if self.hub is None or not self.hub.send_to(session, command):
             self._speak_system(f"no session {session}")
 
-    def _user_rule_callback(self, command: str) -> Callback:
-        def callback(_ctx: MatchContext) -> None:
-            self._run_user_command(command)
+    def _user_rule_callback(self, command: str, *, carry_words: bool = False) -> Callback:
+        """Run ``command`` when the rule fires; ``carry_words`` adds the words typed after it."""
+
+        def callback(ctx: MatchContext) -> None:
+            words = ctx.wildcards[1] if carry_words and len(ctx.wildcards) > 1 else ""
+            self._run_user_command(command, extra_words=words)
 
         return callback
 
-    def _run_user_command(self, command: str) -> None:
+    def _run_user_command(self, command: str, *, extra_words: str = "") -> None:
         if self._dispatch_depth >= MAX_ALIAS_DEPTH:
             return  # an alias/trigger looped on itself; stop rather than hang
         self._dispatch_depth += 1
         try:
-            for piece in self._split_commands(command):
+            pieces = self._split_commands(command)
+            if extra_words and pieces:
+                pieces[-1] = f"{pieces[-1].rstrip()} {extra_words}"
+            for piece in pieces:
                 self._dispatch_command(piece)
         finally:
             self._dispatch_depth -= 1

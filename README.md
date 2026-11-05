@@ -376,9 +376,17 @@ off its own map — some clan halls and quest rooms are deliberately unmapped.
 
 A trigger reacts to text from the MUD. It can play a sound, speak something
 shorter, send commands, hide the matched line, interrupt speech, or route the
-line to a chat channel. An alias replaces a shortcut you type: `sh *` can send
-`shoot ${1}`. A hotkey runs commands when you press a chosen key. These editors
-use ordinary fields; no code is required.
+line to a chat channel. An alias replaces a shortcut you type: `sh` can send
+`shoot`, and whatever you type after the shortcut goes along with it, so
+`sh goblin` sends `shoot goblin`. A hotkey runs commands when you press a chosen
+key. These editors use ordinary fields; no code is required.
+
+An alias with no `*` in it takes the words after it only when nothing else wants
+the command: an alias written with a `*` (`sh *` sending `shoot at ${1}`), one
+written as a regular expression, or a soundpack's own alias comes first. When
+the alias sends several commands, the extra words go on the end of the last one,
+unless a command says where they belong with `${1}`, as in `give ${1} to bob`.
+The shortcut has to be a word of its own, so `sh` never takes `shout`.
 
 Each trigger, alias, or hotkey can send one command or a sequence. Put one
 command on each line. The whole sequence is filled in before its first command
@@ -431,8 +439,9 @@ shorter guide is available offline under **Automation → Automation help**.
 
 For something you only need right now, you can skip the dialog and type it:
 
-- `/alias sh = shoot goblin` — typing `sh` sends `shoot goblin`. Your shortcut
-  has to be the whole line, exactly.
+- `/alias sh = shoot` — typing `sh` sends `shoot`, and anything you type after
+  it goes along: `sh goblin` sends `shoot goblin`. Case matters, and `sh` has to
+  be a word of its own, so `shout` is left alone.
 - `/trigger you are hungry = eat bread` — when that text turns up anywhere in a
   line from the MUD, it sends `eat bread`. Case doesn't matter.
 - `/aliases` and `/triggers` read back what you've made this session.

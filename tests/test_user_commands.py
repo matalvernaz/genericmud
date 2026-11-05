@@ -36,12 +36,36 @@ def test_alias_target_supports_command_stacking():
     assert sent == ["cast armor", "cast shield"]
 
 
-def test_alias_is_exact_not_a_prefix():
+def test_alias_carries_the_words_after_it_but_is_not_a_prefix():
     app, sent, _ = _app()
     _input(app, "/alias k = kill")
     sent.clear()
-    _input(app, "k goblin")  # not exactly "k"
-    assert sent == ["k goblin"]  # alias didn't fire; sent literally
+    _input(app, "k goblin")
+    assert sent == ["kill goblin"]  # the words typed after the shortcut go along
+    sent.clear()
+    _input(app, "kick goblin")
+    assert sent == ["kick goblin"]  # "k" is a word of its own, not the start of every command
+
+
+def test_alias_words_go_on_the_end_of_the_last_command():
+    app, sent, _ = _app()
+    _input(app, "/alias kk = stand;kill")
+    sent.clear()
+    _input(app, "kk the goblin")
+    assert sent == ["stand", "kill the goblin"]
+
+
+def test_redefining_or_removing_an_alias_takes_its_extra_words_reading_too():
+    app, sent, _ = _app()
+    _input(app, "/alias k = kill")
+    _input(app, "/alias k = kick")
+    sent.clear()
+    _input(app, "k goblin")
+    assert sent == ["kick goblin"]  # the old "kill" reading went with the old alias
+    _input(app, "/unalias k")
+    sent.clear()
+    _input(app, "k goblin")
+    assert sent == ["k goblin"]
 
 
 def test_trigger_fires_case_insensitively():

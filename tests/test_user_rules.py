@@ -66,6 +66,81 @@ def test_alias_with_wildcard_args(tmp_path):
     assert sink.sent == ["shoot goblin"]
 
 
+def test_a_plain_alias_carries_the_words_typed_after_it(tmp_path):
+    # MUDBall 1.5.0's answer to the same question, with no wildcard needed: "sh" sending
+    # "shoot" makes "sh goblin" send "shoot goblin".
+    rules = UserRules(aliases=[UserAlias(pattern="sh", send="shoot")])
+    sink, engine = _register(rules, tmp_path)
+    assert engine.process_input("sh goblin") == []
+    assert sink.sent == ["shoot goblin"]
+    sink.sent.clear()
+    assert engine.process_input("sh") == []  # on its own it is what it always was
+    assert sink.sent == ["shoot"]
+
+
+def test_the_extra_words_join_the_last_command(tmp_path):
+    rules = UserRules(aliases=[UserAlias(pattern="kk", send="stand\nkill")])
+    sink, engine = _register(rules, tmp_path)
+    engine.process_input("kk the goblin")
+    assert sink.sent == ["stand", "kill the goblin"]
+
+
+def test_a_command_can_place_the_extra_words_itself(tmp_path):
+    rules = UserRules(aliases=[
+        UserAlias(pattern="gv", send="give %1 to bob"),
+        UserAlias(pattern="pt", send="put ${1} in bag\nlook"),
+    ])
+    sink, engine = _register(rules, tmp_path)
+    engine.process_input("gv sword")
+    engine.process_input("pt the gem")
+    assert sink.sent == ["give sword to bob", "put the gem in bag", "look"]
+
+
+def test_the_extra_words_are_sent_as_typed(tmp_path):
+    # Added after the alias's own templates are filled in, so a player's ${...} is text.
+    rules = UserRules(aliases=[UserAlias(pattern="say2", send="say")])
+    sink, engine = _register(rules, tmp_path)
+    engine.process_input("say2 ${mud:Char.Vitals.hp} is a template")
+    assert sink.sent == ["say ${mud:Char.Vitals.hp} is a template"]
+
+
+def test_a_plain_alias_takes_whole_words_only(tmp_path):
+    rules = UserRules(aliases=[UserAlias(pattern="sh", send="shoot")])
+    sink, engine = _register(rules, tmp_path)
+    assert engine.process_input("shout hello") == ["shout hello"]
+    assert engine.process_input("SH goblin") == ["SH goblin"]  # as case-sensitive as before
+    assert sink.sent == []
+
+
+def test_a_wildcard_alias_or_a_packs_own_alias_still_wins(tmp_path):
+    rules = UserRules(aliases=[
+        UserAlias(pattern="sh", send="shoot"),
+        UserAlias(pattern="sh *", send="shoot at ${1}"),
+        UserAlias(pattern="cast", send="say casting"),
+    ])
+    sink, engine = _register(rules, tmp_path)
+    pack = ScriptApi(engine, source="pack", base_dir=str(tmp_path))
+    pack.add_alias(
+        r"^cast (.+)$", lambda ctx: pack.send(f"cast '{ctx.wildcards[1]}'"), regex=True
+    )
+    engine.process_input("sh goblin")
+    engine.process_input("cast fireball")
+    assert sink.sent == ["shoot at goblin", "cast 'fireball'"]
+
+
+def test_an_alias_that_only_speaks_leaves_longer_commands_alone(tmp_path):
+    rules = UserRules(aliases=[
+        UserAlias(pattern="hp", speak="checking"),
+        UserAlias(pattern="^ex$", regex=True, send="examine"),
+    ])
+    sink, engine = _register(rules, tmp_path)
+    assert engine.process_input("hp potion") == ["hp potion"]
+    # A regular expression means what it says. Read as plain text it would take a command that
+    # begins with its own characters, so this one would turn into "examine sword".
+    assert engine.process_input("^ex$ sword") == ["^ex$ sword"]
+    assert sink.sent == []
+
+
 def test_alias_command_stack_uses_captures_script_vars_and_mud_vars(tmp_path):
     rules = UserRules(aliases=[UserAlias(
         pattern="combo *",
