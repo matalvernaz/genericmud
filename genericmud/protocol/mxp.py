@@ -424,10 +424,9 @@ def _link(attrs: str) -> Link:
     instead of going to the MUD -- so a link can offer to start a command without finishing
     it, and the player completes or abandons it.
 
-    A command with ``|`` in it is a menu of several, and ``HINT=`` captions them: its first
-    caption belongs to the link itself and the rest follow the commands in order. A menu lets
-    a MUD offer a choice without spending a line on every option, and following one asks which
-    rather than assuming the first.
+    A command with ``|`` in it is a menu of several, and ``HINT=`` captions them (see
+    :func:`_menu_captions`). A menu lets a MUD offer a choice without spending a line on every
+    option, and following one asks which rather than assuming the first.
     """
     tokens = _tokens(attrs.strip())
     href = re.search(
@@ -443,18 +442,23 @@ def _link(attrs: str) -> Link:
             command = _unquote(token)
             break
     captions = _attribute(attrs, "HINT").split("|")
-    parts = [item for item in command.split("|") if item.strip()]
+    entries = command.split("|")
+    parts = [entry for entry in entries if entry.strip()]
     choices: tuple[tuple[str, str], ...] = ()
+    own_caption = captions[0]
     if len(parts) > 1:
-        # A menu's entries are trimmed: the separators are what matter, not the spacing round
-        # them. (command, caption), captions following the link's own, so the first command's
-        # is captions[1]. A command the MUD gave no caption is still offered, by its command.
-        items = [item.strip() for item in parts]
-        choices = tuple(
-            (item, captions[number + 1] if number + 1 < len(captions) else "")
-            for number, item in enumerate(items[:_MAX_MENU_ITEMS])
-        )
-        single = items[0]
+        own_caption, entry_captions = _menu_captions(captions, len(entries))
+        # Captions pair with entries by the position the MUD wrote them in, so an empty entry
+        # (a separator in a mouse menu) takes its caption with it instead of shifting every
+        # later one onto the wrong command. Entries are trimmed: the separators are what
+        # matter, not the spacing round them. A command with no caption is offered as itself.
+        pairs = [
+            (entry.strip(), entry_captions[index] if index < len(entry_captions) else "")
+            for index, entry in enumerate(entries)
+            if entry.strip()
+        ]
+        choices = tuple(pairs[:_MAX_MENU_ITEMS])
+        single = choices[0][0]
     else:
         # One command, kept exactly as the MUD wrote it: PROMPT's trailing space is the whole
         # point of that tag, and trimming here would glue the player's next word onto it.
@@ -464,9 +468,24 @@ def _link(attrs: str) -> Link:
         single,
         # A menu is not a typed command: PROMPT belongs to the one command it describes.
         False if choices else _has_prompt_flag(attrs, command),
-        captions[0] if captions else "",
+        own_caption,
         choices,
     )
+
+
+def _menu_captions(captions: list[str], entries: int) -> tuple[str, list[str]]:
+    """Split a menu's ``HINT=`` into the link's own caption and one caption per entry.
+
+    Read the way Mudlet reads it (TTextEdit's hint offset): one more caption than entries
+    means the first is the link's own and the rest go with the entries in order; otherwise
+    they pair with the entries one to one and the link has none of its own. A single caption
+    over a menu is the link's own, and its commands are offered as themselves.
+    """
+    if len(captions) > entries:
+        return captions[0], captions[1:]
+    if len(captions) == 1:
+        return captions[0], []
+    return "", captions
 
 
 def _attribute(attrs: str, name: str) -> str:

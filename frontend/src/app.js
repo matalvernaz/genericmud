@@ -6,6 +6,7 @@ import { Output } from "./output.js";
 import { Input } from "./input.js";
 import { Audio } from "./audio.js";
 import { Status } from "./status.js";
+import { showMenu } from "./menu.js";
 
 const params = new URLSearchParams(location.search);
 const port = params.get("port") || "8731";
@@ -18,42 +19,17 @@ const announceEl = document.getElementById("sr-announce");
 // A link in the output is activated by the renderer and decided by the engine, which owns the
 // policy (no client commands, web URLs only). `bridge` is reached lazily for the same reason
 // `audio`'s error callback is: it only fires on a later click, by which point it is assigned.
-const output = new Output(outputEl, (text, command, insert) =>
-  bridge.send({ type: "link", text, command, insert }));
+const output = new Output(outputEl,
+  (text, command, insert) => bridge.send({ type: "link", text, command, insert }),
+  (text, choices) => openMenu({ text, choices }));
+// A <SEND> menu: from a click on its link, or from the engine when the review keys follow it.
+const openMenu = (message) => showMenu(document, message, { send: (m) => bridge.send(m) });
 // onError reaches `bridge` lazily: it only fires on a later sound failure, by which
 // point the const below is assigned. Errors land in the engine's diagnostic trace.
 const audio = new Audio((e) =>
   bridge.send({ type: "client_error", scope: "audio", file: e.file, error: e.error }));
 const status = new Status(statusEl);
 let input;
-
-// A <SEND> menu asks which command was meant. The strip stays until one is picked; nothing
-// is sent without a click, and the engine still decides what the command may do.
-let menuBar = null;
-function showMenu(message) {
-  if (menuBar) menuBar.remove();
-  menuBar = document.createElement("div");
-  menuBar.className = "mxp-menu";
-  menuBar.setAttribute("role", "group");
-  menuBar.setAttribute("aria-label", `Choose: ${message.text}`);
-  const labels = [];
-  for (const [command, caption] of message.choices) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.textContent = caption || command;
-    button.addEventListener("click", () => {
-      bridge.send({ type: "menu_choice", text: caption || command, command });
-      if (menuBar) menuBar.remove();
-      menuBar = null;
-      inputEl.focus();
-    });
-    labels.push(button.textContent);
-    menuBar.appendChild(button);
-  }
-  document.body.appendChild(menuBar);
-  menuBar.querySelector("button")?.focus();
-  announceEl.textContent = `Choose: ${labels.join(", ")}`;
-}
 
 const handlers = {
   line: (m) => {
@@ -73,7 +49,7 @@ const handlers = {
   input_masked: (m) => input.setMasked(m.masked),
   // A link that carries half a command: put it in the box, send nothing.
   input_text: (m) => input.setText(m.text),
-  menu: (m) => showMenu(m),
+  menu: (m) => openMenu(m),
   // A link to a web page, when there is no native window to hand it to. noopener/noreferrer
   // keep the opened page from reaching back into the game tab.
   open_url: (m) => window.open(m.url, "_blank", "noopener,noreferrer"),

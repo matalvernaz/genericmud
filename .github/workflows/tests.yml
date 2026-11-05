@@ -64,5 +64,5 @@ jobs:
 
       - name: Test web input
         run: |
-          node --test tests/test_frontend_input.mjs tests/test_frontend_ws.mjs
+          node --test tests/test_frontend_input.mjs tests/test_frontend_ws.mjs tests/test_frontend_menu.mjs
           node --check frontend/src/app.js
