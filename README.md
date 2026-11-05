@@ -116,6 +116,13 @@ silently, and what you typed stays in the box, ready to send once you're back.
 genericMud's own slash commands, such as `/to` and `/aliases`, still run without
 asking.
 
+Up and Down walk your command history only when the box is empty, or when it holds
+a command you have already sent and the caret is at the start or the end of it.
+Anything else is a draft you are still writing: the arrows move the caret and leave
+the text alone, because losing typed-but-unsent input is silent data loss when you
+cannot glance at the box. Arrowing past the newest entry empties the box, and
+**Ctrl+A** then Backspace clears a draft when you want it gone.
+
 `look`, `north` (or just `n`), `say hello`, and `help` are good first commands
 on almost any MUD. A few conveniences in the command box:
 
@@ -587,7 +594,7 @@ View, **Alt+H** Help.
 | Alt+1..9 / Alt+0 | Switch to that world, in the order the tabs were opened |
 | Ctrl+Q | Exit |
 | Enter | Send the command line |
-| Up / Down | Command history |
+| Up / Down | Command history, from an empty box or from a command you've already sent |
 | Ctrl+Enter | Toggle autoretype (empty Enter resends your last command) |
 | Ctrl+Space / Ctrl+Shift+Space | Complete the word you're typing from recent output |
 | Numpad | Compass walking (View menu toggle) |

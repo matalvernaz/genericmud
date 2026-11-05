@@ -22,7 +22,6 @@ function makeInput() {
   input.bridge = { send: (message) => sent.push(message) };
   input.history = [];
   input.historyIndex = 0;
-  input.historyDraft = "";
   const announced = [];
   input.announce = (text) => announced.push(text);
   input.words = [];
@@ -141,15 +140,61 @@ test("browser find shortcuts remain available", () => {
   assert.deepEqual(sent, []);
 });
 
-test("history recall parks and restores the unsent draft", () => {
+test("an unsent draft is never replaced, in either direction", () => {
+  // The reported bug: Down emptied the box and the message was gone.
+  for (const direction of [-1, 1]) {
+    const { input } = makeInput();
+    input.history = ["look"];
+    input.historyIndex = 1;
+    input.element.value = "tell bob hel";  // typed but unsent
+    input.element.selectionStart = 0;
+    assert.equal(input._historyStep(direction), false);
+    assert.equal(input.element.value, "tell bob hel");
+  }
+});
+
+test("up from an empty box shows the newest command, and down empties it again", () => {
   const { input } = makeInput();
-  input.history = ["look"];
-  input.historyIndex = 1;
-  input.element.value = "tell bob hel";  // typed but unsent
-  input._recallHistory(-1);              // Up -> browse history
+  input.history = ["look", "score"];
+  input.historyIndex = 2;
+  assert.equal(input._historyStep(-1), true);
+  assert.equal(input.element.value, "score");
+  assert.equal(input._historyStep(1), true);
+  assert.equal(input.element.value, "");
+});
+
+test("history moves only when the caret is at an edge", () => {
+  const { input } = makeInput();
+  input.history = ["look", "score"];
+  input.historyIndex = 2;
+  input.element.value = "score";
+  input.element.selectionStart = 2;  // inside the message
+  assert.equal(input._historyStep(-1), false);
+  assert.equal(input.element.value, "score");
+  input.element.selectionStart = 0;
+  assert.equal(input._historyStep(-1), true);
   assert.equal(input.element.value, "look");
-  input._recallHistory(1);               // Down -> back to the draft, not blank
-  assert.equal(input.element.value, "tell bob hel");
+});
+
+test("an edited recall is an ordinary draft again", () => {
+  const { input } = makeInput();
+  input.history = ["look", "score"];
+  input.historyIndex = 1;
+  input.element.value = "score north";
+  assert.equal(input._historyStep(-1), false);
+  assert.equal(input.element.value, "score north");
+});
+
+test("walking back the way you came reaches the same entries", () => {
+  const { input } = makeInput();
+  input.history = ["look", "score"];
+  input.historyIndex = 2;
+  input._historyStep(-1);
+  input._historyStep(-1);
+  assert.equal(input.element.value, "look");
+  assert.equal(input._historyStep(-1), false);  // the oldest: nowhere older
+  assert.equal(input._historyStep(1), true);
+  assert.equal(input.element.value, "score");
 });
 
 test("completion replaces the whole word when the caret is mid-word", () => {

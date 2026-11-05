@@ -241,7 +241,7 @@ Ctrl+Q            Exit
 
 Typing:
 Enter             Send the command line
-Up / Down         Command history
+Up / Down         Command history (only from an empty box or a sent command)
 Ctrl+Enter        Toggle autoretype (empty Enter resends the last command)
 Ctrl+Space        Complete the current word from recent output
 Ctrl+Shift+Space  Complete, cycling backwards
