@@ -968,18 +968,25 @@ def test_a_reconnect_closed_during_its_handshake_says_nothing_untrue(
     # Ctrl+D on a dead tab, then Ctrl+W while the MUD hasn't answered yet: the closed tab
     # still said "Reconnected to Test." with no socket live, and marked its shut-down
     # engine connected. The same goes for the connection being closed under it, which
-    # connect() answers by dropping the late socket and returning quietly. "tab-closing" is
-    # the MUD answering before the closed tab's teardown has had its turn on the loop;
-    # "tab-closed-refused" is the MUD refusing, which a closed tab has no one to tell.
+    # connect() answers by cancelling the handshake, or dropping a socket already on its way.
+    # "tab-closing" lets the MUD answer before asynchronous close can cancel the handshake;
+    # the other cases cancel it before a socket or refusal can arrive.
     import asyncio
 
     handshake_started = asyncio.Event()
     release_handshake = asyncio.Event()
+    handshake_cancelled = asyncio.Event()
+    attempts: list[str] = []
     writers: list[_FakeMudWriter] = []
 
     async def held_open_connection(host, port, ssl=None):
+        attempts.append(host)
         handshake_started.set()
-        await release_handshake.wait()
+        try:
+            await release_handshake.wait()
+        except asyncio.CancelledError:
+            handshake_cancelled.set()
+            raise
         if refused:
             raise ConnectionRefusedError("Connection refused")
         writers.append(_FakeMudWriter())
@@ -990,17 +997,37 @@ def test_a_reconnect_closed_during_its_handshake_says_nothing_untrue(
 
     async def scenario():
         backend = _closing_panel_session(panel)
+        panel._connection.on_status = panel.app.on_connection_status
+        close_started = loop.create_future()
+        close = panel._connection.close
+
+        async def observed_close():
+            close_started.set_result(asyncio.current_task())
+            await close()
+
+        monkeypatch.setattr(panel._connection, "close", observed_close)
         reconnecting = asyncio.ensure_future(panel._reconnect())  # Ctrl+D
-        await handshake_started.wait()
+        await asyncio.wait_for(handshake_started.wait(), 1)
         if closed_by == "tab":
             panel.close()  # Ctrl+W before the MUD answers
         else:
-            await panel._connection.close()
+            asyncio.create_task(panel._connection.close())
         if settled_first:
-            await asyncio.sleep(0.01)  # the teardown runs before the MUD answers
+            closing = await asyncio.wait_for(close_started, 1)
+            await asyncio.wait_for(asyncio.shield(closing), 1)
         release_handshake.set()
-        await reconnecting
-        await asyncio.sleep(0.01)  # a teardown still queued runs now
+        if settled_first:
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(asyncio.shield(reconnecting), 1)
+            assert reconnecting.cancelled()
+        else:
+            await asyncio.wait_for(asyncio.shield(reconnecting), 1)
+            assert not reconnecting.cancelled()
+        closing = await asyncio.wait_for(close_started, 1)
+        await asyncio.wait_for(asyncio.shield(closing), 1)
+        assert handshake_cancelled.is_set() == settled_first
+        assert not panel._connection.connected and not panel._connection.connecting
+        assert asyncio.all_tasks() == {asyncio.current_task()}
         return backend
 
     try:
@@ -1008,7 +1035,8 @@ def test_a_reconnect_closed_during_its_handshake_says_nothing_untrue(
         assert backend.spoken == ["Reconnecting to Test."]  # said before the close only
         assert panel.app.engine.connected is False
         assert all(writer.closed for writer in writers)  # a late socket was dropped
-        assert len(writers) == (0 if refused else 1)
+        assert len(writers) == (0 if settled_first else 1)
+        assert attempts == ["mud.example"]
     finally:
         panel.app = None
         _close_question_panel(panel, loop)
@@ -1103,8 +1131,11 @@ def test_ctrl_d_works_in_the_first_tab_after_a_menu_was_opened_with_none(
     monkeypatch.setattr(wx_app, "make_voice_backend", RecordingBackend)
     monkeypatch.setattr(wx_app, "make_diagnostic_log", lambda: None)
 
-    async def no_session(_panel):
-        return None
+    startup_finished = asyncio.Event()
+
+    async def no_session(panel):
+        panel._connect_finished = True  # a completed but disconnected startup
+        startup_finished.set()
 
     monkeypatch.setattr(wx_app.SessionPanel, "_start", no_session)
     pressed: list[str] = []
@@ -1119,6 +1150,8 @@ def test_ctrl_d_works_in_the_first_tab_after_a_menu_was_opened_with_none(
         main._on_menu_open(menu_open)
         assert not item.IsEnabled()  # no tab: nothing to disconnect or reconnect
         main.open_session(World("Test", "mud.example", 4000))
+        loop.run_until_complete(asyncio.wait_for(startup_finished.wait(), 1))
+        assert not main._active_panel().is_connecting()
         assert item.IsEnabled()
         main.ProcessCommand(item.GetId())  # the route wx gives the Ctrl+D accelerator
         assert pressed == ["Test"]  # the tab isn't connected, so Ctrl+D reconnects it
