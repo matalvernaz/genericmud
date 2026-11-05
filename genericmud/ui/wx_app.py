@@ -309,6 +309,8 @@ _NUMPAD_COMPASS = {
     wx.WXK_NUMPAD5: "look", wx.WXK_NUMPAD0: "look",
     wx.WXK_NUMPAD_DECIMAL: "scan", wx.WXK_NUMPAD_SUBTRACT: "u", wx.WXK_NUMPAD_ADD: "d",
 }
+# How many sent commands can be recalled. Generous, because a pasted block fills it quickly.
+_HISTORY_LIMIT = 2000
 _COMPLETE_FORWARD = "ctrl+space"  # cycle a completion of the current input word
 _COMPLETE_BACKWARD = "ctrl+shift+space"
 # What each keymap namespace is for, so a refused hotkey can say what has the key.
@@ -386,6 +388,7 @@ class SessionPanel(wx.Panel):
         self._voice: VoiceRouter | None = None
         self._history: list[str] = []
         self._hist_index = 0
+        self._history_limit = _HISTORY_LIMIT
         # No parked draft: history moves only from an empty box or from a message that is
         # itself in history, so nothing unsent is ever replaced.
         self._input_masked = False  # the server hides typed input: keep it out of history
@@ -413,7 +416,15 @@ class SessionPanel(wx.Panel):
         self.output = wx.TextCtrl(self, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_DONTWRAP)
         self.output.SetName(f"{world.name} output")
         input_label = wx.StaticText(self, label="&Command:")
-        self.input = wx.TextCtrl(self, style=wx.TE_PROCESS_ENTER)
+        # Multi-line on purpose. A single-line field gives the screen reader's "previous line"
+        # and "next line" nothing to move through, so they degenerate into one character each
+        # way on every Up and Down; with real lines they behave. It also lets a pasted list
+        # arrive as one block, which is how a world with stacking off gets several commands at
+        # once. Enter still sends -- it cannot insert a newline here (see _on_input_key).
+        self.input = wx.TextCtrl(self, style=wx.TE_MULTILINE | wx.TE_PROCESS_ENTER)
+        # Two lines tall, measured from the font rather than assumed in pixels: the reader may
+        # have their text scaled up, and a guessed height would clip the line being typed.
+        self.input.SetMinSize((-1, self.input.GetCharHeight() * 2 + 8))
         self.input.SetName(f"{world.name} command")
 
         sizer = wx.BoxSizer(wx.VERTICAL)
@@ -1125,13 +1136,42 @@ class SessionPanel(wx.Panel):
         self.output.SetInsertionPoint(offset)
         self.output.ShowPosition(offset)
 
-    def _on_send(self, _event: wx.CommandEvent) -> None:
-        text = self.input.GetValue()
+    def _remember(self, lines: list[str]) -> None:
+        """Add sent commands to the history, keeping the newest few thousand at most.
+
+        A pasted block adds one entry per line, so without a limit a long file pasted twice
+        would sit in memory for the rest of the session and make Up walk all of it.
+        """
+        self._history.extend(lines)
+        if len(self._history) > self._history_limit:
+            del self._history[: len(self._history) - self._history_limit]
+        self._hist_index = len(self._history)
+
+    def _start_new_command_line(self) -> None:
+        """Begin another command on its own line, where Enter will send it with the rest.
+
+        Shift+Enter, as in a chat box -- with one difference worth knowing, because a MUD reads
+        a newline as Enter itself: a line break can separate two commands but can never be part
+        of one. A long `say` wraps on screen without any of this.
+        """
+        self.input.WriteText("\n")
+
+    def _on_send(self, _event: wx.CommandEvent | None) -> None:
+        """Send what is in the box: one command per line, then clear it.
+
+        A pasted block is several commands, and they go out one at a time, in order, each down
+        the same input path a typed line takes -- so aliases apply to each, and a world with
+        stacking off still gets several commands from one paste.
+        """
+        lines = [line.strip() for line in self.input.GetValue().splitlines() if line.strip()]
+        if not lines:
+            self.input.SetValue("")
+            return
         # genericMud's own commands ("/to", "/alias", "/map", ...) don't need this tab's
         # connection: "/to" goes out through another session. Asking first left no way to
         # run them here at all, since Cancel keeps the line and Enter asks again. An unknown
         # "/verb" a MUD owns is dropped unasked, as it was before the question existed.
-        offline_ok = text.startswith(CLIENT_PREFIX)
+        offline_ok = all(line.startswith(CLIENT_PREFIX) for line in lines)
         if self._connect_finished and not self.is_connected() and not offline_ok:
             if self.is_connecting():
                 # Already trying again by itself: "Reconnect now?" could only be answered with
@@ -1144,14 +1184,29 @@ class SessionPanel(wx.Panel):
             self._prompt_reconnect()
             return
         self.input.SetValue("")
-        if text and not self._input_masked:
-            self._history.append(text)
-        self._hist_index = len(self._history)
+        self.input.SetInsertionPointEnd()
+        if not self._input_masked:
+            # Each line is its own command, so each is its own thing to recall.
+            self._remember(lines)
+        else:
+            self._hist_index = len(self._history)
         if self.app is not None:
-            self._loop.call_soon_threadsafe(self.app.on_ws_message, {"type": "input", "text": text})
+            for line in lines:
+                self._loop.call_soon_threadsafe(
+                    self.app.on_ws_message, {"type": "input", "text": line}
+                )
 
     def _on_input_key(self, event: wx.KeyEvent) -> None:
         code = event.GetKeyCode()
+        if code in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER):
+            modified = event.ControlDown() or event.AltDown()
+            if event.ShiftDown() and not modified:
+                self._start_new_command_line()
+                return
+            if not modified:
+                # A multi-line field inserts a newline here. Sending is what the box is for.
+                self._on_send(None)
+                return
         combo = _key_combo(event, allow_numpad=not self._prefs.numpad_compass)
         if combo in (_COMPLETE_FORWARD, _COMPLETE_BACKWARD):
             self._cycle_completion(backward=(combo == _COMPLETE_BACKWARD))

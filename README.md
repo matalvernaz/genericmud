@@ -164,6 +164,17 @@ the text alone, because losing typed-but-unsent input is silent data loss when y
 cannot glance at the box. Arrowing past the newest entry empties the box, and
 **Ctrl+A** then Backspace clears a draft when you want it gone.
 
+In the native window the box holds several lines. Enter sends what is there,
+and **Shift+Enter** starts another line for the next command; a pasted block
+needs neither, since its lines are already separate. Each line goes out as its
+own command, in order -- a way to send several commands at once to a world that
+has stacking off, or to paste a list you have been keeping somewhere else. One
+thing to know: a MUD reads a line break as Enter itself, so a break can
+separate two commands but can never be part of one. A long `say` wraps on
+screen by itself. A block of slash commands only needs no connection, exactly
+as one line of them doesn't. The web UI's box is still a single line, so none
+of this applies there yet.
+
 `look`, `north` (or just `n`), `say hello`, and `help` are good first commands
 on almost any MUD. A few conveniences in the command box:
 
