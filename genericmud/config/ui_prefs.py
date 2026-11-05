@@ -1,7 +1,7 @@
 """Persisted UI/speech toggles, one small TOML beside worlds and update prefs.
 
 Mirrors :mod:`genericmud.config.update_prefs`: ``tomllib`` reads, saving
-hand-writes the fixed all-boolean schema. These are the toggles a user sets
+hand-writes the small boolean/integer schema. These are the settings a user sets
 once and expects to survive a restart:
 
 * ``background_silence`` -- stay quiet while another window has focus
@@ -18,6 +18,8 @@ once and expects to survive a restart:
 * ``title_shows_world`` -- call the window after the world in front, as MUSHclient
   does ("genericMud - [Penworthy]") instead of just "genericMud". Off by default,
   because renaming someone's window is not a change to spring on them.
+* ``auto_reconnect`` / ``reconnect_interval`` -- recover unavailable connections,
+  waiting 1–300 seconds between attempts (on, every five seconds by default).
 """
 
 from __future__ import annotations
@@ -39,6 +41,8 @@ class UiPrefs:
     follow_mode: bool = False
     interrupt_mode: bool = False
     title_shows_world: bool = False
+    auto_reconnect: bool = True
+    reconnect_interval: int = 5
 
 
 def prefs_path() -> Path:
@@ -58,7 +62,8 @@ def load_ui_prefs(path: Path | None = None) -> UiPrefs:
         **{
             f.name: (
                 data[f.name]
-                if isinstance(data.get(f.name), bool)
+                if type(data.get(f.name)) is type(getattr(defaults, f.name))
+                and (f.name != "reconnect_interval" or 1 <= data[f.name] <= 300)
                 else getattr(defaults, f.name)
             )
             for f in fields(UiPrefs)
@@ -69,7 +74,7 @@ def load_ui_prefs(path: Path | None = None) -> UiPrefs:
 def save_ui_prefs(prefs: UiPrefs, path: Path | None = None) -> None:
     target = path or prefs_path()
     lines = ["[ui]"] + [
-        f"{f.name} = {'true' if getattr(prefs, f.name) else 'false'}"
+        f"{f.name} = {str(getattr(prefs, f.name)).lower()}"
         for f in fields(UiPrefs)
     ]
     atomic_write_text(target, "\n".join(lines) + "\n")

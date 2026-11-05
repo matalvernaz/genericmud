@@ -41,6 +41,39 @@ def _accept(dialog) -> None:
     dialog._on_ok(None)
 
 
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("interval", [1, 5, 300])
+def test_connection_settings_dialog_uses_named_native_controls(frame, enabled, interval):
+    from genericmud.config.ui_prefs import UiPrefs
+    from genericmud.ui.wx_app import ConnectionSettingsDialog
+
+    prefs = UiPrefs(auto_reconnect=enabled, reconnect_interval=interval)
+    dialog = ConnectionSettingsDialog(frame, prefs)
+    try:
+        assert dialog.get_settings() == (enabled, interval)
+        assert dialog._auto.GetName() == "Auto reconnect"
+        assert dialog._interval.GetName() == "Reconnect every, seconds"
+        assert (dialog._interval.GetMin(), dialog._interval.GetMax()) == (1, 300)
+        children = list(dialog.GetChildren())
+        label = children[children.index(dialog._interval) - 1]
+        assert isinstance(label, wx.StaticText) and "seconds" in label.GetLabel()
+        assert dialog._interval.IsEnabled() == enabled
+        assert dialog.GetAffirmativeId() == wx.ID_OK
+        assert dialog.GetEscapeId() == wx.ID_CANCEL
+        assert dialog.FindWindowById(wx.ID_OK) is not None
+        assert dialog.FindWindowById(wx.ID_CANCEL) is not None
+
+        dialog._auto.SetValue(not enabled)
+        event = wx.CommandEvent(wx.wxEVT_CHECKBOX, dialog._auto.GetId())
+        dialog._auto.GetEventHandler().ProcessEvent(event)
+        assert dialog._interval.IsEnabled() == (not enabled)
+        assert dialog.get_settings() == (not enabled, interval)
+        # Editing a dialog, then cancelling it, must not mutate the shared preference object.
+        assert prefs.auto_reconnect == enabled and prefs.reconnect_interval == interval
+    finally:
+        dialog.Destroy()
+
+
 def test_world_dialog_offers_every_encoding_and_starts_on_automatic(frame):
     from genericmud.ui.wx_app import WorldDialog
 
@@ -1352,6 +1385,12 @@ def test_the_window_tells_packs_the_mud_connected_only_once_it_has(frame, monkey
         def peer_address(self) -> str:
             return ""
 
+        def configure_reconnect(self, enabled, interval) -> None:
+            self.auto_reconnect = enabled
+
+        def start_reconnect(self) -> bool:
+            return False  # this test exercises one-shot startup, not automatic recovery
+
         def suppress_reconnect(self, *_args) -> None:
             pass
 
@@ -1377,6 +1416,7 @@ def test_the_window_tells_packs_the_mud_connected_only_once_it_has(frame, monkey
     monkeypatch.setattr(wx_app, "make_sound_backend", lambda **_kwargs: None)
     loop = asyncio.new_event_loop()
     panel = wx_app.SessionPanel(frame, loop, {}, World("Test", "mud.example", 4000), packs=store)
+    panel._prefs.auto_reconnect = False
     try:
         loop.run_until_complete(panel._start_inner())
         if connects:

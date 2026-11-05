@@ -112,9 +112,13 @@ lines get you oriented each time you connect.
 
 Next time, press **Ctrl+O** to pick the world from your saved list; that dialog
 can also edit a saved world or start a new one. **Ctrl+D** disconnects and
-**Ctrl+W** closes the tab. If the connection drops on its own, genericMud
-reconnects for you, backing off if the MUD stays down; quitting from inside the
-game doesn't trigger that. Pressing **Ctrl+D** while it's still trying stops it.
+**Ctrl+W** closes the tab. If the MUD is unavailable at startup or the connection
+drops on its own, genericMud keeps trying every five seconds until it returns.
+**File → Connection settings...** turns Auto reconnect on or off and sets the
+interval (1–300 seconds) for all worlds; both settings survive a restart.
+Turning it off leaves manual Reconnect available. Quitting from inside the game
+doesn't trigger recovery, and **Ctrl+D** while it's still trying stops that
+session without changing the global setting.
 
 **Ctrl+D** takes a disconnected tab back to the MUD as well — the File menu
 entry changes to **Reconnect** to say so. Reconnecting reuses the tab, so the

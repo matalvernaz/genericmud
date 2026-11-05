@@ -482,7 +482,9 @@ class SessionPanel(wx.Panel):
         if self._on_pref is not None:
             self.app.pref_sink = self._on_pref
         self._connection._on_event = self.app.on_telnet_event
-        self._connection.auto_reconnect = True
+        self._connection.configure_reconnect(
+            self._prefs.auto_reconnect, self._prefs.reconnect_interval,
+        )
         self._connection.on_status = self.app.on_connection_status
         self.app.apply_world_settings(self.world)  # command stacking and logging
         if self.world.sounds:  # point @sppath at the world's sound folder before packs load
@@ -522,6 +524,8 @@ class SessionPanel(wx.Panel):
             # it -- a visual-only echo leaves a blind user with no idea the connect ever failed.
             if self.app is not None:
                 self.app.engine.connected = False
+            if self._connection.start_reconnect():
+                return  # transport owns the retries and their single spoken announcement
             if self._voice is not None:
                 self._voice.speak(f"Connect failed: {error}", channel="system", interrupt=True)
         finally:
@@ -1386,10 +1390,16 @@ class SessionPanel(wx.Panel):
         """Drop the connection but keep the session/tab open (and stop auto-reconnect)."""
         self._loop.call_soon_threadsafe(self._do_disconnect)
 
+    def apply_connection_settings(self, enabled: bool, interval: int) -> None:
+        self._loop.call_soon_threadsafe(self._apply_connection_settings, enabled, interval)
+
+    def _apply_connection_settings(self, enabled: bool, interval: int) -> None:
+        if self._alive and self._connection is not None:
+            self._connection.configure_reconnect(enabled, interval)
+
     def _do_disconnect(self) -> None:  # loop thread
         self._connect_finished = True  # also stop an initial connect that hasn't started yet
         if self._connection is not None:
-            self._connection.auto_reconnect = False
             self._connection.request_close()
         if self.app is not None:
             # request_close() marks the intent now, so even a ready EOF stays quiet on the
@@ -1426,8 +1436,8 @@ class SessionPanel(wx.Panel):
                                   interrupt=True)
             return
         self._reconnecting = True
-        # disconnect() turned this off; re-arm it so the socket keeps its own safety net.
-        self._connection.auto_reconnect = True
+        # Manual reconnect clears the session's stop intent, but respects the global choice.
+        self._connection.auto_reconnect = self._prefs.auto_reconnect
         if self._diag is not None:
             self._diag.event("reconnect.manual", host=self.world.host, port=self.world.port)
         self._post(protocol.echo(f"* Reconnecting to {self.world.name}"))
@@ -1442,6 +1452,8 @@ class SessionPanel(wx.Panel):
             if self._diag is not None:
                 self._diag.event("reconnect.failed", error=f"{type(error).__name__}: {error}")
             self._post(protocol.echo(f"* Reconnect failed: {error}"))
+            if self._connection.start_reconnect():
+                return
             if self._voice is not None:
                 self._voice.speak(f"Reconnect failed: {error}", channel="system", interrupt=True)
             return
@@ -1721,6 +1733,38 @@ class ChooseDialog(wx.Dialog):
         """The (command, caption) the player picked, or None if the list has no choice."""
         index = self._list.GetSelection()
         return self._choices[index] if 0 <= index < len(self._choices) else None
+
+
+class ConnectionSettingsDialog(wx.Dialog):
+    """Global recovery settings; native controls keep Tab, Enter and Escape navigation."""
+
+    def __init__(self, parent: wx.Window, prefs: UiPrefs) -> None:
+        super().__init__(parent, title="Connection settings")
+        outer = wx.BoxSizer(wx.VERTICAL)
+        self._auto = wx.CheckBox(self, label="&Auto reconnect")
+        self._auto.SetName("Auto reconnect")
+        self._auto.SetValue(prefs.auto_reconnect)
+        outer.Add(self._auto, 0, wx.ALL, 10)
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        self._interval_label = wx.StaticText(self, label="Reconnect every (&seconds):")
+        row.Add(self._interval_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
+        self._interval = wx.SpinCtrl(self, min=1, max=300, initial=prefs.reconnect_interval)
+        self._interval.SetName("Reconnect every, seconds")
+        row.Add(self._interval, 1)
+        outer.Add(row, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 10)
+        outer.Add(self.CreateStdDialogButtonSizer(wx.OK | wx.CANCEL), 0, wx.ALL | wx.EXPAND, 10)
+        self.SetSizerAndFit(outer)
+        self.SetEscapeId(wx.ID_CANCEL)
+        self._auto.Bind(wx.EVT_CHECKBOX, lambda event: self._update_enabled())
+        self._update_enabled()
+        self._auto.SetFocus()
+
+    def _update_enabled(self) -> None:
+        self._interval.Enable(self._auto.GetValue())
+        self._interval_label.Enable(self._auto.GetValue())
+
+    def get_settings(self) -> tuple[bool, int]:
+        return self._auto.GetValue(), self._interval.GetValue()
 
 
 class FindDialog(wx.Dialog):
@@ -4463,6 +4507,9 @@ class GenericMudFrame(wx.Frame):
         connect_item = file_menu.Append(wx.ID_ANY, "&Connect to Saved World...\tCtrl+O")
         disconnect_item = file_menu.Append(wx.ID_ANY, _connection_menu_label(True))
         self._connection_item = disconnect_item  # relabelled as the active tab connects/drops
+        connection_settings_item = file_menu.Append(
+            wx.ID_ANY, "Connection &settings...", "Automatic reconnect settings for all worlds",
+        )
         close_item = file_menu.Append(wx.ID_ANY, "Close &Tab\tCtrl+W")
         export_item = file_menu.Append(
             wx.ID_ANY, "&Export This World...",
@@ -4557,6 +4604,7 @@ class GenericMudFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, self._on_new_world, new_world_item)
         self.Bind(wx.EVT_MENU, self._on_connect, connect_item)
         self.Bind(wx.EVT_MENU, self._on_disconnect, disconnect_item)
+        self.Bind(wx.EVT_MENU, self._on_connection_settings, connection_settings_item)
         self.Bind(wx.EVT_MENU_OPEN, self._on_menu_open)  # label read aloud must be current
         self.Bind(wx.EVT_MENU, self._on_close_tab, close_item)
         self.Bind(wx.EVT_MENU, self._on_manage_packs, packs_item)
@@ -4674,6 +4722,19 @@ class GenericMudFrame(wx.Frame):
     def _save_pref(self, attr: str, value: bool) -> None:
         setattr(self._prefs, attr, value)
         save_ui_prefs(self._prefs)
+
+    def _on_connection_settings(self, _event: wx.CommandEvent) -> None:
+        dialog = ConnectionSettingsDialog(self, self._prefs)
+        try:
+            if dialog.ShowModal() == wx.ID_OK:
+                self._prefs.auto_reconnect, self._prefs.reconnect_interval = dialog.get_settings()
+                save_ui_prefs(self._prefs)
+                for index in range(self.book.GetPageCount()):
+                    self.book.GetPage(index).apply_connection_settings(
+                        self._prefs.auto_reconnect, self._prefs.reconnect_interval,
+                    )
+        finally:
+            dialog.Destroy()
 
     def _on_app_activate(self, event: wx.ActivateEvent) -> None:
         self._app_focused = event.GetActive()

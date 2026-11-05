@@ -284,9 +284,10 @@ async def test_a_close_during_the_backoff_wait_ends_connecting_without_a_retry(m
     conn, sleeping, wake, opened, _statuses = _backoff_setup(monkeypatch)
     await conn.connect("host", 23)
     await sleeping.wait()
+    retry = conn._reconnect_task
     await conn.close()
     wake.set()
-    await asyncio.gather(conn._reconnect_task, return_exceptions=True)
+    await asyncio.gather(retry, return_exceptions=True)
     assert conn.connecting is False
     assert opened == ["host"]  # the backoff saw the close and didn't try again
 
