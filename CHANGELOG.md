@@ -8,6 +8,21 @@ fails the build on purpose.
 
 Entries start at 0.7.1. Earlier releases were tagged before this file existed.
 
+## 0.23.1 — 2026-11-05
+
+**Reconnect fixes**, from have-you-met-matt
+
+* Ctrl+D, or Disconnect on the File menu, now stops genericMud while it's
+  waiting to reconnect or still reaching the MUD. Before, it said "Still
+  connecting" and carried on trying. The menu says Disconnect while a
+  connection is on its way, so you can tell which one Ctrl+D will do.
+* Closing a tab while it's connecting or reconnecting stops it straight away.
+  Before, a tab you'd just closed could still connect to the MUD a moment
+  later.
+* While genericMud is waiting to reconnect, a soundpack that asks whether
+  you're connected now gets no, and soundpacks that run on a timer, like
+  Erion's, pause until the connection is back.
+
 ## 0.23.0 — 2026-11-05
 
 **Reacting when the MUD sends a value**, ideas from Mudlet

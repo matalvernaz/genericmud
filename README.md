@@ -106,7 +106,7 @@ Next time, press **Ctrl+O** to pick the world from your saved list; that dialog
 can also edit a saved world or start a new one. **Ctrl+D** disconnects and
 **Ctrl+W** closes the tab. If the connection drops on its own, genericMud
 reconnects for you, backing off if the MUD stays down; quitting from inside the
-game doesn't trigger that.
+game doesn't trigger that. Pressing **Ctrl+D** while it's still trying stops it.
 
 **Ctrl+D** takes a disconnected tab back to the MUD as well — the File menu
 entry changes to **Reconnect** to say so. Reconnecting reuses the tab, so the
