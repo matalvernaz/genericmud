@@ -4859,6 +4859,7 @@ class GenericMudFrame(wx.Frame):
         original_name: str | None = None,
         show_save: bool = True,
         lock_name: bool = False,
+        note: str = "",
     ) -> bool:
         dialog = WorldDialog(
             self,
@@ -4868,6 +4869,7 @@ class GenericMudFrame(wx.Frame):
             show_save=show_save,
             lock_name=lock_name,
             credentials=self._credentials,
+            note=note,
         )
         try:
             if dialog.ShowModal() != wx.ID_OK:
@@ -4883,6 +4885,39 @@ class GenericMudFrame(wx.Frame):
             return saved
         finally:
             dialog.Destroy()
+
+    def _open_world_names(self) -> set[str]:
+        """The names of the worlds with a tab open, folded for comparison."""
+        names: set[str] = set()
+        for index in range(self.book.GetPageCount()):
+            open_world = getattr(self.book.GetPage(index), "world", None)
+            if open_world is not None:
+                names.add(open_world.name.casefold())
+        return names
+
+    def _edit_saved_world(self, world: World) -> None:
+        """Edit a saved world, letting its name change only while no tab is using it.
+
+        A tab keeps the name it opened with: that name is its log file, its /to address and its
+        label. Renaming an open world would leave the two disagreeing until the tab closed, so
+        the name waits for the tab and the dialog says why. Everything else about a world can be
+        edited while it is open, as it always could.
+        """
+        is_open = world.name.casefold() in self._open_world_names()
+        self._show_world_dialog(
+            initial=world,
+            title=f"Edit {world.name}",
+            connect=False,
+            original_name=world.name,
+            show_save=False,
+            lock_name=is_open,
+            note=(
+                f"{world.name} is open in a tab, which keeps the name it opened with. Close "
+                "the tab to rename the world."
+                if is_open
+                else ""
+            ),
+        )
 
     def _apply_to_open_tabs(self, name: str, world: World) -> None:
         """An edited world's command stacking and logging take effect in its open tabs at
@@ -4938,14 +4973,7 @@ class GenericMudFrame(wx.Frame):
                 self._show_world_dialog()
                 return
             if action == _ID_EDIT_WORLD and world is not None:
-                self._show_world_dialog(
-                    initial=world,
-                    title=f"Edit {world.name}",
-                    connect=False,
-                    original_name=world.name,
-                    show_save=False,
-                    lock_name=True,
-                )
+                self._edit_saved_world(world)
                 continue
             return
 

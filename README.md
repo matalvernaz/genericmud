@@ -115,7 +115,11 @@ finishes. A reconnect types them again. For example, `look` and `score` on two
 lines get you oriented each time you connect.
 
 Next time, press **Ctrl+O** to pick the world from your saved list; that dialog
-can also edit a saved world or start a new one. **Ctrl+D** disconnects and
+can also edit a saved world or start a new one. Editing one includes its name, so a
+world can be renamed without editing any file — unless it has a tab open, because
+the name is the log file, the `/to` address and the tab's own label, and a tab
+keeps the name it opened with. Close the tab and the name is yours to change; the
+dialog says so when it doesn't apply. **Ctrl+D** disconnects and
 **Ctrl+W** closes the tab. If the MUD is unavailable at startup or the connection
 drops on its own, genericMud keeps trying every five seconds until it returns.
 **File → Connection settings...** turns Auto reconnect on or off and sets the
