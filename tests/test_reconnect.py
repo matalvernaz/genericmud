@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import time
 
+import pytest
+
 from genericmud.transport.connection import (
     _QUIT_GRACE_SECONDS,
     MudConnection,
@@ -34,8 +36,38 @@ def test_policy_backoff_caps_and_gives_up():
     assert ReconnectPolicy(base_delay=5, max_delay=10).delay_for(3) == 10  # capped at max_delay
 
 
-def test_policy_unlimited_never_gives_up():
-    assert ReconnectPolicy(max_attempts=0).delay_for(1000) is not None
+@pytest.mark.parametrize("attempt", [1000, 1025, pytest.param(10**100, id="huge")])
+def test_policy_unlimited_never_gives_up(attempt):
+    assert ReconnectPolicy(max_attempts=0).delay_for(attempt) == 30
+
+
+def test_policy_default_still_stops_after_six_attempts():
+    policy = ReconnectPolicy()
+    assert [policy.delay_for(n) for n in range(1, 8)] == [1, 2, 4, 8, 16, 30, None]
+    assert policy.delay_for(10**100) is None
+
+
+def test_policy_finite_long_schedule_is_also_capped():
+    policy = ReconnectPolicy(max_attempts=2000)
+    assert policy.delay_for(1025) == 30
+    assert policy.delay_for(2001) is None
+
+
+def test_policy_fractional_delays_keep_their_schedule():
+    policy = ReconnectPolicy(base_delay=0.25, max_delay=5, max_attempts=0)
+    assert [policy.delay_for(n) for n in range(1, 8)] == [0.25, 0.5, 1, 2, 4, 5, 5]
+    assert policy.delay_for(10**100) == 5
+
+
+def test_policy_tiny_base_can_grow_past_1024_doublings_before_the_cap():
+    policy = ReconnectPolicy(base_delay=2.0**-1074, max_attempts=0)
+    assert policy.delay_for(1025) == 2.0**-50
+    assert policy.delay_for(10**100) == 30
+
+
+@pytest.mark.parametrize("attempt", [1, 1025, pytest.param(10**100, id="huge")])
+def test_policy_zero_delay_stays_zero(attempt):
+    assert ReconnectPolicy(base_delay=0, max_attempts=0).delay_for(attempt) == 0
 
 
 def test_should_reconnect_gating():
