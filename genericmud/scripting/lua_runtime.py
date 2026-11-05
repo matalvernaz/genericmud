@@ -346,6 +346,7 @@ class LuaPackRuntime:
         mud.alias = self._lua_register(api.add_alias)
         mud.key = self._lua_register_key()
         mud.timer = self._lua_timer()
+        mud.on_data = self._lua_on_data()
         mud.set_channel = self._lua_set_channel()
         self._lua.globals().mud = mud
 
@@ -471,6 +472,25 @@ class LuaPackRuntime:
 
         def factory(delay, callback):
             api.add_timer(float(delay), lambda: self._run_callback(callback, None))
+
+        return factory
+
+    def _lua_on_data(self):
+        """mud.on_data(name, function(name, value) ... end, {changes=true}): MUD data events.
+
+        Mudlet's GMCP events, for genericMud: the function runs each time the MUD sends that
+        package or variable (or one below it, or a value inside it), after the value is
+        stored. With {changes=true} it runs only when the value differs from last time.
+        """
+        api = self._api
+
+        def factory(path, callback, opts=None):
+            changes = opts is not None and bool(opts["changes"])
+
+            def heard(name: str, value: object) -> None:
+                self._run_callback(callback, None, name, self._to_lua(value))
+
+            api.add_data_watch(str(path), heard, only_changes=changes)
 
         return factory
 

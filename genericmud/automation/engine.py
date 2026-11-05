@@ -11,6 +11,7 @@ voice backend, or a UI.
 from __future__ import annotations
 
 import re
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol
@@ -219,6 +220,61 @@ def _cancel_pending(entry: tuple[object, str, Callable[[], None] | None]) -> Non
         on_cancel()
 
 
+# A watch may start with one of these to hear only that protocol: gmcp.Char.Vitals.
+_DATA_PROTOCOLS = ("gmcp", "msdp", "mssp")
+# What a watch's last value is before it has heard one: its first value always counts as a
+# change, so a rule that speaks your health says it once you log in.
+_UNSEEN = object()
+
+
+@dataclass
+class _DataWatch:
+    """One interest in the MUD's data (see :meth:`AutomationEngine.add_data_watch`)."""
+
+    path: str  # as given, minus any protocol prefix: the name a watch inside a value reports
+    parts: tuple[str, ...]  # the same path casefolded and split on its dots
+    protocol: str | None  # "gmcp", "msdp" or "mssp" to hear only that one; None hears all
+    callback: Callable[[str, object], None]
+    only_changes: bool = False
+    source: str = ""
+    last: object = _UNSEEN
+
+
+def _walk(value: object, parts: tuple[str, ...]) -> tuple[bool, object]:
+    """Follow ``parts`` down into nested data: dictionary keys any case, list indexes from 0."""
+    for part in parts:
+        if isinstance(value, dict):
+            found, value = AutomationEngine._mapping_item(value, part)
+            if not found:
+                return False, None
+        elif isinstance(value, (list, tuple)) and part.isdecimal():
+            index = int(part)
+            if index >= len(value):
+                return False, None
+            value = value[index]
+        else:
+            return False, None
+    return True, value
+
+
+def _heard(
+    watch: _DataWatch, message: tuple[str, ...], name: str, value: object
+) -> tuple[str, object] | None:
+    """What a watch hears of one message, as (name, value), or None when it isn't about it.
+
+    A watch on the message, or on a package above it ("Char" for Char.Vitals), hears the
+    whole message. A watch on a path inside it ("Char.Vitals.hp") hears the value found
+    there, and nothing when this message doesn't carry it.
+    """
+    if message[: len(watch.parts)] == watch.parts:
+        return name, value
+    if watch.parts[: len(message)] == message:
+        found, inner = _walk(value, watch.parts[len(message) :])
+        if found:
+            return watch.path, inner
+    return None
+
+
 class AutomationEngine:
     def __init__(self, sink: EngineSink | None = None, *, sound: SoundBus | None = None) -> None:
         self.sink = sink or EngineSink()
@@ -234,6 +290,10 @@ class AutomationEngine:
         # separate from script variables: a server update must not overwrite a user's setting,
         # while ScriptApi can still resolve either namespace for command templates.
         self._mud_vars: dict[str, object] = {}
+        # Who wants to hear when the MUD sends data, and when each name last arrived, which
+        # the MUD variables list can sort by.
+        self._data_watches: list[_DataWatch] = []
+        self._data_times: dict[str, float] = {}
         self.channels = ChannelRouter()  # output routing/policy, scriptable via ScriptApi
         self.sound = sound or SoundBus()  # per-category audio mixing, scriptable via ScriptApi
         self.hub: SessionHub | None = None  # cross-session bus (set by the app)
@@ -380,6 +440,7 @@ class AutomationEngine:
             # Replay the surviving bindings in order: last writer wins again, and a
             # combo the removed source had shadowed falls back to the earlier owner.
             self._keys = {key: callback for key, _source, callback in self._key_bindings}
+        self._data_watches = [watch for watch in self._data_watches if watch.source != source]
         self.channels.remove_source(source)
         self.cancel_source_timers(source)
 
@@ -461,6 +522,68 @@ class AutomationEngine:
     def all_mud_vars(self) -> dict[str, object]:
         """A shallow snapshot of the latest structured server values."""
         return dict(self._mud_vars)
+
+    # --- data events ---
+
+    def add_data_watch(
+        self,
+        path: str,
+        callback: Callable[[str, object], None],
+        *,
+        only_changes: bool = False,
+        source: str = "",
+    ) -> _DataWatch:
+        """Call ``callback(name, value)`` whenever the MUD sends data at ``path``.
+
+        Modelled on Mudlet's GMCP events. ``path`` is a GMCP package, an MSDP or MSSP
+        variable, or a path inside one, in any case; starting it with ``gmcp.``, ``msdp.`` or
+        ``mssp.`` hears only that protocol. A package hears every package below it, as
+        Mudlet raises gmcp.Char for Char.Vitals. ``only_changes`` skips a value equal to the
+        last one this watch heard. Called after the value is stored, so ${mud:...} reads it.
+        """
+        parts = [part for part in str(path).split(".") if part]
+        protocol = None
+        if len(parts) > 1 and parts[0].casefold() in _DATA_PROTOCOLS:
+            protocol = parts[0].casefold()
+            parts = parts[1:]
+        if not parts:
+            raise ValueError("no MUD data name to watch")
+        watch = _DataWatch(
+            ".".join(parts), tuple(part.casefold() for part in parts), protocol, callback,
+            only_changes, source,
+        )
+        self._data_watches.append(watch)
+        return watch
+
+    def data_arrived(self, protocol: str, name: str, value: object) -> None:
+        """Tell the watches that the MUD sent ``name`` over ``protocol``; it's stored already."""
+        if not name:
+            return
+        message = tuple(part.casefold() for part in name.split("."))
+        self._data_times[name.casefold()] = time.monotonic()
+        for watch in list(self._data_watches):
+            if watch.protocol is not None and watch.protocol != protocol.casefold():
+                continue
+            heard = _heard(watch, message, name, value)
+            if heard is None:
+                continue
+            heard_name, heard_value = heard
+            if watch.only_changes:
+                if watch.last is not _UNSEEN and watch.last == heard_value:
+                    continue
+                watch.last = heard_value
+            try:
+                watch.callback(heard_name, heard_value)
+            except Exception as error:  # noqa: BLE001 - one watch's mistake mustn't stop the rest
+                if self.diag is not None:
+                    self.diag.event(
+                        "data_watch.error", source=watch.source or "?", path=watch.path,
+                        error=f"{type(error).__name__}: {error}",
+                    )
+
+    def data_arrival_times(self) -> dict[str, float]:
+        """When each name last arrived, by its casefolded name, in time.monotonic() seconds."""
+        return dict(self._data_times)
 
     # --- timers ---
 

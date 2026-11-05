@@ -23,6 +23,8 @@ from pathlib import Path
 
 from genericmud.automation.engine import MatchContext
 from genericmud.config.atomic import atomic_write_text
+from genericmud.model.buffer import Line
+from genericmud.render.ansi import strip_ansi
 from genericmud.scripting.api import ScriptApi
 from genericmud.voice.router import REVIEW_CHANNEL
 
@@ -98,11 +100,29 @@ class UserChannel:
 
 
 @dataclass
+class UserWatch:
+    """A MUD data rule: do something when the MUD sends a value (GMCP, MSDP or MSSP)."""
+
+    name: str = ""  # a GMCP package, an MSDP/MSSP variable, or a path inside one: Char.Vitals.hp
+    # On by default: Char.Vitals arrives with every prompt, and nobody wants their health
+    # read out two hundred times when it hasn't moved.
+    only_changes: bool = True
+    sound: str = ""  # pack-relative one-shot cue
+    volume: int = 100  # 0..100
+    pan: int = 0  # -100 (left) .. 100 (right)
+    speak: str = ""  # ${value} and ${name}, plus ${mud:x} and ${script:x}
+    send: str = ""  # commands, one per line, same templates
+    interrupt: bool = False  # cut current speech when it fires
+    enabled: bool = True
+
+
+@dataclass
 class UserRules:
     triggers: list[UserTrigger] = field(default_factory=list)
     aliases: list[UserAlias] = field(default_factory=list)
     keys: list[UserKey] = field(default_factory=list)
     channels: list[UserChannel] = field(default_factory=list)
+    watches: list[UserWatch] = field(default_factory=list)
 
     def to_json(self) -> str:
         payload = {"version": 1, **asdict(self)}
@@ -127,6 +147,7 @@ class UserRules:
             aliases=build(UserAlias, data.get("aliases")),
             keys=build(UserKey, data.get("keys")),
             channels=build(UserChannel, data.get("channels")),
+            watches=build(UserWatch, data.get("watches")),
         )
 
 
@@ -290,6 +311,9 @@ def register_rules(api: ScriptApi, rules: UserRules) -> None:
     for key in rules.keys:
         if key.enabled and key.key:
             _register_key(api, key)
+    for watch in rules.watches:
+        if watch.enabled and watch.name.strip():
+            _register_watch(api, watch)
 
 
 def _trigger_pattern(t: UserTrigger) -> tuple[str, bool]:
@@ -381,6 +405,49 @@ def _register_alias(api: ScriptApi, a: UserAlias) -> None:
         extra_words_pattern(a.pattern), fire_with_words, regex=True, source=SOURCE,
         priority=EXTRA_WORDS_PRIORITY, fallback=True,
     )
+
+
+def data_text(value: object) -> str:
+    """A MUD value as words, for speech and commands.
+
+    Colour codes come out (IRE games colour the text inside Comm.Channel.Text), line breaks
+    become spaces since a command is one line, and a table reads as compact JSON.
+    """
+    if isinstance(value, str):
+        text = value
+    elif isinstance(value, bool):
+        text = "true" if value else "false"
+    elif value is None:
+        text = ""
+    elif isinstance(value, (int, float)):
+        text = str(value)
+    else:
+        text = json.dumps(value, ensure_ascii=False, separators=(", ", ": "))
+    return " ".join(strip_ansi(text).split())
+
+
+def _register_watch(api: ScriptApi, w: UserWatch) -> None:
+    _, send_commands = _command_action(api, w.send)
+
+    def fire(name: str, value: object) -> None:
+        text = data_text(value)
+        # What the rule's templates can read: ${value} and ${1} are the value, ${name} is
+        # what arrived. Nothing here reads the context's engine, so it has none.
+        ctx = MatchContext(Line(text), [text, text], {"value": text, "name": name}, None)
+        if w.interrupt:
+            api.stop_speech()
+        if w.sound:
+            api.play(
+                w.sound,
+                channel="user-data",
+                gain=max(0, min(100, w.volume)) / 100,
+                pan=max(-100, min(100, w.pan)) / 100,
+            )
+        if w.speak:
+            api.speak(_speech(api, w.speak, ctx), interrupt=w.interrupt)
+        send_commands(ctx)
+
+    api.add_data_watch(w.name.strip(), fire, only_changes=w.only_changes)
 
 
 def _register_key(api: ScriptApi, k: UserKey) -> None:

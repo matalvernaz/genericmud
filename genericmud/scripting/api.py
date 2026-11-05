@@ -510,6 +510,14 @@ class ScriptApi:
         """Drop a previously-registered trigger by name (dynamic MUSHclient triggers)."""
         self._engine.remove_trigger(name)
 
+    def add_data_watch(
+        self, path: str, callback: Callable[[str, object], None], *, only_changes: bool = False
+    ):
+        """Hear when the MUD sends data at ``path``; see AutomationEngine.add_data_watch."""
+        return self._engine.add_data_watch(
+            path, callback, only_changes=only_changes, source=self._source
+        )
+
     def add_alias(self, pattern: str, callback: Callback, **opts: object):
         """Register an alias; returns the engine's rule (its ``enabled`` can be switched)."""
         opts.setdefault("source", self._source)

@@ -321,6 +321,33 @@ Tables are shown as `table: ...` by this simple example. Once you know a table's
 name, use a dotted path such as `Char.Vitals.hp` to read an item inside it. Your
 MUD's GMCP or MSDP documentation should list the paths it sends.
 
+## React when the MUD sends data
+
+`mud.on_data` runs a function each time the MUD sends a GMCP package, an MSDP or
+MSSP variable, or a value inside one. It runs after the new value is stored, so
+`mud.get_mud_var` and `${mud:...}` already read the new value.
+
+```lua
+mud.on_data("Char.Vitals.hp", function(name, hp)
+    if tonumber(hp) < 100 then
+        mud.play("sounds/low-health.ogg")
+    end
+end, {changes = true})
+```
+
+- The function gets the name that arrived and its value. A table stays a table,
+  so `value.hp` works on a whole `Char.Vitals` message.
+- A package hears everything below it, the way Mudlet's GMCP events do: `"Char"`
+  runs for `Char.Vitals`, `Char.Status` and the rest, with the name of the one
+  that arrived.
+- A path inside a message, like `"Char.Vitals.hp"`, runs only when that message
+  carries it, and gets just that value.
+- `{changes = true}` skips a value that's the same as the last one this function
+  heard. Without it, the function runs every time the MUD sends the data, and
+  many MUDs send `Char.Vitals` with every prompt.
+- Start the name with `gmcp.`, `msdp.` or `mssp.` to hear only that protocol.
+  Names match in any case.
+
 ## Combine captures, script values, and MUD data
 
 One command group can use all three sources:
@@ -654,9 +681,10 @@ Rules and timing:
 - `mud.trigger(pattern, callback [, options])`
 - `mud.key(key_name, callback)`
 - `mud.timer(seconds, callback)`
+- `mud.on_data(name, callback [, options])`
 
 The alias and trigger options are `regex` and `priority`. A trigger can also use
-`channel`.
+`channel`. The only `mud.on_data` option is `changes`.
 
 Commands and output:
 

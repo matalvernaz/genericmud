@@ -1659,6 +1659,9 @@ class EngineApp:
                     self._gauges[message.name] = message.value
                     self.engine.set_mud_var(message.name, message.value)
                     self.engine.set_mud_var(f"{message.source}.{message.name}", message.value)
+                    # Once per message, with both names stored, so a rule that fires on it
+                    # can already read the new value through ${mud:...}.
+                    self.engine.data_arrived(message.source, message.name, message.value)
                     if message.source == "gmcp":
                         for pack in self._mush_packs:
                             pack.dispatch_gmcp(message.name, message.value)
@@ -1685,6 +1688,7 @@ class EngineApp:
             for name, value in result.data.items():
                 self.engine.set_mud_var(name, value)
                 self.engine.set_mud_var(f"mssp.{name}", value)
+                self.engine.data_arrived("mssp", name, value)
             self._post(protocol.status(self._gauges))
         if sub.option == T.OPT_MSDP and self._mush_packs:
             self._route_msdp(sub.payload)
