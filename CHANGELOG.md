@@ -8,6 +8,47 @@ fails the build on purpose.
 
 Entries start at 0.7.1. Earlier releases were tagged before this file existed.
 
+## 0.23.0 — 2026-11-05
+
+**Reacting when the MUD sends a value**, ideas from Mudlet
+
+* The Automation Manager has a sixth choice, MUD data: a rule that plays a
+  sound, speaks, or sends commands whenever the MUD sends a value over GMCP,
+  MSDP or MSSP, such as your health. Speech of ${value} health reads your
+  health out. Only when it changes is on for a new rule, since many MUDs send
+  your health with every prompt whether it moved or not. Ctrl+6 shows them.
+* The MUD variables list (Ctrl+Shift+V) can put what arrived most recently at
+  the top, each line saying how long ago, so you can do something in the game
+  and see which values just changed. Watch this makes a MUD data rule for the
+  value you're on.
+* Scripts get the same with mud.on_data, which runs a function each time a
+  package, a variable or a value inside one arrives.
+
+**Sounds from a direction**, from Mudlet 5.1
+
+* A MUD can say where a sound comes from: a door creaking to the east plays in
+  your right ear while you face north, and the sounds swing round when the MUD
+  says you've turned. It can also move or fade a sound that's already playing,
+  pause sounds and carry on later, and give a sound a priority so a less
+  important one doesn't drown it out. Moving, turning and pausing work in the
+  native window; in the web UI a sound plays where it starts.
+
+**Jumping between links**, from Mudlet
+
+* Alt+PageDown jumps to the next link in the output and Alt+PageUp to the
+  previous one, skipping lines without any. The cursor lands on the link, so
+  Alt+Enter follows it. In a world whose soundpack uses those keys, like
+  Erion's history browser, they stay the soundpack's.
+
+**Reading what MUDs send**
+
+* Chat that IRE games such as Achaea send over GMCP, with colour codes inside,
+  is read properly now; before, none of its parts could be used. Two rarer ways
+  servers send GMCP are read properly too.
+* An MSDP value sent as a list, like your active spells, keeps every item, not
+  just the first, and one stray marker in a message no longer loses everything
+  after it. A server that lists its variables that way now gets asked for them.
+
 ## 0.22.0 — 2026-11-05
 
 **MXP links that do more**, from MasterJake00
