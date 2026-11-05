@@ -465,6 +465,36 @@ def test_plugin_tick_chain_dispatches_and_pauses_when_disconnected():
     assert pack.ticks == 1 and scheduled == []
 
 
+def test_plugin_ticks_pause_during_backoff_and_resume_after_reconnect():
+    from types import SimpleNamespace
+
+    ticks = []
+    scheduled = []
+    app = EngineApp(
+        VoiceRouter(RecordingBackend(), clock=lambda: 0.0), keymap={},
+        schedule=lambda delay, callback: scheduled.append(callback),
+    )
+    app._mush_packs = [SimpleNamespace(
+        has_hook=lambda name: name == "OnPluginTick",
+        dispatch=lambda *args: ticks.append("tick"),
+        dispatch_disconnect=lambda: None,
+        dispatch_connect=lambda: None,
+    )]
+    app._arm_plugin_ticks()
+    scheduled.pop(0)()
+    assert ticks == ["tick"]
+
+    app.on_connection_status("connection lost; reconnecting in 1s (attempt 1)")
+    assert not app.engine.connected
+    scheduled.pop(0)()
+    assert ticks == ["tick"]  # the scheduler continues, but disconnected plugins don't tick
+
+    app.on_connection_status("reconnected")
+    assert app.engine.connected
+    scheduled.pop(0)()
+    assert ticks == ["tick", "tick"]
+
+
 def test_a_pack_can_quiet_incoming_lines_without_touching_review_or_the_buffer():
     # A pack's Do Not Disturb (Miriani-Next) silences lines as they arrive. They still land
     # in the buffer and the output, so nothing is lost, and the review keys still speak.
