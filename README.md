@@ -507,6 +507,16 @@ to. When the MUD gives a sound a caption, a description for players who can't
 hear it, the caption appears in the output in brackets, like `[A wolf howls]`,
 where the review keys can find it. It isn't spoken.
 
+A MUD can also say where a sound comes from, the way Mudlet 5.1 does it: a door
+creaking to the east plays in your right ear while you face north, and in your
+left ear once the MUD tells genericMud you've turned to face south. Up, down,
+ahead and behind play in the middle, since headphones can't tell front from
+back. The MUD can move or fade a sound that's already playing, pause sounds and
+carry on with them later, and give a sound a priority so a more important one
+isn't drowned out: while it plays, sounds of a lower priority don't start, and
+lower ones already playing stop. Moving, fading, turning and pausing work in the native
+window; in the web UI a sound plays where it started and can't be paused.
+
 ### Pictures
 
 A MUD can put an image on a line — a map, a room picture, a shop's sign. MXP has

@@ -71,10 +71,12 @@ from genericmud.session.login import AutoLogin
 from genericmud.sound.bus import (
     DEFAULT_CATEGORY,
     MUSIC_CATEGORY,
+    PAUSED,
     CueTiming,
     SoundBackend,
     SoundBus,
 )
+from genericmud.sound.direction import facing_bearing, stereo_pan
 from genericmud.sound.media import MediaLibrary, media_url
 from genericmud.voice.router import REVIEW_CHANNEL, SYSTEM_CHANNEL, VoiceRouter
 
@@ -124,6 +126,7 @@ _MEDIA_DEFAULT_VOLUME = 50  # Client.Media.Play's volume when the server leaves 
 _MEDIA_FADEAWAY_MS = 5000  # Client.Media.Stop's fadeaway when neither Play nor Stop says (spec)
 _MEDIA_LONGEST_MS = 24 * 60 * 60 * 1000  # positions and fades past a day are a server's mistake
 _MEDIA_TRACKED = 64  # Client.Media cues remembered for Stop before finished ones are dropped
+_MEDIA_TURN_SECONDS = 0.25  # how long placed sounds take to swing round when the player turns
 # MSDP variables that mean the player's location changed; both the table and flat forms.
 _MSDP_ROOM_VARS = frozenset(
     {"ROOM", "ROOM_NAME", "ROOM_AREA", "ROOM_EXITS", "ROOM_VNUM", "AREA_NAME"}
@@ -514,6 +517,9 @@ class EngineApp:
         self._media_cues: dict[str, dict[str, object]] = {}  # bus channel -> Client.Media.Play
         self._media_gen: dict[str, int] = {}  # bumps per cue/stop so a late download can't play
         self._media_seq = 0  # unique channels for keyless Client.Media sounds, which overlap
+        # The way the player faces, in degrees from north, for sounds the MUD places by compass
+        # direction (Client.Media.Listener). North until the MUD says otherwise.
+        self._media_facing = 0.0
         self.sink = AppSink(
             send=self._send,
             send_raw=send_raw,
@@ -745,6 +751,7 @@ class EngineApp:
         self._mxp_negotiated = False
         self._mxp = MxpParser()
         self._release_mxp_hold()
+        self._media_facing = 0.0  # facing north again until this connection's MUD says otherwise
         if self.hub is not None and self.name:
             self.hub.register(self.name, self._dispatch_remote)
         if self.log_automatically:
@@ -1671,7 +1678,7 @@ class EngineApp:
                             self._server_goodbye(message.value)
                         elif message.name.lower() == "room.wrongdir":
                             self._wrong_direction(message.value)
-                        elif message.name.lower().startswith("client.media."):
+                        elif message.name.lower().split(".")[:2] == ["client", "media"]:
                             self._client_media(message.name, message.value)
                     elif message.name == msdp.REPORTABLE_VARIABLES:
                         self._subscribe_msdp(message.value)
@@ -1796,10 +1803,11 @@ class EngineApp:
         self._post(protocol.echo(f"* sound download failed: {url} ({reason})"))
 
     def _client_media(self, package: str, data: object) -> None:
-        """GMCP ``Client.Media.*`` (Mudlet's media spec): Default, Load, Play and Stop."""
+        """GMCP ``Client.Media.*`` (Mudlet's media spec): Default, Load, Play, Stop, Pause,
+        Update and Listener. Bare Client.Media is Default's obsolete name."""
         verb = package.rsplit(".", 1)[-1].lower()
         body = data if isinstance(data, dict) else {}
-        if verb == "default":
+        if verb in ("default", "media"):
             self._media_url = str(body.get("url") or "")
         elif verb == "load":
             name = str(body.get("name") or "")
@@ -1810,6 +1818,12 @@ class EngineApp:
             self._media_play(body)
         elif verb == "stop":
             self._media_stop(body)
+        elif verb == "pause":
+            self._media_pause(body)
+        elif verb == "update":
+            self._media_update(body)
+        elif verb == "listener":
+            self._media_listener(body)
 
     def _media_play(self, body: dict) -> None:
         name = str(body.get("name") or "")
@@ -1829,6 +1843,13 @@ class EngineApp:
         loop = loops < 0  # -1 loops until stopped; otherwise it plays that many times
         times = max(1, loops)
         key = str(body.get("key") or "")
+        if self._media_resume(name, kind, key, body):
+            return
+        priority = _media_int(body.get("priority"), 0, 0, 100)
+        if not self._media_has_priority(name, kind, priority):
+            if self._diag is not None:
+                self._diag.event("media.play", file=name, refused="priority", priority=priority)
+            return
         if kind == "music":
             channel = MUSIC_CATEGORY
             current = self._media_cues.get(channel)
@@ -1843,13 +1864,19 @@ class EngineApp:
             channel = f"media-{self._media_seq}"
         self._forget_finished_media()
         timing = _media_timing(body)
+        # Where the sound comes from (Mudlet 5.1): a pan given outright, or a direction turned
+        # by the way the player faces. Music plays in the middle, as Mudlet plays it.
+        pan = stereo_pan(body.get("pan"), body.get("direction"), self._media_facing)
+        placed_by_direction = kind == "sound" and pan is not None and body.get("pan") is None
         self._media_cues[channel] = {
             "name": name,
             "type": kind,
             "key": key,
             "tag": str(body.get("tag") or ""),
-            "priority": _media_int(body.get("priority"), 0, 0, 100),
+            "priority": priority,
             "fadeout": timing.fade_out if timing is not None else 0.0,  # a fadeaway's length
+            # A sound placed by direction turns when the player does; one given a pan stays.
+            "direction": body.get("direction") if placed_by_direction else None,
         }
         url = self._media_source(body)
         if self._diag is not None:
@@ -1871,7 +1898,8 @@ class EngineApp:
             self._start_media(
                 name, url, channel,
                 lambda path: self.sound.play(
-                    path, channel, gain=gain, loop=loop, times=times, timing=timing
+                    path, channel, gain=gain, pan=pan or 0.0, loop=loop, times=times,
+                    timing=timing,
                 ),
             )
 
@@ -1913,6 +1941,103 @@ class EngineApp:
                 self._fade_away_media(channel, seconds)
             else:
                 self._stop_media(channel)
+
+    def _media_matching(self, body: dict):
+        """The tracked cues matching every name, type, key and tag the body gives, as
+        (channel, cue). A key or tag has to be the cue's own, so a sound with none of its own
+        never matches one that names a key: Update needs that as much as Stop does."""
+        wanted = {
+            field: str(body[field])
+            for field in ("name", "type", "key", "tag")
+            if body.get(field) not in (None, "")
+        }
+        for channel, cue in list(self._media_cues.items()):
+            if any(str(cue[field]) != value for field, value in wanted.items()):
+                continue
+            yield channel, cue
+
+    def _media_has_priority(self, name: str, kind: str, priority: int) -> bool:
+        """Mudlet's rule for a Play that gives a priority (1 to 100; 0 is none set, and always
+        plays): a different sound of the same type, playing with an equal or higher priority,
+        keeps this one from starting, and a lower one is stopped to make room."""
+        if priority <= 0:
+            return True
+        rivals = [
+            (channel, cue) for channel, cue in self._media_cues.items()
+            if cue["type"] == kind and cue["name"] != name and int(cue["priority"]) > 0
+            and self.sound.is_playing(channel)
+        ]
+        if any(int(cue["priority"]) >= priority for _channel, cue in rivals):
+            return False
+        for channel, _cue in rivals:
+            self._stop_media(channel)
+        return True
+
+    def _media_resume(self, name: str, kind: str, key: str, body: dict) -> bool:
+        """A Play for a sound or track that a Pause left paused carries on where it stopped,
+        unless the Play says continue false. True when one was resumed."""
+        if not _media_continues(body.get("continue")):
+            return False
+        for channel, cue in self._media_cues.items():
+            same = cue["type"] == kind and cue["name"] == name and (not key or cue["key"] == key)
+            if same and self.sound.state(channel) == PAUSED:
+                self.sound.resume(channel)
+                if self._diag is not None:
+                    self._diag.event("media.resume", file=name, channel=channel)
+                return True
+        return False
+
+    def _media_pause(self, body: dict) -> None:
+        """Client.Media.Pause: pause the cues matching every field given, all of them when it
+        gives none, as Stop matches. ``priority`` pauses those at or below it."""
+        ceiling = _media_int(body.get("priority"), None, 0, 100)
+        for channel, cue in self._media_matching(body):
+            if ceiling is not None and int(cue["priority"]) > ceiling:  # type: ignore[call-overload]
+                continue
+            if self.sound.is_playing(channel):
+                self.sound.pause(channel)
+
+    def _media_update(self, body: dict) -> None:
+        """Client.Media.Update: change a playing cue's volume, or where it comes from, gliding
+        over ``duration`` milliseconds. It has to name the cue by name, key or tag: an Update
+        naming none would move every sound the MUD is playing, so it's refused, as Mudlet does."""
+        if not any(body.get(field) not in (None, "") for field in ("name", "key", "tag")):
+            if self._diag is not None:
+                self._diag.event("media.update", refused="names no sound")
+            return
+        volume = _media_int(body.get("volume"), None, 0, 100)
+        placing = body.get("pan") is not None or body.get("direction") is not None
+        seconds = _media_int(body.get("duration"), 0, 0, _MEDIA_LONGEST_MS) / 1000
+        for channel, cue in self._media_matching(body):
+            gain = volume / 100 if volume is not None else None
+            pan = None
+            if placing and cue["type"] == "sound":
+                pan = stereo_pan(body.get("pan"), body.get("direction"), self._media_facing)
+                # A new direction takes over from an earlier pan, and a pan from a direction.
+                cue["direction"] = body.get("direction") if body.get("pan") is None else None
+                pan = pan or 0.0
+            if gain is None and pan is None:
+                continue
+            if seconds > 0:
+                self.sound.slide(channel, gain=gain, pan=pan, seconds=seconds)
+            else:
+                self.sound.adjust(channel, gain=gain, pan=pan)
+
+    def _media_listener(self, body: dict) -> None:
+        """Client.Media.Listener: the way the player now faces. Every sound placed by compass
+        direction turns with them, gliding over a quarter of a second."""
+        facing = facing_bearing(body.get("facing"))
+        if facing is None:
+            if self._diag is not None:
+                self._diag.event("media.listener", refused=str(body.get("facing")))
+            return
+        self._media_facing = facing
+        for channel, cue in self._media_cues.items():
+            if cue["type"] != "sound" or cue.get("direction") is None:
+                continue
+            if self.sound.is_playing(channel):
+                pan = stereo_pan(None, cue["direction"], facing)
+                self.sound.slide(channel, pan=pan or 0.0, seconds=_MEDIA_TURN_SECONDS)
 
     def _forget_finished_media(self) -> None:
         """Drop finished one-shots so a long session's keyless cues don't pile up forever."""
@@ -2811,6 +2936,7 @@ class EngineApp:
         self._mxp_negotiated = False
         self._mxp = MxpParser()
         self._release_mxp_hold()
+        self._media_facing = 0.0  # and the player faces north until the MUD says otherwise
         # Echo state belongs to the dead socket: no WONT ECHO is coming for it. Through
         # forget_hidden_input, as on_connection_status does, so the window's history and
         # the hidden-input timeout hear about it too.
