@@ -485,6 +485,9 @@ class SessionPanel(wx.Panel):
         self._connection.configure_reconnect(
             self._prefs.auto_reconnect, self._prefs.reconnect_interval,
         )
+        # A reconnect the transport starts by itself asks where to dial, so an edited world
+        # applies to a drop nobody asked for as well as to Ctrl+D.
+        self._connection.set_target_provider(self._target_for_reconnect)
         self._connection.on_status = self.app.on_connection_status
         self.app.apply_world_settings(self.world)  # command stacking and logging
         if self.world.sounds:  # point @sppath at the world's sound folder before packs load
@@ -1424,9 +1427,49 @@ class SessionPanel(wx.Panel):
         """
         self._loop.call_soon_threadsafe(lambda: asyncio.create_task(self._reconnect()))
 
+    def _target_for_reconnect(self) -> tuple[str, int, bool]:  # loop thread
+        """Where an automatic reconnect should go: the world as it stands now."""
+        self._adopt_saved_world()
+        return (self.world.host, self.world.port, self.world.tls)
+
+    def _adopt_saved_world(self) -> None:  # loop thread
+        """Take this world's connection details from the saved world, as they stand now.
+
+        How a tab connects used to be frozen at the moment it opened, so editing a world's port
+        or TLS switch and pressing Ctrl+D reconnected to the old ones. The details are read from
+        one record at once instead -- host, port, TLS and encoding together -- which is what
+        keeps a new host from arriving with the old encoding, the reason the freeze existed.
+
+        Sounds are the exception: packs load when a tab starts, so a new Sounds folder needs a
+        new tab rather than a reconnect.
+        """
+        saved = next(
+            (
+                world
+                for world in load_worlds()
+                if world.name.casefold() == self.world.name.casefold()
+            ),
+            None,
+        )
+        if saved is None:
+            return
+        self.world = replace(
+            self.world,
+            host=saved.host,
+            port=saved.port,
+            tls=saved.tls,
+            encoding=saved.encoding,
+        )
+        if self.app is not None:
+            # On the loop thread, where the engine lives: the codec is replaced in place and the
+            # connection re-pointed at the new one, so typed commands go out in it too.
+            self.app.set_encoding(self.world.encoding)
+            self._connection.text_codec = self.app.codec
+
     async def _reconnect(self) -> None:  # loop thread
         if not self._alive or self._connection is None or self.app is None:
             return  # the tab closed before this got its turn on the loop
+        self._adopt_saved_world()
         if self._connection.connected:
             return  # the link came back while this waited its turn on the loop
         if self._reconnecting or self._connection.connecting:

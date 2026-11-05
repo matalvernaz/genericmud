@@ -668,6 +668,7 @@ class EngineApp:
         self._closed = False  # ends the tick chain at shutdown
         # The world's text encoding, both directions: the UI hands this same codec to the
         # connection so typed commands go out in the encoding the output arrives in.
+        self.encoding = encoding
         self.codec = ServerTextCodec(encoding, on_latch=self._on_encoding_latch)
         # Names of the saved worlds, so an older ASCII-only folder is only adopted when it
         # isn't another world's own folder (see _world_path). None: no saved worlds known.
@@ -2999,6 +3000,17 @@ class EngineApp:
     def _speak_system(self, text: str, *, interrupt: bool = True) -> None:
         self.voice.speak(text, channel=SYSTEM_CHANNEL, interrupt=interrupt)
         self._post(protocol.echo(f"* {text}"))
+
+    def set_encoding(self, encoding: str) -> None:
+        """Take a new encoding for this session, for a world whose details changed.
+
+        Called while the session is disconnected, so no half-decoded bytes are in flight. The
+        codec is shared with the connection, so the window re-points that too.
+        """
+        if encoding == self.encoding:
+            return
+        self.encoding = encoding
+        self.codec = ServerTextCodec(encoding, on_latch=self._on_encoding_latch)
 
     def after_reconnect(self) -> None:
         """Reattach this session to a socket that is live again.

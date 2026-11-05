@@ -1397,6 +1397,9 @@ def test_the_window_tells_packs_the_mud_connected_only_once_it_has(frame, monkey
         def withdraw_remote(self, *_args) -> None:
             pass
 
+        def set_target_provider(self, _provider) -> None:
+            self.target_provider = _provider
+
         async def connect(self, _host, _port, tls=False) -> None:
             if not connects:
                 raise OSError("Connection refused")

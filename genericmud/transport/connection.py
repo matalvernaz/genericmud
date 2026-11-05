@@ -156,6 +156,9 @@ class MudConnection:
         self._quit_sent_at: float | None = None  # monotonic time of the last quit command
         self._server_closing = False  # the server announced a deliberate close (see below)
         self._target: tuple[str, int, bool, ssl.SSLContext | None] | None = None
+        # Asked before each automatic reconnect where to dial; set by the window, which is what
+        # knows the world. It must outlive a connect, so it lives here, not in connect().
+        self._target_provider: Callable[[], tuple[str, int, bool] | None] | None = None
         self._dispatch_fault_seen = False  # speak the first consumer fault, then stay quiet
         # The world's text codec (the UI shares the engine's, so commands go out in the
         # encoding the output is read in). None = UTF-8, as before per-world encodings.
@@ -480,6 +483,26 @@ class MudConnection:
             elif not self.connected and not self._handshakes:
                 self._status("disconnected")
 
+    def set_target_provider(
+        self, provider: Callable[[], tuple[str, int, bool] | None]
+    ) -> None:
+        """Ask this before each automatic reconnect where to dial, or None to keep the target.
+
+        A world can be edited while a link is up, and the drop that follows was nobody's
+        decision: without this the backoff loop redials the address it last connected to, and
+        the edit waits for a reconnect the player has to ask for.
+        """
+        self._target_provider = provider
+
+    def _provided_target(self) -> tuple[str, int, bool] | None:
+        """What the provider says, if anything. A fault here must not stop a reconnect."""
+        if self._target_provider is None:
+            return None
+        try:
+            return self._target_provider()
+        except Exception:  # noqa: BLE001 - a broken provider is not a reason to stay offline
+            return None
+
     async def _reconnect_loop(self) -> None:
         assert self._target is not None
         host, port, tls, ssl_context = self._target
@@ -504,6 +527,9 @@ class MudConnection:
             await asyncio.sleep(delay)
             if self._closing:  # user disconnected during the backoff wait
                 return
+            provided = self._provided_target()
+            if provided is not None:
+                host, port, tls, ssl_context = (*provided, None)
             try:
                 await self.connect(host, port, tls=tls, ssl_context=ssl_context)
             except OSError as error:
