@@ -21,6 +21,8 @@ class Panel:
     _start_inner = wx_app.SessionPanel._start_inner
     _send = wx_app.SessionPanel._send
     _reconnect = wx_app.SessionPanel._reconnect
+    _adopt_saved_world = wx_app.SessionPanel._adopt_saved_world
+    _target_for_reconnect = wx_app.SessionPanel._target_for_reconnect
     _do_disconnect = wx_app.SessionPanel._do_disconnect
     _teardown = wx_app.SessionPanel._teardown
     close = wx_app.SessionPanel.close
@@ -44,6 +46,9 @@ class Panel:
         self._focused = False
         self._questions = []
         self.world = World("Test", "mud.example", 4000)
+        # No saved worlds here: a reconnect re-reads the saved world, and these tests are not
+        # about that -- the real config folder should not be read while testing either.
+        monkeypatch.setattr(wx_app, "load_worlds", list)
         self.posted = []
         self.backend = RecordingBackend()
         self._post = self.posted.append
