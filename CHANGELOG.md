@@ -10,7 +10,7 @@ Entries start at 0.7.1. Earlier releases were tagged before this file existed.
 
 ## 0.22.0 — 2026-11-05
 
-**MXP links that do more**
+**MXP links that do more**, from MasterJake00
 
 * A link can start a command for you to finish, such as a name that starts a
   tell to that player. Following it puts the start of the command in the
@@ -24,9 +24,10 @@ Entries start at 0.7.1. Earlier releases were tagged before this file existed.
   follow it.
 * MUDs that keep their own values for the session, such as your hit points,
   show the values in the text instead of their names, and links can use them.
-  A new connection starts without the old one's values.
+  A new connection starts without the old one's values, one of the reconnect
+  problems have-you-met-matt reported.
 
-**Aliases take the rest of the line**
+**Aliases take the rest of the line**, an idea from MUDBall
 
 * An alias with no * in it takes whatever you type after it: an alias sh that
   sends shoot turns sh goblin into shoot goblin. The words go on the end of the
@@ -34,17 +35,34 @@ Entries start at 0.7.1. Earlier releases were tagged before this file existed.
   as a regular expression, or a soundpack's own alias still comes first, and
   typed /alias shortcuts work the same way.
 
-**Copying**
+**Copying**, also from MUDBall
 
 * Ctrl+Shift+C copies from the line you're reviewing, or the newest line. A
   small box opens with the whole line selected, so Enter copies all of it, or
   select just a name or a number first.
 
-**Logging in**
+**Logging in**, from MasterJake00
 
 * The MUSH and MOO login is now sent as connect name password in lowercase, the
   way connect screens print it. Some servers ignore it in capitals and leave you
   sitting at the connect screen with no error.
+
+**Thanks**
+
+Thanks to everyone who has contributed to genericMud so far:
+
+* MasterJake00: MXP from the start, logins kept in your computer's credential
+  store, reconnecting a tab, switching worlds by number, letting other worlds
+  speak, the world in the window title, echoing what you type, separate log
+  folders, the tenth recall and channel message, and all the MXP work in this
+  release.
+* fastfinge: the move to prism and uv, playing the sounds a MUD sends over
+  GMCP and downloading the ones you don't have, and speech for dashes, curly
+  quotes and CJK text.
+* have-you-met-matt: numpad hotkeys with the compass off, accented and other
+  non-English text kept readable in saved rules and world exports, keeping your
+  command when you type from the output, and a careful report of reconnect
+  problems.
 
 ## 0.21.3 — 2026-11-02
 
