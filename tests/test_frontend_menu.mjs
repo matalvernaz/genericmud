@@ -118,7 +118,7 @@ test("clicking an ordinary link still follows it", () => {
   const anchor = { textContent: "north", dataset: { words: "north", command: "north" } };
   const { followed, asked } = clickOn(anchor);
   assert.deepEqual(asked, []);
-  assert.deepEqual(followed, [["north", "north", false]]);
+  assert.deepEqual(followed, [["north", "north", false, ""]]);
 });
 
 test("a menu link drawn in the page carries its choices", () => {

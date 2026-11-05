@@ -209,3 +209,14 @@ def test_the_caption_is_said_before_the_command_is_sent():
     # The arriving line is spoken too, so the caption has to be among what came first, not
     # merely present: the point is which of the two the player hears first.
     assert "fountain: drink fountain. Click to drink" in said_before_sending
+
+
+def test_the_same_link_on_the_next_line_is_described_again():
+    # Two fountains, two links that look alike: arriving on the second is still arriving.
+    app, _sent, _posted, backend = _app()
+    for words in ("A fountain gurgles here: ", "Another fountain: "):
+        _say(app, SECURE + words + '<send "drink fountain" hint="Click to drink">fountain</send>')
+    app.on_ws_message({"type": "key", "key": "alt+up"})
+    assert backend.spoken[-1] == "link: Click to drink"
+    app.on_ws_message({"type": "key", "key": "alt+down"})
+    assert backend.spoken[-2:] == ["Another fountain: fountain", "link: Click to drink"]
