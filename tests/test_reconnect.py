@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import time
 
+import pytest
+
 from genericmud.transport.connection import (
     _QUIT_GRACE_SECONDS,
     MudConnection,
@@ -100,6 +102,7 @@ async def test_reconnect_loop_retries_then_succeeds(monkeypatch):
         attempts["n"] += 1
         if attempts["n"] < 3:
             raise OSError("connection refused")
+        conn._writer = _ClosingWriter()
 
     monkeypatch.setattr(conn, "connect", fake_connect)
     monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
@@ -154,7 +157,10 @@ async def test_disconnect_during_the_reconnect_handshake_is_not_announced(monkey
 
     async def slow_open_connection(host, port, ssl=None):
         handshake_started.set()
-        await release_handshake.wait()
+        try:
+            await release_handshake.wait()
+        except asyncio.CancelledError:
+            pass  # even a network operation that completes despite cancellation must be safe
         return _IdleReader(), writer
 
     monkeypatch.setattr(asyncio, "open_connection", slow_open_connection)
@@ -168,7 +174,7 @@ async def test_disconnect_during_the_reconnect_handshake_is_not_announced(monkey
     conn.auto_reconnect = False  # what the window's Disconnect does first
     await conn.close()
     release_handshake.set()
-    await loop_task
+    await asyncio.gather(loop_task, return_exceptions=True)
 
     assert writer.closed
     assert not conn.connected
@@ -250,6 +256,128 @@ async def test_a_close_during_the_backoff_wait_ends_connecting_without_a_retry(m
     await sleeping.wait()
     await conn.close()
     wake.set()
-    await conn._reconnect_task
+    await asyncio.gather(conn._reconnect_task, return_exceptions=True)
     assert conn.connecting is False
     assert opened == ["host"]  # the backoff saw the close and didn't try again
+
+
+async def test_close_cancels_backoff_without_waiting_for_its_delay(monkeypatch):
+    conn, sleeping, wake, opened, statuses = _backoff_setup(monkeypatch)
+    await conn.connect("host", 23)
+    await sleeping.wait()
+    retry = conn._reconnect_task
+    before_close = list(statuses)
+    try:
+        await conn.close()
+        assert retry.done()
+        assert not conn.connecting
+        assert statuses == before_close
+        assert opened == ["host"]
+    finally:
+        wake.set()
+        await asyncio.gather(retry, return_exceptions=True)
+
+
+@pytest.mark.parametrize("late_result", ["cancel", "socket", "error"])
+async def test_close_cancels_reconnect_handshake_without_late_status(monkeypatch, late_result):
+    started = asyncio.Event()
+    release = asyncio.Event()
+    cancelled = asyncio.Event()
+    writer = _ClosingWriter()
+    opens = []
+
+    async def open_connection(host, port, ssl=None):
+        opens.append(host)
+        if len(opens) == 1:
+            return _EndedReader(), _ClosingWriter()
+        started.set()
+        try:
+            await release.wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            if late_result == "cancel":
+                raise
+            if late_result == "error":
+                raise OSError("late refusal") from None
+        return _IdleReader(), writer
+
+    monkeypatch.setattr(asyncio, "open_connection", open_connection)
+    monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
+    conn = MudConnection()
+    conn.auto_reconnect = True
+    statuses = []
+    conn.on_status = statuses.append
+    await conn.connect("host", 23)
+    await started.wait()
+    retry = conn._reconnect_task
+    before_close = list(statuses)
+    try:
+        await conn.close()
+        assert cancelled.is_set()
+        assert retry.done()
+        assert not conn.connecting
+        assert not conn.connected
+        assert statuses == before_close
+        assert opens == ["host", "host"]
+        if late_result == "socket":
+            assert writer.closed
+    finally:
+        release.set()
+        await asyncio.gather(retry, return_exceptions=True)
+
+
+async def test_closing_one_sessions_retry_leaves_the_other_running(monkeypatch):
+    waits = {host: asyncio.Event() for host in ("first", "second")}
+    started = {host: asyncio.Event() for host in waits}
+
+    async def open_connection(host, port, ssl=None):
+        started[host].set()
+        await waits[host].wait()
+        return _IdleReader(), _ClosingWriter()
+
+    monkeypatch.setattr(asyncio, "open_connection", open_connection)
+    monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
+    connections = [MudConnection(), MudConnection()]
+    for host, conn in zip(waits, connections, strict=True):
+        conn._target = (host, 23, False, None)
+        conn._reconnect_task = asyncio.create_task(conn._reconnect_loop())
+    await asyncio.gather(*(event.wait() for event in started.values()))
+    try:
+        await connections[0].close()
+        assert not connections[0].connecting
+        assert connections[1].connecting
+        waits["second"].set()
+        await connections[1]._reconnect_task
+        assert connections[1].connected
+    finally:
+        for event in waits.values():
+            event.set()
+        await asyncio.gather(*(conn.close() for conn in connections))
+
+
+async def test_a_new_connect_waits_for_the_old_read_task_to_stop(monkeypatch):
+    opened = []
+
+    async def open_connection(*args, **kwargs):
+        opened.append(args)
+        return _IdleReader(), _ClosingWriter()
+
+    monkeypatch.setattr(asyncio, "open_connection", open_connection)
+    conn = MudConnection()
+    await conn.connect("host", 23)
+
+    async def reconnect_if_ready():
+        # The same readiness check the window uses for an in-place reconnect.
+        if not conn.connected and not conn.connecting:
+            await conn.connect("host", 23)
+
+    # Queue both before yielding: close starts, then the manual request runs before the
+    # cancelled old read loop gets its turn. That loop mustn't tear down a newer socket.
+    await asyncio.gather(conn.close(), reconnect_if_ready())
+    try:
+        assert len(opened) == 1
+        assert not conn.connected
+        await conn.connect("host", 23)
+        assert conn.connected
+    finally:
+        await conn.close()

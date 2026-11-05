@@ -329,13 +329,13 @@ def _hotkey_taken(combo: str, keymap: dict[str, str]) -> str | None:
     return f"{reason}, so a hotkey on it would never run. Choose another key."
 
 
-def _connection_menu_label(connected: bool) -> str:
+def _connection_menu_label(active: bool) -> str:
     """The File-menu label for the active tab's connection toggle.
 
     One item rather than two enabled/disabled ones: Ctrl+D keeps working in both states,
     so the same key has to mean "drop it" now and "bring it back" a moment later.
     """
-    return "&Disconnect\tCtrl+D" if connected else "&Reconnect\tCtrl+D"
+    return "&Disconnect\tCtrl+D" if active else "&Reconnect\tCtrl+D"
 
 
 class SessionPanel(wx.Panel):
@@ -426,6 +426,8 @@ class SessionPanel(wx.Panel):
         try:
             await self._start_inner()
         except Exception as error:  # noqa: BLE001 - surface session-setup death, never swallow
+            if not self._alive:
+                return
             if self._diag is not None:
                 self._diag.event(
                     "session.start_failed",
@@ -441,6 +443,8 @@ class SessionPanel(wx.Panel):
                 )
 
     async def _start_inner(self) -> None:
+        if not self._alive:
+            return  # teardown ran before startup got its turn on the loop
         self._voice = VoiceRouter(make_voice_backend())
         self._connection = MudConnection()
         self.app = EngineApp(
@@ -487,10 +491,15 @@ class SessionPanel(wx.Panel):
         # Activate packs and arm auto-login before any data; they hear the MUD connected
         # once the connection opens, below.
         self.app.on_connect(self.world.name, socket_open=False)
+        if not self._alive or self._connect_finished:
+            return  # Disconnect was requested before startup; keep the tab ready for Reconnect
         if self._diag is not None:
             self._diag.event("connect.begin", host=self.world.host, port=self.world.port)
         try:
             await self._connection.connect(self.world.host, self.world.port, tls=self.world.tls)
+            if not self._alive or not self._connection.connected:
+                await self._connection.close()
+                return  # a closed tab or a cancelled handshake is not a successful connect
             if self._diag is not None:
                 self._diag.event("connect.ok", host=self.world.host)
             # First, before anything else can queue up: the socket is finally open, so a
@@ -503,6 +512,8 @@ class SessionPanel(wx.Panel):
             # Nothing from the MUD has been read yet: the reading starts once this yields.
             self.app.on_socket_open()
         except OSError as error:
+            if not self._alive or self._connect_finished:
+                return  # a stopped startup has nobody to report a late failure to
             if self._diag is not None:
                 self._diag.event("connect.failed", error=str(error))
             self._post(protocol.echo(f"* Connect failed: {error}"))
@@ -1277,6 +1288,8 @@ class SessionPanel(wx.Panel):
 
     def close(self) -> None:
         """Tear down the session; safe to call from the wx thread on tab close."""
+        if not self._alive:
+            return
         self._alive = False
         self.close_notepads()
         try:
@@ -1296,24 +1309,29 @@ class SessionPanel(wx.Panel):
         if self._voice is not None:
             self._voice.flush()
         if self._connection is not None:
-            asyncio.create_task(self._connection.close())
+            self._connection.request_close()
 
     def is_connected(self) -> bool:
         return self._connection is not None and self._connection.connected
+
+    def is_connecting(self) -> bool:
+        return not self._connect_finished or self._reconnecting or (
+            self._connection is not None and self._connection.connecting
+        )
 
     def disconnect(self) -> None:
         """Drop the connection but keep the session/tab open (and stop auto-reconnect)."""
         self._loop.call_soon_threadsafe(self._do_disconnect)
 
     def _do_disconnect(self) -> None:  # loop thread
+        self._connect_finished = True  # also stop an initial connect that hasn't started yet
         if self._connection is not None:
             self._connection.auto_reconnect = False
-            asyncio.create_task(self._connection.close())
+            self._connection.request_close()
         if self.app is not None:
-            # A deliberate close stays quiet on the transport side -- close() sets _closing,
-            # so the read loop's own "disconnected" never fires -- which is why the flush,
-            # the timer cancel, the hidden-input reset, the VIPMud packs' OnDisconnect and
-            # the wording all have to come from the same place a dropped link uses.
+            # request_close() marks the intent now, so even a ready EOF stays quiet on the
+            # transport side. The flush, timer cancel, hidden-input reset, VIPMud packs'
+            # OnDisconnect and wording still come from the same path a dropped link uses.
             # Reporting it through that path keeps the two identical instead of
             # maintaining a second copy of them here.
             self.app.on_connection_status("disconnected")
@@ -4821,7 +4839,7 @@ class GenericMudFrame(wx.Frame):
         """Point the File item at what it will actually do for the active tab."""
         panel = self._active_panel()
         if panel is not None:
-            label = _connection_menu_label(panel.is_connected())
+            label = _connection_menu_label(panel.is_connected() or panel.is_connecting())
             if self._connection_item.GetItemLabel() != label:
                 self._connection_item.SetItemLabel(label)
         # No tab open: nothing to toggle, so the item greys out instead of advertising a
@@ -4839,7 +4857,7 @@ class GenericMudFrame(wx.Frame):
         panel = self._active_panel()
         if panel is None:
             return
-        if panel.is_connected():
+        if panel.is_connected() or panel.is_connecting():
             panel.disconnect()  # keeps the tab open; stops auto-reconnect
             # The panel writes and speaks "Disconnected from ..." itself, so saying it here
             # too would read the same sentence twice.

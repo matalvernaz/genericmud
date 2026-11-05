@@ -128,7 +128,7 @@ class MudConnection:
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
         self._read_task: asyncio.Task[None] | None = None
-        self._handshakes = 0  # connect() calls still waiting on the network
+        self._handshakes: set[asyncio.Task] = set()  # connect() callers waiting on the network
         self._reconnect_task: asyncio.Task[None] | None = None  # the backoff loop, once started
         self._remote_enabled: set[int] = set()
         self._local_enabled: set[int] = set()
@@ -158,12 +158,14 @@ class MudConnection:
 
     @property
     def connecting(self) -> bool:
-        """A connection is on its way: a handshake in flight, or the backoff loop between tries.
+        """A connection is pending, or its old read loop is still being stopped.
 
         Calling connect() in either state opens a second socket. The two read loops then read
         whichever socket is newest, tear down each other's, and restart the backoff without
         end, so anything that offers to connect has to check this first.
         """
+        if self._closing and self._read_task is not None and not self._read_task.done():
+            return True  # the cancelled reader must finish before a new socket can replace it
         if self._handshakes:
             return True
         return self._reconnect_task is not None and not self._reconnect_task.done()
@@ -192,14 +194,20 @@ class MudConnection:
         ctx: ssl.SSLContext | None = None
         if tls or ssl_context is not None:
             ctx = ssl_context or ssl.create_default_context()
-        self._handshakes += 1
+        task = asyncio.current_task()
+        assert task is not None
+        self._handshakes.add(task)
         try:
             reader, writer = await asyncio.open_connection(host, port, ssl=ctx)
+        except OSError:
+            if self._closing:
+                return  # a handshake that fails after cancellation is no longer reportable
+            raise
         finally:
-            self._handshakes -= 1
+            self._handshakes.discard(task)
         if self._closing:
-            # Disconnected during the connect handshake: close() couldn't cancel a read task that
-            # didn't exist yet, so drop the socket here instead of going live behind the user.
+            # A network operation may finish despite cancellation. Drop its late socket
+            # instead of going live behind the user who just disconnected.
             writer.close()
             return
         self._reader, self._writer = reader, writer
@@ -361,12 +369,23 @@ class MudConnection:
         if text.strip().lower() in self.quit_commands:
             self._quit_sent_at = time.monotonic()  # the close that follows is intentional
 
+    def request_close(self) -> asyncio.Task[None]:
+        """Mark an intentional close now, before asynchronous cleanup gets its turn."""
+        self._closing = True
+        return asyncio.create_task(self.close())
+
     async def close(self) -> None:
         """Deliberately disconnect; this suppresses auto-reconnect."""
         self._closing = True
-        if self._read_task is not None:
-            self._read_task.cancel()
+        # A handshake belongs to its connect() caller (startup, manual reconnect or the
+        # backoff task). Cancel and drain each owner once, without cancelling ourselves.
+        tasks = self._handshakes | {self._read_task, self._reconnect_task}
+        tasks.discard(None)
+        tasks.discard(asyncio.current_task())
+        for task in tasks:
+            task.cancel()
         self._teardown()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     def peer_address(self) -> str:
         """The IP address this connection reached, or "" while it isn't connected."""
@@ -403,7 +422,7 @@ class MudConnection:
         assert self._target is not None
         host, port, tls, ssl_context = self._target
         attempt = 1
-        while True:
+        while not self._closing:
             delay = self.reconnect_policy.delay_for(attempt)
             if delay is None:
                 self._status("reconnect failed; giving up")
@@ -417,7 +436,8 @@ class MudConnection:
             except OSError:
                 attempt += 1
                 continue
-            if self._closing:  # user disconnected mid-handshake; connect() dropped the socket
+            if self._closing or not self.connected:
+                # A cancelled handshake may still return; connect() drops its late socket.
                 return
             self._status("reconnected")
             return

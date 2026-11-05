@@ -2968,6 +2968,10 @@ class EngineApp:
             # command after it would go out as a password: no client commands, aliases or
             # speedwalks, and "***" in the log, because no WONT ECHO is ever coming.
             self.forget_hidden_input()
+        if message.startswith("connection lost"):
+            # IsConnected() and plugin ticks must see a dropped link as down even during
+            # backoff. after_reconnect() restores it; transient loss keeps timers and packs.
+            self.engine.connected = False
         if message.startswith(("disconnected", "protocol error", "reconnect failed")):
             # A terminal drop (quit, network death we won't reconnect): silence the pack's
             # looping music/ambience -- nothing will ever stop those cues otherwise. A
