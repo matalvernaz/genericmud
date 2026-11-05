@@ -186,6 +186,11 @@ always in the output box.
   the cursor's word picks the link — and if the cursor isn't inside one, the
   links are read out rather than guessed. While the output box has focus, plain
   **Enter** does the same thing.
+- A MUD can give a link a caption saying what it does, the words a mouse user
+  sees under the pointer. When the review cursor arrives on such a link you hear
+  the word, then the caption, such as "link: Click to drink"; it isn't repeated
+  while you move through the same link's words. Following the link says the
+  caption again with the command, before the command goes.
 - Some links start a command for you to finish instead of sending one, such as a
   name that offers `tell Zugg ` for you to type the rest of the message. Following
   one puts that text in the command box, says so, and sends nothing until you

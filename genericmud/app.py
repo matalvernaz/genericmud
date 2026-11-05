@@ -2505,9 +2505,11 @@ class EngineApp:
         described.
 
         Said once per link, so walking the words of one link says it on arrival and not again.
+        That is the link itself, not an equal one: the same exit on the next line is a link
+        the reader has not arrived at yet.
         """
         link = self.review.link()
-        if link == self._link_announced:
+        if link is self._link_announced:
             return
         self._link_announced = link
         if link is not None and link.hint:
