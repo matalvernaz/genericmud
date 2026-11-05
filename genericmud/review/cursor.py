@@ -10,6 +10,8 @@ anti-flooding split).
 
 from __future__ import annotations
 
+import re
+
 from genericmud.model.buffer import Buffer, Link
 
 RECALL_MAX = 10  # VIPMud's Ctrl+1-9 covers nine; Ctrl+0 recalls the tenth
@@ -218,6 +220,75 @@ class ReviewCursor:
         if under is not None:
             return under
         return links[0] if len(links) == 1 else None
+
+    # --- jumping from link to link (Alt+PageDown / Alt+PageUp) ---
+
+    def next_link(self, *, inclusive: bool = False) -> Link | None:
+        """Move to the next MXP link after the cursor's word, on this line or a later one.
+
+        The cursor parks on the link's first word, so the follow key acts on that link.
+        ``inclusive`` also counts a link that starts at the cursor's own word, for a reader
+        who has only just arrived. None, with the cursor left where it was, at the end.
+        """
+        if len(self._buffer) == 0:
+            return None
+        start = self._index()
+        for index in range(start, len(self._buffer)):
+            line = self._buffer[index]
+            for link, word in _link_words(line.plain_text, line.links):
+                if index == start and (word < self._word or (word == self._word and not inclusive)):
+                    continue
+                self._park(index, word)
+                return link
+        return None
+
+    def prev_link(self, *, from_line_end: bool = False) -> Link | None:
+        """Move to the link before the cursor's word, on this line or an earlier one.
+
+        ``from_line_end`` counts every link on the cursor's own line, for a reader who has
+        only just arrived at the newest line. None, with the cursor left where it was, at the
+        start.
+        """
+        if len(self._buffer) == 0:
+            return None
+        start = self._index()
+        for index in range(start, -1, -1):
+            line = self._buffer[index]
+            for link, word in reversed(_link_words(line.plain_text, line.links)):
+                if index == start and not from_line_end and word >= self._word:
+                    continue
+                self._park(index, word)
+                return link
+        return None
+
+    def _park(self, index: int, word: int) -> None:
+        self.active = True
+        self._set_line(index)
+        self._word = word
+        self._char = 0
+
+
+def _link_words(text: str, links: list[Link]) -> list[tuple[Link, int]]:
+    """Each link on a line with the number of the word it starts in, in the order they appear.
+
+    A link is found by its words, searching on from the one before, as the window places
+    them; a link whose words aren't in the line (a pack substituted it) is left out.
+    """
+    spans = [match.span() for match in re.finditer(r"\S+", text)]
+    found: list[tuple[Link, int]] = []
+    searched_to = 0
+    for link in links:
+        if not link.text.strip():
+            continue
+        start = text.find(link.text, searched_to)
+        if start < 0:
+            continue
+        searched_to = start + len(link.text)
+        first = start + len(link.text) - len(link.text.lstrip())
+        word = next((number for number, (_begin, end) in enumerate(spans) if end > first), None)
+        if word is not None:
+            found.append((link, word))
+    return found
 
 
 def _word_key(text: str) -> str:

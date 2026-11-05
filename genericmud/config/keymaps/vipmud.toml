@@ -71,6 +71,12 @@
 # from there -- from the command box Enter must stay "send", hence this chord.
 "alt+enter" = "review:link"
 
+# Jump from link to link through the output: Alt+PageDown on to the next, Alt+PageUp back to
+# the previous. The review cursor lands on the link, so Alt+Enter follows it. A world whose
+# soundpack or hotkeys use these keys (Erion's history browser does) keeps them.
+"alt+pagedown" = "review:next_link"
+"alt+pageup" = "review:prev_link"
+
 # Channel browsing: cycle the channels your triggers route chat to, scroll
 # within one, and recall its recent messages -- a parallel layer to the Alt
 # review keys, on Ctrl+Alt.

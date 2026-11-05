@@ -190,6 +190,12 @@ always in the output box.
   the cursor's word picks the link — and if the cursor isn't inside one, the
   links are read out rather than guessed. While the output box has focus, plain
   **Enter** does the same thing.
+- **Alt+PageDown** jumps on to the next link in the output and **Alt+PageUp**
+  back to the previous one, skipping lines without any. You hear the link's
+  words and the line it's on, the cursor lands on the link so Alt+Enter follows
+  it, and at either end you hear "no more links". Starting outside review,
+  Alt+PageUp finds the newest link first. In a world whose soundpack or hotkeys
+  use these keys (Erion's history browser does), they stay the soundpack's.
 - A MUD can give a link a caption saying what it does, the words a mouse user
   sees under the pointer. When the review cursor arrives on such a link you hear
   the word, then the caption, such as "link: Click to drink"; it isn't repeated
@@ -571,6 +577,7 @@ View, **Alt+H** Help.
 | Alt+Shift+Enter | Spell the current line |
 | Ctrl+Shift+C | Copy all or part of the current line |
 | Alt+Enter | Follow the link on this line (Enter does it too in the output) |
+| Alt+PageDown / Alt+PageUp | Jump to the next / previous link in the output |
 | Alt+T / Alt+C | Last tell / last chat |
 | Ctrl+F | Find in the output (while the output has focus) |
 | F3 / Shift+F3 | Find next / previous |

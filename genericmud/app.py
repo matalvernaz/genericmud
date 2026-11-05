@@ -145,6 +145,8 @@ _REVIEW_VERBS = frozenset(
         "top", "bottom", "spell_line",
     }
 )
+# Alt+PageDown / Alt+PageUp: jump from MXP link to MXP link through the output.
+_LINK_JUMPS = frozenset({"next_link", "prev_link"})
 _CHANNEL_REVIEW_VERBS = frozenset(
     {"prev", "next", "older", "newer", "prev_word", "next_word"}
 )
@@ -2459,6 +2461,11 @@ class EngineApp:
         # where there is nothing to send) passes the action itself. Keymap combos never
         # contain a colon and actions always do, so the two can't be confused.
         namespace, _, argument = (action or combo).partition(":")
+        if namespace == "review" and argument in _LINK_JUMPS and self.engine.has_key(combo):
+            # Erion's history browser uses Alt+PageUp/PageDown: a soundpack's or the player's
+            # own hotkey on the key keeps it in that world, as with the Alt+number tab keys.
+            self.engine.press_key(combo)
+            return
         if namespace == "tab":
             # Switching tabs is the window's job, and the window does it before the key gets
             # here. What reaches the engine is a key the world's soundpack or the player's own
@@ -2476,6 +2483,8 @@ class EngineApp:
             self._activate_link()
         elif namespace == "review" and argument == "copy_line":
             self._copy_review_line()
+        elif namespace == "review" and argument in _LINK_JUMPS:
+            self._jump_to_link(forward=argument == "next_link")
         elif namespace == "review" and argument in _REVIEW_VERBS:
             if not self.review.active:
                 self.review.enter()
@@ -2538,6 +2547,29 @@ class EngineApp:
             # reached is the thing being read, and the caption explains it -- cutting it off
             # left the reader hearing only "link" and never the word it was about.
             self.voice.speak(f"link: {link.hint}", channel=REVIEW_CHANNEL, interrupt=False)
+
+    def _jump_to_link(self, *, forward: bool) -> None:
+        """Alt+PageDown / Alt+PageUp: on to the next MXP link, or back to the previous one.
+
+        The review cursor parks on the link's first word, so Alt+Enter follows it, and the
+        link's caption is said after it. Starting outside review, the jump counts the newest
+        line's own links: back from the end of it, or on from its start.
+        """
+        fresh = not self.review.active
+        if fresh:
+            self.review.enter()
+        if forward:
+            link = self.review.next_link(inclusive=fresh)
+        else:
+            link = self.review.prev_link(from_line_end=fresh)
+        if link is None:
+            self._speak_review("no more links")
+            return
+        said = f"{link.text}{_menu_note(link)}"
+        line = self.review.current_line()
+        # The line too, unless the link is all of it: "north" alone doesn't say where it is.
+        self._speak_review(said if line.strip() == link.text.strip() else f"{said}: {line}")
+        self._announce_link_under_cursor()
 
     def _copy_review_line(self) -> None:
         """Offer the reviewed line for copying, all of it or any part (Ctrl+Shift+C).
