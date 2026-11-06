@@ -56,8 +56,20 @@ and the locked dependencies on first run. See "For developers" below.
    connection, an **Encoding** choice for MUDs that don't send UTF-8, and a
    **Sounds folder** box if you already keep that MUD's sound files somewhere.
    Leave it blank when a soundpack brings its own sounds.
-   "Save this world" is checked by default.
 3. Press Enter.
+
+**When I press OK** offers three things, and says all three as you arrow
+through them:
+
+| Choice | What OK does |
+|---|---|
+| Save and connect (the default) | Adds the world to your list and opens a tab on it |
+| Save, don't connect | Adds it to your list and opens no tab; **Ctrl+O** connects when you want |
+| Connect, don't save | Opens a tab on a world you are only visiting: nothing is kept, the login you typed included |
+
+Saving without connecting is the way in when the MUD is down, or when you are
+setting worlds up before playing. There is deliberately no choice that does
+neither, so the OK button always has something to do.
 
 Leave **Encoding** on Automatic unless accented or non-Latin letters come out
 wrong. Automatic reads UTF-8 and switches to Windows Western European the moment

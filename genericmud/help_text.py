@@ -13,9 +13,11 @@ GETTING_STARTED = """\
 Welcome to genericMud.
 
 Connecting:
-Press Ctrl+N, type a name, host, and port, and press Enter. "Save this world"
-is checked by default; next time press Ctrl+O and choose it from the saved
-world list. A good first MUD is Aardwolf: host aardmud.org, port 4000.
+Press Ctrl+N, type a name, host, and port, and press Enter. "When I press OK"
+offers three things: save and connect, save without connecting, or connect
+without saving. Save without connecting adds the world to your list and opens
+no tab, then Ctrl+O connects when you want. A good first MUD is Aardwolf:
+host aardmud.org, port 4000.
 If accented or non-Latin letters come out garbled, edit the world and choose
 its Encoding. Russian MUDs often use Windows-1251 or KOI8-R, Chinese ones GBK
 or Big5. Automatic suits most MUDs.

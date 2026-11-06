@@ -1943,6 +1943,47 @@ _CONNECT_LABELS = (
     ("diku", "Diku — send name, then password"),
 )
 
+# What pressing OK in a new-world dialog can do: (what it is called, whether it saves the
+# world, whether it connects to it), in the order they are read out. The words and what they do
+# are one table so the two cannot drift apart.
+#
+# Three radio buttons rather than two checkboxes ("save this world", "also connect"): the two
+# boxes say the same four states with two controls, and the fourth -- neither saved nor
+# connected -- is a state nobody can want, so it would only exist to be refused. A group is
+# also read out as a set, "Save and connect, 1 of 3", so nothing has to be remembered.
+_OK_CHOICES = (
+    ("Save and connect", True, True),
+    ("Save, don't connect", True, False),
+    ("Connect, don't save", False, True),
+)
+
+
+def _choice_that(saves: bool) -> int:
+    """The choice to start on: the one that connects, and saves only if asked to."""
+    for index, (_label, does_save, does_connect) in enumerate(_OK_CHOICES):
+        if does_save is saves and does_connect:
+            return index
+    return 0  # unreachable while the table holds one choice of each kind; that one saves
+
+# What came of the world dialog. Saving a world without connecting leaves no tab behind,
+# so the caller cannot tell from the tabs whether OK did one thing or both.
+_CANCELLED = "cancelled"
+_SAVED = "saved"
+_CONNECTED = "connected"
+
+
+@dataclass(frozen=True)
+class _WorldDialogDone:
+    """What a world dialog did, and the world it did it to.
+
+    The world comes back too: a world saved without being connected to is one the saved-world
+    list should offer, so the caller needs its name.
+    """
+
+    outcome: str
+    world: World | None = None
+
+
 _ID_NEW_WORLD = wx.ID_HIGHEST + 1
 _ID_EDIT_WORLD = wx.ID_HIGHEST + 2
 _ID_DELETE_WORLD = wx.ID_HIGHEST + 3
@@ -1970,6 +2011,7 @@ class WorldDialog(wx.Dialog):
         offer_trust: bool = False,
         save_default: bool = True,
         show_save: bool = True,
+        show_connect: bool = False,
         lock_name: bool = False,
         credentials: CredentialStore | None = None,
         prefill_login: bool = True,
@@ -2123,8 +2165,28 @@ class WorldDialog(wx.Dialog):
         self._post_connect.SetName("Commands sent after connecting")
         grid.Add(self._post_connect, 1, wx.EXPAND)
 
+        # What pressing OK does, offered only where there is a choice to make: a brand-new world
+        # can be kept without being played (add it to the list now, connect later from Ctrl+O),
+        # and can be played without being kept. Editing a world saves it and nothing else.
+        self._ok_choice: wx.RadioBox | None = None
         self._save: wx.CheckBox | None = None
-        if show_save:
+        if show_save and show_connect:
+            grid.Add((0, 0))
+            # The label is the group's own caption. A screen reader may leave it out -- NVDA
+            # does here -- so the three names are written to stand on their own without it.
+            self._ok_choice = wx.RadioBox(
+                self,
+                label="When I press OK:",
+                choices=[label for label, _saves, _connects in _OK_CHOICES],
+                majorDimension=1,  # one column, so the group is read down like a list
+                style=wx.RA_SPECIFY_COLS,
+            )
+            self._ok_choice.SetName("When I press OK")
+            self._ok_choice.SetSelection(_choice_that(save_default))
+            grid.Add(self._ok_choice, 1, wx.EXPAND)
+        elif show_save:
+            # The soundpack setup dialog saves and then connects, so there is nothing to choose;
+            # it keeps the single box it has always had.
             grid.Add((0, 0))
             self._save = wx.CheckBox(self, label="Sa&ve this world")
             self._save.SetName("Save this world")
@@ -2291,6 +2353,11 @@ class WorldDialog(wx.Dialog):
 
         The store is keyed by the world's name, so a rename that left the old key behind
         would silently stop the world logging in.
+
+        A world being connected to without being saved stores no login, not even one typed into
+        this dialog: a credential filed under a world that is not in the list is a login nobody
+        is looking after, which is exactly what deleting a world has to clean up. The session
+        can only ask the store, so a one-off visit is logged in by hand.
         """
         if self._credentials is None or not self.should_save():
             return
@@ -2312,8 +2379,25 @@ class WorldDialog(wx.Dialog):
             raise RuntimeError("world requested before the dialog was accepted")
         return self._world
 
+    def _chosen_effect(self) -> tuple[bool, bool]:
+        """Whether the chosen option saves this world, and whether it connects to it.
+
+        A radio group always has a selection, so there is no "nothing chosen" case to answer
+        for. That is the point of the group: OK always has something to do.
+        """
+        return _OK_CHOICES[self._ok_choice.GetSelection()][1:]
+
     def should_save(self) -> bool:
+        """True when OK should add or keep this world in the saved list."""
+        if self._ok_choice is not None:
+            return self._chosen_effect()[0]
         return self._save is None or self._save.GetValue()
+
+    def should_connect(self) -> bool:
+        """True when OK should open a session on this world."""
+        if self._ok_choice is not None:
+            return self._chosen_effect()[1]
+        return True  # connecting without the choice offered is what OK has always done
 
     def should_trust(self) -> bool:
         """True if the trust checkbox was offered and left checked (else False)."""
@@ -2323,7 +2407,9 @@ class WorldDialog(wx.Dialog):
 class ConnectDialog(wx.Dialog):
     """Choose an existing saved world; creation and editing use ``WorldDialog``."""
 
-    def __init__(self, parent: wx.Window, saved: list[World]) -> None:
+    def __init__(
+        self, parent: wx.Window, saved: list[World], preselect: str | None = None
+    ) -> None:
         super().__init__(parent, title="Connect to a Saved World", size=(460, 320))
         self._saved = sorted(saved, key=lambda world: world.name.casefold())
         outer = wx.BoxSizer(wx.VERTICAL)
@@ -2376,7 +2462,7 @@ class ConnectDialog(wx.Dialog):
         edit.Enable(enabled)
         delete.Enable(enabled)
         if enabled:
-            self._choice.SetSelection(0)
+            self._choice.SetSelection(self._index_of(preselect))
             self._update_details()
             self._connect.SetDefault()
             self._choice.SetFocus()
@@ -2384,6 +2470,14 @@ class ConnectDialog(wx.Dialog):
             self._details.SetValue("No saved worlds. Choose New World to create one.")
             new.SetDefault()
             new.SetFocus()
+
+    def _index_of(self, name: str | None) -> int:
+        """The row holding this world, or the first row: pressing Enter never lands on nothing."""
+        wanted = (name or "").casefold()
+        for index, world in enumerate(self._saved):
+            if world.name.casefold() == wanted:
+                return index
+        return 0
 
     def _on_pick(self, _event: wx.CommandEvent) -> None:
         self._update_details()
@@ -4918,7 +5012,7 @@ class GenericMudFrame(wx.Frame):
         )
 
     def _on_new_world(self, _event: wx.CommandEvent) -> None:
-        self._show_world_dialog()
+        self._show_world_dialog(show_connect=True)
 
     def _show_world_dialog(
         self,
@@ -4928,31 +5022,41 @@ class GenericMudFrame(wx.Frame):
         connect: bool = True,
         original_name: str | None = None,
         show_save: bool = True,
+        show_connect: bool = False,
         lock_name: bool = False,
         note: str = "",
-    ) -> bool:
+    ) -> _WorldDialogDone:
+        """Show the world dialog and do what it was told: save, connect, or both."""
         dialog = WorldDialog(
             self,
             initial,
             title=title,
             save_default=True,
             show_save=show_save,
+            show_connect=show_connect,
             lock_name=lock_name,
             credentials=self._credentials,
             note=note,
         )
         try:
             if dialog.ShowModal() != wx.ID_OK:
-                return False
+                return _WorldDialogDone(_CANCELLED)
             world = dialog.get_world()
             saved = True
             if dialog.should_save():
                 saved = self._save_world(world, replacing=original_name)
             if saved and original_name is not None:
                 self._apply_to_open_tabs(original_name, world)
-            if connect:
-                self.open_session(world)
-            return saved
+            if not connect:
+                return _WorldDialogDone(_SAVED if saved else _CANCELLED, world)
+            if not dialog.should_connect():
+                if saved:
+                    self.announce(
+                        f"{world.name} saved. Press Control O when you want to connect to it."
+                    )
+                return _WorldDialogDone(_SAVED if saved else _CANCELLED, world)
+            self.open_session(world)
+            return _WorldDialogDone(_CONNECTED, world)
         finally:
             dialog.Destroy()
 
@@ -5192,16 +5296,23 @@ class GenericMudFrame(wx.Frame):
         return True
 
     def _on_connect(self, _event: wx.CommandEvent) -> None:
+        preselect: str | None = None
         while True:
-            dialog = ConnectDialog(self, load_worlds())
+            dialog = ConnectDialog(self, load_worlds(), preselect=preselect)
             action = dialog.ShowModal()
             world = dialog.get_world()
             dialog.Destroy()
+            preselect = None
             if action == wx.ID_OK and world is not None:
                 self.open_session(world)
                 return
             if action == _ID_NEW_WORLD:
-                self._show_world_dialog()
+                done = self._show_world_dialog(show_connect=True)
+                if done.outcome == _SAVED and done.world is not None:
+                    # Saved, not connected: it is in the list now, so show the list with it
+                    # picked rather than dropping the reader back into nothing.
+                    preselect = done.world.name
+                    continue
                 return
             if action == _ID_DELETE_WORLD and world is not None:
                 self._delete_saved_world(world)
