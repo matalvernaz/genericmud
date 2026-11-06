@@ -53,6 +53,8 @@ def test_command_entry_os_keyboard():
 @pytest.mark.parametrize("marker", ["CI", "GITHUB_ACTIONS"])
 @pytest.mark.parametrize("value", ["", "false", "true"])
 def test_os_input_cannot_start_in_ci(monkeypatch, marker, value):
+    for name in ("CI", "GITHUB_ACTIONS"):
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("GENERICMUD_TEST_OS_INPUT", "1")
     monkeypatch.setenv(marker, value)
 
