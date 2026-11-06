@@ -7,7 +7,7 @@ list of commands, which is how a world with stacking off gets several at once.
 
 from __future__ import annotations
 
-from pathlib import Path
+from tests.ui_source import ui_class_source, ui_source
 
 
 class _Box:
@@ -172,17 +172,10 @@ def test_hidden_input_never_reaches_the_history():
 # --- the field itself --------------------------------------------------------
 
 
-def _source() -> str:
-    return (Path(__file__).resolve().parents[1] / "genericmud/ui/wx_app.py").read_text(
-        encoding="utf-8"
-    )
-
-
 def test_the_command_box_is_a_multi_line_field():
     # Not cosmetic: a single-line field is what makes the screen reader's line moves walk one
     # character at a time, and what stops a pasted list from arriving as a block.
-    source = _source()
-    panel = source.split("class SessionPanel", 1)[1]
+    panel = ui_source("SessionPanel.__init__")
     assert "self.input = wx.TextCtrl(" in panel
     box = panel.split("self.input = wx.TextCtrl(", 1)[1].split(")", 1)[0]
     assert "wx.TE_MULTILINE" in box
@@ -191,8 +184,7 @@ def test_the_command_box_is_a_multi_line_field():
 
 def test_enter_sends_rather_than_inserting_a_newline():
     # A multi-line field's own Enter inserts a line break; the key is taken before it gets there.
-    source = _source()
-    handler = source.split("def _on_input_key", 1)[1].split("def _dispatch_bound_combo", 1)[0]
+    handler = ui_source("SessionPanel._on_input_key")
     assert "wx.WXK_RETURN" in handler
     assert "self._on_send(None)" in handler
 
@@ -217,8 +209,7 @@ def test_a_block_built_with_shift_enter_sends_one_command_per_line():
 def test_shift_enter_is_taken_by_the_handler_not_left_to_the_field():
     # The field's own Shift+Enter would insert a break anyway; doing it here means the rule is
     # ours, and stays put if the field's default ever differs.
-    source = _source()
-    handler = source.split("def _on_input_key", 1)[1].split("def _dispatch_bound_combo", 1)[0]
+    handler = ui_source("SessionPanel._on_input_key")
     assert "wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER" in handler
     assert "_start_new_command_line()" in handler
 
@@ -236,6 +227,7 @@ def test_the_history_does_not_grow_without_end():
 
 def test_the_box_height_follows_the_font_rather_than_a_guess():
     # A reader who has scaled their text up would get a clipped box from a pixel height.
-    source = _source()
-    assert "self.input.SetMinSize((-1, self.input.GetCharHeight() * 2 + 8))" in source
-    assert "size=(-1, 44)" not in source  # the guessed height it replaced
+    panel = ui_source("SessionPanel.__init__")
+    assert "self.input.SetMinSize((-1, self.input.GetCharHeight() * 2 + 8))" in panel
+    # The guessed height it replaced.
+    assert "size=(-1, 44)" not in ui_class_source("SessionPanel")
