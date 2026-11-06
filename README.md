@@ -607,13 +607,14 @@ makes a trigger the last one heard about the line. A player trigger that stops t
 never stops a soundpack's triggers; MUSHclient draws the same line between one plugin and the
 next.
 
-Triggers and aliases also take a **Group**: rules sharing a name switch together, so
+**A Group** is on everything that can run: rules sharing a name switch together, so
 `mud.set_group_enabled("combat", false)` turns all of them off in one call -- MUSHclient's
-EnableGroup. A group nothing belongs to is not an error; it is a group waiting for its
-first rule.
+EnableGroup. Triggers, aliases, hotkeys, timers and MUD data rules all take one, so "combat"
+can mean the whole set and not just the triggers. A group nothing belongs to is not an
+error; it is a group waiting for its first rule.
 
-They take a **Label** too: the name a script uses to turn *that* rule off and on, in
-MUSHclient's style. A rule with a label can be switched by a script with
+Triggers and aliases take a **Label** too: the name a script uses to turn *that* rule off and
+on, in MUSHclient's style. A rule with a label can be switched by a script with
 `mud.set_enabled("watch-backups", false)`; one without can only be switched in the
 Automation Manager. The manager reads the label first, because it is what you called
 the rule.

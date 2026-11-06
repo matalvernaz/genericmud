@@ -439,6 +439,9 @@ class KeyEditorDialog(_RuleEditorBase):
         self._key = _KeyCaptureCtrl(self)
         self._key.SetValue(key.key)
         grid.Add(self._key, 1, wx.EXPAND)
+        self._group = self._text(
+            grid, "&Group (rules sharing a name switch together):", key.group
+        )
         self._send = self._command_text(grid, key.send, captures=False)
         self._speak = self._text(grid, "Spea&k this text:", key.speak)
         self._variable_button(grid, self._speak, "Insert a v&ariable into the speech...")
@@ -465,6 +468,7 @@ class KeyEditorDialog(_RuleEditorBase):
             send=self._send.GetValue().strip(),
             speak=self._speak.GetValue().strip(),
             sound=self._sound.GetValue().strip(),
+            group=self._group.GetValue().strip(),
             enabled=self._enabled,
         )
 
@@ -550,6 +554,9 @@ class DataRuleEditorDialog(_RuleEditorBase):
         self._only_changes.SetValue(watch.only_changes)
         grid.Add(wx.StaticText(self, label=""))
         grid.Add(self._only_changes)
+        self._group = self._text(
+            grid, "&Group (rules sharing a name switch together):", watch.group
+        )
         self._sound = self._text(grid, "&Sound file (optional):", watch.sound)
         browse = wx.Button(self, label="&Browse for sound...")
         browse.Bind(wx.EVT_BUTTON, self._on_browse)
@@ -606,6 +613,7 @@ class DataRuleEditorDialog(_RuleEditorBase):
             speak=self._speak.GetValue().strip(),
             send=self._send.GetValue().strip(),
             interrupt=self._interrupt.GetValue(),
+            group=self._group.GetValue().strip(),
             enabled=self._enabled,
         )
 

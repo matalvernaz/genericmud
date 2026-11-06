@@ -814,9 +814,10 @@ Rules and timing:
 
 The alias and trigger options are `regex` and `priority`, plus `label` and `group`.
 A label is the name a rule is switched by -- `mud.set_enabled("shoot", false)` -- and the
-manager reads it out first; a group is what `mud.set_group_enabled` switches as one. A
-trigger can also use `channel`. The `mud.add_timer` options are `every`, `offset`, `group`,
-`enabled` and `while_disconnected`. The only `mud.on_data` option is `changes`.
+manager reads it out first; a group is what `mud.set_group_enabled` switches as one.
+`mud.key` takes a `group` too. A trigger can also use `channel`. The `mud.add_timer`
+options are `every`, `offset`, `group`, `enabled` and `while_disconnected`. The only
+`mud.on_data` option is `changes`.
 
 Commands and output:
 

@@ -102,7 +102,7 @@ def _rule_summary(kind: str, rule) -> str:
             if send_to_kind(getattr(rule, "send_to", "world")) == "variable"
             else commands
         )
-        return f"{status}{named}Timer: {when}{once}: {doing or 'nothing'}"
+        return f"{status}{named}Timer{grouped}: {when}{once}: {doing or 'nothing'}"
 
     if kind == "alias":
         return (
@@ -111,7 +111,7 @@ def _rule_summary(kind: str, rule) -> str:
         )
     if kind == "key":
         action = commands or rule.speak or rule.sound or "nothing"
-        return f"{status}Hotkey: {rule.key} runs {action}"
+        return f"{status}Hotkey{grouped}: {rule.key} runs {action}"
     if kind == "data":
         actions = [part for part in (
             f"sound {Path(rule.sound).name}" if rule.sound else "",
@@ -120,7 +120,10 @@ def _rule_summary(kind: str, rule) -> str:
             "interrupts speech" if rule.interrupt else "",
         ) if part]
         when = "when it changes" if rule.only_changes else "every time"
-        return f"{status}MUD data: {rule.name}, {when}: {'; '.join(actions) or 'no action'}"
+        return (
+            f"{status}MUD data{grouped}: {rule.name}, {when}: "
+            f"{'; '.join(actions) or 'no action'}"
+        )
     return (
         f"{status}Channel: {rule.name}"
         f" ({'speaks' if rule.speak else 'silent'},"
