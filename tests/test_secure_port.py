@@ -152,7 +152,10 @@ def test_the_window_saves_the_new_port_and_reconnects(monkeypatch):
     panel.world = World("gw", "gw.example", 9500, tls=False)
     panel.app = None  # no engine here: the switch only has to schedule its work
     panel._loop = Loop()
+    panel._alive = True
     monkeypatch.setattr(wx, "GetTopLevelParent", lambda _window: frame)
+    monkeypatch.setattr(wx, "CallAfter", lambda function, *args: function(*args))
+    monkeypatch.setattr(wx_app, "load_worlds", lambda: [World("GW", "gw.example", 9500)])
 
     assert panel.use_secure_port(9501) is True
     assert panel.world.port == 9501 and panel.world.tls is True
@@ -204,6 +207,7 @@ def test_the_window_does_not_reconnect_a_world_already_there(monkeypatch):
 
     panel = wx_app.SessionPanel.__new__(wx_app.SessionPanel)
     panel.world = World("gw", "gw.example", 9501, tls=True)
+    panel._alive = True
     panel.reconnect = lambda: (_ for _ in ()).throw(AssertionError("reconnected anyway"))
     monkeypatch.setattr(wx, "GetTopLevelParent", lambda _window: None)
     assert panel.use_secure_port(9501) is False
@@ -269,9 +273,133 @@ def test_the_window_tells_the_engine_what_it_switched_to(monkeypatch):
     panel.world = World("Pen", "pen.example", 9500, tls=False)
     panel.app = App()
     panel._loop = Loop()
+    panel._alive = True
     monkeypatch.setattr(wx, "GetTopLevelParent", lambda _window: Frame())
+    monkeypatch.setattr(wx, "CallAfter", lambda function, *args: function(*args))
+    monkeypatch.setattr(wx_app, "load_worlds", lambda: [World("Pen", "pen.example", 9500)])
 
     assert panel.use_secure_port(9501) is True
     assert scheduled and scheduled[0][0] == panel.app.apply_world_settings
     assert scheduled[0][1] == (panel.world,)
     assert panel.world.port == 9501 and panel.world.tls is True
+
+
+def test_an_encrypted_link_is_not_offered_another_port():
+    # Already encrypted is the end of it, whatever port the game names.
+    app, backend = _app(port=4443, tls=True)
+    _mssp(app, ("SSL", "9501"))
+    assert _said(backend) == []
+
+
+def test_a_number_python_cannot_read_is_ignored_quietly():
+    # "²" passes isdigit() and int() refuses it, and so does a number thousands of digits long:
+    # either would stop the MSSP reply half handled. The offer that follows is still made.
+    app, backend = _app()
+    _mssp(app, ("SSL", "²"))
+    _mssp(app, ("SSL", "9" * 5000))
+    assert _said(backend) == []
+    _mssp(app, ("SSL", "9501"))
+    assert len(_said(backend)) == 1
+
+
+def test_the_window_takes_the_port_on_its_own_thread(monkeypatch):
+    # The engine asks from the loop thread, where no window may be touched: saving the world
+    # can put up a message box. So the answer is given at once and the work handed over.
+    import pytest
+
+    wx = pytest.importorskip("wx")
+    from genericmud.ui import wx_app
+
+    handed: list = []
+
+    def no_window(_window):
+        raise AssertionError("touched the window off its own thread")
+
+    panel = wx_app.SessionPanel.__new__(wx_app.SessionPanel)
+    panel.world = World("gw", "gw.example", 9500, tls=False)
+    panel._alive = True
+    monkeypatch.setattr(wx, "GetTopLevelParent", no_window)
+    monkeypatch.setattr(wx, "CallAfter", lambda function, *args: handed.append((function, args)))
+
+    assert panel.use_secure_port(9501) is True
+    assert handed == [(panel._take_secure_port, (9501,))]
+    assert panel.world.port == 9500  # nothing changed yet, off the window's thread
+
+
+def test_a_world_that_was_never_saved_is_not_saved_by_secure(monkeypatch):
+    # "Connect, don't save" means the world is not kept; switching its port doesn't change that.
+    import pytest
+
+    wx = pytest.importorskip("wx")
+    from genericmud.ui import wx_app
+
+    saved: list = []
+    scheduled: list = []
+
+    class Frame:
+        def _save_world(self, world, *, replacing=None):
+            saved.append(world)
+            return True
+
+    class Loop:
+        def call_soon_threadsafe(self, callback, *args):
+            scheduled.append(callback)
+
+    panel = wx_app.SessionPanel.__new__(wx_app.SessionPanel)
+    panel.world = World("visit", "visit.example", 9500, tls=False)
+    panel.app = None
+    panel._loop = Loop()
+    panel._alive = True
+    monkeypatch.setattr(wx, "GetTopLevelParent", lambda _window: Frame())
+    monkeypatch.setattr(wx, "CallAfter", lambda function, *args: function(*args))
+    monkeypatch.setattr(wx_app, "load_worlds", lambda: [World("other", "other.example", 4000)])
+
+    assert panel.use_secure_port(9501) is True
+    assert saved == []
+    assert panel.world.port == 9501 and panel.world.tls is True
+    assert len(scheduled) == 1  # the tab still switches
+
+
+def test_the_switch_says_where_it_ended_up_after_the_reconnect():
+    # "switching this world..." is said before the link drops, and the disconnect and reconnect
+    # lines cut it off; what is left to hear is said once the tab is back, queued behind them.
+    import asyncio
+
+    import pytest
+
+    pytest.importorskip("wx")
+    from genericmud.ui import wx_app
+
+    class Connection:
+        connected = True
+        connecting = False
+
+    class Voice:
+        def __init__(self) -> None:
+            self.said: list[tuple[str, bool]] = []
+
+        def speak(self, text, *, channel, interrupt):
+            self.said.append((text, interrupt))
+
+    posted: list = []
+    voice = Voice()
+    panel = wx_app.SessionPanel.__new__(wx_app.SessionPanel)
+    panel._alive = True
+    panel._reconnecting = False
+    panel._connection = Connection()
+    panel.app = object()
+    panel.world = World("gw", "gw.example", 9501, tls=True)
+    panel._voice = voice
+    panel._post = posted.append
+
+    def do_disconnect():
+        Connection.connected = False
+
+    async def reconnect():
+        Connection.connected = True
+
+    panel._do_disconnect = do_disconnect
+    panel._reconnect = reconnect
+    asyncio.run(panel._switch_secure_port())
+    assert voice.said == [("gw is on port 9501 now, encrypted.", False)]
+    assert posted and "gw is on port 9501 now, encrypted." in posted[-1]["text"]

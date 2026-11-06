@@ -75,6 +75,14 @@ A world's details also hold its **command separator**, **logging**, **login**
 and **images address** settings, described below. Changes to those apply
 straight away, even to an open tab.
 
+**`/secure`** takes up the encrypted port a game advertised when you connected. Games often
+keep a secure port that they never mention: they announce it over MSSP, one of the status
+protocols the client already reads, and the client says so in passing at connect — "this game
+offers an encrypted connection on port 9501; /secure switches this world to it". Typing
+`/secure` sets the world's port and TLS switch, saves the world if it is one you saved, and
+reconnects. Nothing is switched on a game's say-so alone; the offer is only made once, and only when the connection
+you are on isn't already encrypted.
+
 ## Logging in automatically
 
 A world's details (Ctrl+O, choose the world, Edit) take a **username** and a
@@ -243,14 +251,6 @@ never mean sorting through the other:
 |---|---|
 | `logs/worlds` | session logs — what the MUD said, and what you typed if the world logs that |
 | `logs/diagnostics` | the per-run diagnostic trace and any `crash-*.log` files |
-
-**`/secure`** takes up the encrypted port a game advertised when you connected. Games often
-keep a secure port that they never mention: they announce it over MSSP, one of the status
-protocols the client already reads, and the client says so in passing at connect — "this game
-offers an encrypted connection on port 9501; /secure switches this world to it". Typing
-`/secure` sets the world's port and TLS switch, saves the world, and reconnects. Nothing is
-switched on a game's say-so alone; the offer is only made once, and only when the connection
-you are on isn't already encrypted.
 
 **`/logs`** says both folder paths and how many files are in each. Logs written
 by an older version sat together in `logs` itself; the first time this version
