@@ -425,26 +425,64 @@ def test_every_rule_editor_shows_whether_the_rule_is_enabled(frame, tmp_path):
             dialog.Destroy()
 
 
+def test_the_trigger_and_alias_editors_round_trip_every_field(frame, tmp_path):
+    # The engine's order and keep-checking are covered by test_sequencing; this is the dialog's
+    # half of it, which nothing checked: a field that reads out but does not save back is the
+    # same as a field that is not there.
+    from genericmud.packs.user_rules import UserAlias, UserTrigger
+    from genericmud.ui.rule_editors import AliasEditorDialog, TriggerEditorDialog
+
+    trigger = UserTrigger(
+        pattern="backup", send="say ${1}", send_to="output", speak="backup ${1}",
+        label="watch-backups", group="combat", order=20, keep_evaluating=False,
+        interrupt=True, match="wildcard", omit_log=True, channel="chat",
+        stop_channel="ambience", sound="sounds/warn.ogg", volume=40, pan=-30, loop=True,
+    )
+    dialog = TriggerEditorDialog(frame, tmp_path, trigger)
+    try:
+        assert dialog.result() == trigger
+    finally:
+        dialog.Destroy()
+
+    alias = UserAlias(
+        pattern="sh *", send="shoot ${1}", send_to="output", variable="",
+        speak="shooting ${1}", label="shoot", group="combat", order=20,
+        keep_evaluating=False, interrupt=True,
+    )
+    dialog = AliasEditorDialog(frame, alias)
+    try:
+        assert dialog.result() == alias
+    finally:
+        dialog.Destroy()
+
+
 def test_a_hotkey_and_a_data_rule_keep_their_group(frame, tmp_path):
     from genericmud.packs.user_rules import UserKey, UserWatch
     from genericmud.ui.rule_editors import DataRuleEditorDialog, KeyEditorDialog
 
     hotkey = KeyEditorDialog(
-        frame, tmp_path, UserKey(key="f2", speak="health", group="combat")
+        frame, tmp_path,
+        UserKey(key="f2", send="say f2", send_to="output", variable="", speak="health",
+                sound="sounds/ping.ogg", group="combat"),
     )
     try:
         assert hotkey._group.GetValue() == "combat"
         assert hotkey.result().group == "combat"
         hotkey._group.SetValue("movement")
         assert hotkey.result().group == "movement"
+        # The target the key gained with the rest of the rules.
+        assert hotkey.result().send_to == "output"
     finally:
         hotkey.Destroy()
 
-    rule = UserWatch(name="Char.Vitals.hp", speak="${value}", group="combat")
+    rule = UserWatch(
+        name="Char.Vitals.hp", speak="${value}", send="$1", send_to="output", variable="",
+        sound="sounds/warn.ogg", volume=40, pan=10, group="combat", interrupt=True,
+    )
     data = DataRuleEditorDialog(frame, tmp_path, rule)
     try:
         assert data._group.GetValue() == "combat"
-        assert data.result().group == "combat"
+        assert data.result() == rule
     finally:
         data.Destroy()
 
@@ -2338,3 +2376,22 @@ def test_the_order_field_refuses_words_and_keeps_the_dialog_open(frame, tmp_path
         assert dialog._order_value(dialog._order) == 100
     finally:
         dialog.Destroy()
+
+def test_the_interrupt_switches_are_named_for_a_screen_reader(frame, tmp_path):
+    # Every control needs a name of its own for a screen reader to read; these three
+    # checkboxes were given only a label, so the name a reader would announce was empty.
+    from genericmud.packs.user_rules import UserAlias, UserTimer, UserTrigger
+    from genericmud.ui.rule_editors import AliasEditorDialog, TimerEditorDialog, TriggerEditorDialog
+
+    dialogs = [
+        TriggerEditorDialog(frame, tmp_path, UserTrigger(pattern="backup")),
+        AliasEditorDialog(frame, UserAlias(pattern="sh")),
+        TimerEditorDialog(frame, UserTimer(label="tick", every=30)),
+    ]
+    try:
+        for dialog in dialogs:
+            spoken = dialog._interrupt.GetLabel().replace("&", "")
+            assert dialog._interrupt.GetName() == spoken
+    finally:
+        for dialog in dialogs:
+            dialog.Destroy()

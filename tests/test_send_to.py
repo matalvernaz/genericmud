@@ -17,8 +17,11 @@ from genericmud.packs.user_rules import (
     SEND_TO_CHOICES,
     SEND_TO_LABELS,
     UserAlias,
+    UserKey,
     UserRules,
+    UserTimer,
     UserTrigger,
+    UserWatch,
     load_rules,
     save_rules,
     send_to_kind,
@@ -443,3 +446,128 @@ def test_a_rules_file_that_already_has_the_new_fields_gets_no_copy(tmp_path):
     save_rules(tmp_path, UserRules(triggers=[UserTrigger(pattern="a", send="x", label="one")]))
     save_rules(tmp_path, UserRules(triggers=[UserTrigger(pattern="b", send="y")]))
     assert not (tmp_path / "rules.json.before-send-to.bak").exists()
+
+
+def test_a_hotkey_can_write_a_note_store_a_value_or_write_the_log(tmp_path):
+    # A hotkey could send to the MUD and speak, and nothing else: "press F2 and write it down"
+    # needed a script for no reason.
+    sink = RecordingSink()
+    engine = AutomationEngine(sink)
+    api = ScriptApi(engine, source=user_rules.SOURCE, base_dir=str(tmp_path))
+    user_rules.register_rules(
+        api,
+        UserRules(
+            keys=[
+                UserKey(key="f2", send="backup started", send_to="output"),
+                UserKey(key="f3", send="${script:target}", send_to="variable", variable="copied"),
+                UserKey(key="f4", send="say hi", send_to="log"),
+            ]
+        ),
+    )
+    engine.set_var("target", "goblin")
+    assert engine.press_key("f2") is True
+    assert engine.press_key("f3") is True
+    assert engine.press_key("f4") is True
+    assert sink.echoed == [("backup started", "main")]
+    assert engine.get_var("copied") == "goblin"
+    assert sink.logged == ["say hi"]
+    assert sink.sent == []
+
+
+def test_a_hotkey_can_run_a_rule_script(tmp_path):
+    class _Runner:
+        def __init__(self) -> None:
+            self.ran: list[str] = []
+
+        def run(self, text: str, **_kwargs: object) -> None:
+            self.ran.append(text)
+
+    runner = _Runner()
+    engine = AutomationEngine(RecordingSink())
+    api = ScriptApi(engine, source=user_rules.SOURCE, base_dir=str(tmp_path))
+    api.scripts = runner  # what the app attaches; a rule's script target calls it
+    user_rules.register_rules(
+        api, UserRules(keys=[UserKey(key="f2", send="on_key()", send_to="script")])
+    )
+    engine.press_key("f2")
+    assert runner.ran == ["on_key()"]
+
+
+def test_a_mud_data_rule_can_write_a_note_or_store_the_value(tmp_path):
+    sink = RecordingSink()
+    engine = AutomationEngine(sink)
+    api = ScriptApi(engine, source=user_rules.SOURCE, base_dir=str(tmp_path))
+    user_rules.register_rules(
+        api,
+        UserRules(
+            watches=[
+                UserWatch(name="Char.Vitals.hp", send="health ${value}", send_to="output"),
+                UserWatch(
+                    name="Char.Vitals.mp", send="${value}", send_to="variable", variable="mana"
+                ),
+            ]
+        ),
+    )
+    engine.data_arrived("gmcp", "Char.Vitals.hp", 90)
+    engine.data_arrived("gmcp", "Char.Vitals.mp", 30)
+    assert sink.echoed == [("health 90", "main")]
+    assert engine.get_var("mana") == "30"
+    assert sink.sent == []
+
+
+# --- the two switches that were missing ------------------------------------------------------
+
+
+def test_an_alias_and_a_timer_can_cut_current_speech(tmp_path):
+    sink = RecordingSink()
+    engine = AutomationEngine(sink)
+    user_rules.register_rules(
+        ScriptApi(engine, source=user_rules.SOURCE, base_dir=str(tmp_path)),
+        UserRules(
+            aliases=[UserAlias(pattern="heal", send="cast heal", interrupt=True)],
+            timers=[UserTimer(label="alert", every=5, send="look", interrupt=True)],
+        ),
+    )
+    engine.process_input("heal")
+    sink.scheduled[0][1]()  # the timer fires
+    assert sink.speech_stops == 2
+
+
+def test_a_timer_can_leave_what_it_writes_out_of_the_log(tmp_path):
+    # The box used to save and do nothing at all: the note showed *and* went into the file.
+    sink = RecordingSink()
+    engine = AutomationEngine(sink)
+    user_rules.register_rules(
+        ScriptApi(engine, source=user_rules.SOURCE, base_dir=str(tmp_path)),
+        UserRules(
+            timers=[
+                UserTimer(
+                    label="quiet", every=5, send="still down", send_to="output", omit_log=True
+                ),
+                UserTimer(label="loud", every=5, send="starting", send_to="output"),
+            ]
+        ),
+    )
+    for _delay, callback in list(sink.scheduled):
+        callback()
+    # Both are shown; only the one that did not ask to be left out is part of the record.
+    assert ("still down", "main") in sink.echoed
+    assert ("starting", "main") in sink.echoed
+    assert sink.echo_flags == [False, True]
+
+
+def test_a_log_target_is_dropped_when_the_timer_asks_to_be_left_out(tmp_path):
+    sink = RecordingSink()
+    engine = AutomationEngine(sink)
+    user_rules.register_rules(
+        ScriptApi(engine, source=user_rules.SOURCE, base_dir=str(tmp_path)),
+        UserRules(
+            timers=[
+                UserTimer(
+                    label="quiet", every=5, send="hidden", send_to="log", omit_log=True
+                )
+            ]
+        ),
+    )
+    sink.scheduled[0][1]()
+    assert sink.logged == []

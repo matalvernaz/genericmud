@@ -111,13 +111,17 @@ def _rule_summary(kind: str, rule) -> str:
             f"{_sends(rule, commands) or 'sends nothing'}"
         )
     if kind == "key":
-        action = commands or rule.speak or rule.sound or "nothing"
-        return f"{status}Hotkey{grouped}: {rule.key} runs {action}"
+        actions = [part for part in (
+            _sends(rule, commands),
+            f"speak {rule.speak}" if rule.speak else "",
+            f"sound {Path(rule.sound).name}" if rule.sound else "",
+        ) if part]
+        return f"{status}Hotkey{grouped}: {rule.key}: {'; '.join(actions) or 'nothing'}"
     if kind == "data":
         actions = [part for part in (
             f"sound {Path(rule.sound).name}" if rule.sound else "",
             f"speak {rule.speak}" if rule.speak else "",
-            f"send {commands}" if commands else "",
+            _sends(rule, commands),
             "interrupts speech" if rule.interrupt else "",
         ) if part]
         when = "when it changes" if rule.only_changes else "every time"

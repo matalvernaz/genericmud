@@ -261,15 +261,12 @@ class TriggerEditorDialog(_RuleEditorBase):
         self._pack_dir = pack_dir
         outer = wx.BoxSizer(wx.VERTICAL)
         grid = self._grid()
+        # The order is MUSHclient's, and it is the order a rule is thought about in: what it
+        # matches, then what it does, then where that goes, then the switches, and the sound
+        # detail last, because most edits never touch it.
         self._enabled = self._enabled_checkbox(grid, trigger)
         self._pattern = self._text(
             grid, "When the MUD sends &text matching:", trigger.pattern
-        )
-        self._label = self._text(
-            grid, "&Label (a script turns it off and on by this name):", trigger.label
-        )
-        self._group = self._text(
-            grid, "&Group (rules sharing a name switch together):", trigger.group
         )
         # Order must mirror MATCH_CHOICES: ("contains", "wildcard", "exact", "regex").
         self._match = wx.RadioBox(
@@ -285,25 +282,22 @@ class TriggerEditorDialog(_RuleEditorBase):
         self._match.SetSelection(MATCH_CHOICES.index(trigger.match_kind()))
         grid.Add(wx.StaticText(self, label=""))
         grid.Add(self._match, 1, wx.EXPAND)
-        self._sound = self._text(grid, "&Sound file (optional):", trigger.sound)
-        browse = wx.Button(self, label="&Browse for sound...")
-        browse.Bind(wx.EVT_BUTTON, self._on_browse)
-        grid.Add(wx.StaticText(self, label=""))
-        grid.Add(browse)
-        self._volume = self._slider(grid, "&Volume (0-100):", trigger.volume, 0, 100)
-        self._pan = self._slider(grid, "&Pan (-100 left to 100 right):", trigger.pan, -100, 100)
-        self._loop = wx.CheckBox(self, label="Loop the sound &until stopped")
-        self._loop.SetValue(trigger.loop)
-        grid.Add(wx.StaticText(self, label=""))
-        grid.Add(self._loop)
-        self._speak = self._text(grid, "Spea&k this text (%1 = first wildcard):", trigger.speak)
-        self._variable_button(grid, self._speak, "Insert a v&ariable into the speech...")
+        self._label = self._text(
+            grid, "&Label (a script turns it off and on by this name):", trigger.label
+        )
+        self._group = self._text(
+            grid, "&Group (rules sharing a name switch together):", trigger.group
+        )
+        self._order, self._keep_evaluating = self._order_controls(grid, trigger)
         self._send = self._command_text(grid, trigger.send, captures=True)
         self._send_to = self._send_to_choice(grid, trigger.send_to)
         self._variable = self._variable_name(grid, trigger.variable)
+        self._speak = self._text(grid, "Spea&k this text (%1 = first wildcard):", trigger.speak)
+        self._variable_button(grid, self._speak, "Insert a v&ariable into the speech...")
         self._interrupt = wx.CheckBox(
             self, label="&Interrupt current speech the moment this fires"
         )
+        self._interrupt.SetName("Interrupt current speech the moment this fires")
         self._interrupt.SetValue(trigger.interrupt)
         grid.Add(wx.StaticText(self, label=""))
         grid.Add(self._interrupt)
@@ -313,7 +307,6 @@ class TriggerEditorDialog(_RuleEditorBase):
                      "Remove it entirely"],
             majorDimension=1, style=wx.RA_SPECIFY_COLS,
         )
-        self._order, self._keep_evaluating = self._order_controls(grid, trigger)
         self._gag.SetSelection({"none": 0, "speech": 1, "line": 2}.get(trigger.gag, 0))
         outer_gag = self._gag
         grid.Add(wx.StaticText(self, label=""))
@@ -334,6 +327,17 @@ class TriggerEditorDialog(_RuleEditorBase):
         self._stop_channel = self._text(
             grid, "S&top a looping sound on this channel first (optional):", trigger.stop_channel
         )
+        self._sound = self._text(grid, "&Sound file (optional):", trigger.sound)
+        browse = wx.Button(self, label="&Browse for sound...")
+        browse.Bind(wx.EVT_BUTTON, self._on_browse)
+        grid.Add(wx.StaticText(self, label=""))
+        grid.Add(browse)
+        self._volume = self._slider(grid, "&Volume (0-100):", trigger.volume, 0, 100)
+        self._pan = self._slider(grid, "&Pan (-100 left to 100 right):", trigger.pan, -100, 100)
+        self._loop = wx.CheckBox(self, label="Loop the sound &until stopped")
+        self._loop.SetValue(trigger.loop)
+        grid.Add(wx.StaticText(self, label=""))
+        grid.Add(self._loop)
         self._finish(outer, grid)
 
     def _on_browse(self, _event: wx.CommandEvent) -> None:
@@ -410,6 +414,13 @@ class AliasEditorDialog(_RuleEditorBase):
         self._variable = self._variable_name(grid, alias.variable)
         self._speak = self._text(grid, "Spea&k this confirmation (optional):", alias.speak)
         self._variable_button(grid, self._speak, "Insert a v&ariable into the speech...")
+        self._interrupt = wx.CheckBox(
+            self, label="&Interrupt current speech the moment this fires"
+        )
+        self._interrupt.SetName("Interrupt current speech the moment this fires")
+        self._interrupt.SetValue(alias.interrupt)
+        grid.Add(wx.StaticText(self, label=""))
+        grid.Add(self._interrupt)
         self._finish(outer, grid)
 
     def result(self) -> UserAlias:
@@ -424,6 +435,7 @@ class AliasEditorDialog(_RuleEditorBase):
             send_to=SEND_TO_CHOICES[self._send_to.GetSelection()],
             variable=self._variable.GetValue().strip(),
             speak=self._speak.GetValue().strip(),
+            interrupt=self._interrupt.GetValue(),
             enabled=self._enabled.GetValue(),
         )
 
@@ -457,6 +469,8 @@ class KeyEditorDialog(_RuleEditorBase):
             grid, "&Group (rules sharing a name switch together):", key.group
         )
         self._send = self._command_text(grid, key.send, captures=False)
+        self._send_to = self._send_to_choice(grid, key.send_to)
+        self._variable = self._variable_name(grid, key.variable)
         self._speak = self._text(grid, "Spea&k this text:", key.speak)
         self._variable_button(grid, self._speak, "Insert a v&ariable into the speech...")
         self._sound = self._text(grid, "Play this s&ound (optional):", key.sound)
@@ -481,6 +495,8 @@ class KeyEditorDialog(_RuleEditorBase):
             key=self._key.GetValue().strip(),
             send=self._send.GetValue().strip(),
             speak=self._speak.GetValue().strip(),
+            send_to=SEND_TO_CHOICES[self._send_to.GetSelection()],
+            variable=self._variable.GetValue().strip(),
             sound=self._sound.GetValue().strip(),
             group=self._group.GetValue().strip(),
             enabled=self._enabled.GetValue(),
@@ -589,6 +605,8 @@ class DataRuleEditorDialog(_RuleEditorBase):
                 "other data the MUD sent; ${script:name} is a script variable."
             ),
         )
+        self._send_to = self._send_to_choice(grid, watch.send_to)
+        self._variable = self._variable_name(grid, watch.variable)
         self._interrupt = wx.CheckBox(self, label="&Interrupt current speech when this fires")
         self._interrupt.SetValue(watch.interrupt)
         grid.Add(wx.StaticText(self, label=""))
@@ -626,6 +644,8 @@ class DataRuleEditorDialog(_RuleEditorBase):
             pan=self._pan.GetValue(),
             speak=self._speak.GetValue().strip(),
             send=self._send.GetValue().strip(),
+            send_to=SEND_TO_CHOICES[self._send_to.GetSelection()],
+            variable=self._variable.GetValue().strip(),
             interrupt=self._interrupt.GetValue(),
             group=self._group.GetValue().strip(),
             enabled=self._enabled.GetValue(),
@@ -697,6 +717,13 @@ class TimerEditorDialog(_RuleEditorBase):
         self._run_disconnected.SetValue(timer.run_disconnected)
         grid.Add(wx.StaticText(self, label=""))
         grid.Add(self._run_disconnected)
+        self._interrupt = wx.CheckBox(
+            self, label="&Interrupt current speech when this fires"
+        )
+        self._interrupt.SetName("Interrupt current speech when this fires")
+        self._interrupt.SetValue(timer.interrupt)
+        grid.Add(wx.StaticText(self, label=""))
+        grid.Add(self._interrupt)
         self._send = self._command_text(grid, timer.send, captures=False)
         self._send_to = self._send_to_choice(grid, timer.send_to)
         self._variable = self._variable_name(grid, timer.variable)
@@ -719,6 +746,7 @@ class TimerEditorDialog(_RuleEditorBase):
             at=self._at.GetValue().strip() if daily else "",
             one_shot=self._one_shot.GetValue(),
             run_disconnected=self._run_disconnected.GetValue(),
+            interrupt=self._interrupt.GetValue(),
             send=self._send.GetValue().strip(),
             send_to=SEND_TO_CHOICES[self._send_to.GetSelection()],
             group=self._group.GetValue().strip(),
