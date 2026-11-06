@@ -30,9 +30,9 @@ class _Box:
 
 
 def _panel(history: list[str], value: str = "", caret: int | None = None):
-    from genericmud.ui import wx_app
+    from genericmud.ui import session_panel
 
-    panel = wx_app.SessionPanel.__new__(wx_app.SessionPanel)
+    panel = session_panel.SessionPanel.__new__(session_panel.SessionPanel)
     panel.input = _Box(value, caret)
     panel._history = list(history)
     panel._hist_index = len(history)

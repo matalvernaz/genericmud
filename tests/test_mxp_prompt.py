@@ -128,9 +128,9 @@ def test_a_typed_link_through_the_output_box_types_rather_than_sends():
 
 def test_the_native_window_fills_the_command_box_and_focuses_it():
     pytest.importorskip("wx")
-    from genericmud.ui import wx_app
+    from genericmud.ui import session_panel
 
-    panel = wx_app.SessionPanel.__new__(wx_app.SessionPanel)
+    panel = session_panel.SessionPanel.__new__(session_panel.SessionPanel)
     box = _FakeBox()
     panel.input = box
     panel._alive = True  # the window ignores messages once it is closing

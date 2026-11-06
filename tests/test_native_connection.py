@@ -12,27 +12,27 @@ from genericmud.config.worlds import World
 from tests.helpers import RecordingBackend
 
 wx = pytest.importorskip("wx", reason="native session lifecycle requires wxPython")
-from genericmud.ui import wx_app  # noqa: E402
+from genericmud.ui import session_panel, wx_app  # noqa: E402
 
 
 class Panel:
     # Run the real lifecycle methods without constructing controls or requiring a display.
-    _start = wx_app.SessionPanel._start
-    _start_inner = wx_app.SessionPanel._start_inner
-    _send = wx_app.SessionPanel._send
-    _reconnect = wx_app.SessionPanel._reconnect
-    _adopt_saved_world = wx_app.SessionPanel._adopt_saved_world
-    _target_for_reconnect = wx_app.SessionPanel._target_for_reconnect
-    _do_disconnect = wx_app.SessionPanel._do_disconnect
-    _teardown = wx_app.SessionPanel._teardown
-    close = wx_app.SessionPanel.close
-    disconnect = wx_app.SessionPanel.disconnect
-    is_connected = wx_app.SessionPanel.is_connected
-    apply_connection_settings = wx_app.SessionPanel.apply_connection_settings
-    _apply_connection_settings = wx_app.SessionPanel._apply_connection_settings
+    _start = session_panel.SessionPanel._start
+    _start_inner = session_panel.SessionPanel._start_inner
+    _send = session_panel.SessionPanel._send
+    _reconnect = session_panel.SessionPanel._reconnect
+    _adopt_saved_world = session_panel.SessionPanel._adopt_saved_world
+    _target_for_reconnect = session_panel.SessionPanel._target_for_reconnect
+    _do_disconnect = session_panel.SessionPanel._do_disconnect
+    _teardown = session_panel.SessionPanel._teardown
+    close = session_panel.SessionPanel.close
+    disconnect = session_panel.SessionPanel.disconnect
+    is_connected = session_panel.SessionPanel.is_connected
+    apply_connection_settings = session_panel.SessionPanel.apply_connection_settings
+    _apply_connection_settings = session_panel.SessionPanel._apply_connection_settings
 
     def is_connecting(self):
-        return wx_app.SessionPanel.is_connecting(self)
+        return session_panel.SessionPanel.is_connecting(self)
 
     def __init__(self, monkeypatch):
         self._loop = asyncio.get_running_loop()
@@ -48,14 +48,14 @@ class Panel:
         self.world = World("Test", "mud.example", 4000)
         # No saved worlds here: a reconnect re-reads the saved world, and these tests are not
         # about that -- the real config folder should not be read while testing either.
-        monkeypatch.setattr(wx_app, "load_worlds", list)
+        monkeypatch.setattr(session_panel, "load_worlds", list)
         self.posted = []
         self.backend = RecordingBackend()
         self._post = self.posted.append
         self._send_raw = self._sound_error = self._ask_from_pack = lambda *args: None
         self.close_notepads = lambda: None
-        monkeypatch.setattr(wx_app, "make_voice_backend", lambda: self.backend)
-        monkeypatch.setattr(wx_app, "make_sound_backend", lambda **kwargs: None)
+        monkeypatch.setattr(session_panel, "make_voice_backend", lambda: self.backend)
+        monkeypatch.setattr(session_panel, "make_sound_backend", lambda **kwargs: None)
 
 
 class Writer:

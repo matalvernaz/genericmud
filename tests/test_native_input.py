@@ -41,7 +41,7 @@ def test_typing_from_output_preserves_command_selection():
 def _probe():
     import wx
 
-    from genericmud.ui.wx_app import SessionPanel
+    from genericmud.ui.session_panel import SessionPanel
 
     cases = [
         ("caret", "attack goblin", 3, 3, "X"),

@@ -41,13 +41,13 @@ class _Loop:
 
 
 def _panel(*, value: str = "", connected: bool = True, masked: bool = False):
-    from genericmud.ui import wx_app
+    from genericmud.ui import session_panel
 
-    panel = wx_app.SessionPanel.__new__(wx_app.SessionPanel)
+    panel = session_panel.SessionPanel.__new__(session_panel.SessionPanel)
     panel.input = _Box(value)
     panel._history = []
     panel._hist_index = 0
-    panel._history_limit = wx_app._HISTORY_LIMIT
+    panel._history_limit = session_panel._HISTORY_LIMIT
     panel._input_masked = masked
     panel._connect_finished = True
     panel.is_connected = lambda: connected
@@ -215,14 +215,14 @@ def test_shift_enter_is_taken_by_the_handler_not_left_to_the_field():
 
 def test_the_history_does_not_grow_without_end():
     # A pasted file can be thousands of lines; each is a history entry, so it is capped.
-    from genericmud.ui import wx_app
+    from genericmud.ui import session_panel
 
     panel = _panel()
     panel._history_limit = 5
     panel._remember(["one", "two", "three", "four", "five", "six", "seven"])
     assert panel._history == ["three", "four", "five", "six", "seven"]
     assert panel._hist_index == len(panel._history)
-    assert wx_app._HISTORY_LIMIT >= 100  # generous enough to be useful
+    assert session_panel._HISTORY_LIMIT >= 100  # generous enough to be useful
 
 
 def test_the_box_height_follows_the_font_rather_than_a_guess():

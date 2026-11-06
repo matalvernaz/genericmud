@@ -215,23 +215,23 @@ def _panel(claimed: bool, keymap: dict[str, str]) -> SimpleNamespace:
 
 
 def test_alt_number_switches_tabs_when_nothing_in_the_world_uses_it(monkeypatch):
-    from genericmud.ui import wx_app
+    from genericmud.ui import session_panel
 
     frame = _frame()
     monkeypatch.setattr(wx, "GetTopLevelParent", lambda _window: frame)
     panel = _panel(claimed=False, keymap=_keymap_as_windows_and_linux_load_it(monkeypatch))
-    assert wx_app.SessionPanel._dispatch_bound_combo(panel, "alt+2") is True
+    assert session_panel.SessionPanel._dispatch_bound_combo(panel, "alt+2") is True
     assert frame.book.GetSelection() == 1
     assert panel._loop.calls == []
 
 
 def test_alt_number_goes_to_the_soundpack_when_it_uses_the_key(monkeypatch):
-    from genericmud.ui import wx_app
+    from genericmud.ui import session_panel
 
     frame = _frame()
     monkeypatch.setattr(wx, "GetTopLevelParent", lambda _window: frame)
     panel = _panel(claimed=True, keymap=_keymap_as_windows_and_linux_load_it(monkeypatch))
-    assert wx_app.SessionPanel._dispatch_bound_combo(panel, "alt+2") is True
+    assert session_panel.SessionPanel._dispatch_bound_combo(panel, "alt+2") is True
     assert frame.book.GetSelection() == 0
     assert frame.said == []
     assert panel._loop.calls == [({"type": "key", "key": "alt+2"},)]

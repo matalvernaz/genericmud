@@ -23,6 +23,7 @@ from tests.helpers import RecordingBackend
 
 wx = pytest.importorskip("wx", reason="native key routing requires wxPython")
 keyboard = importlib.import_module("genericmud.ui.keyboard")
+session_panel = importlib.import_module("genericmud.ui.session_panel")
 wx_app = importlib.import_module("genericmud.ui.wx_app")
 
 NUMPAD_CASES = [
@@ -61,10 +62,10 @@ class KeyEvent:
 
 
 class PanelHarness:
-    _on_input_key = wx_app.SessionPanel._on_input_key
-    _on_output_key = wx_app.SessionPanel._on_output_key
-    _dispatch_bound_combo = wx_app.SessionPanel._dispatch_bound_combo
-    _send_command = wx_app.SessionPanel._send_command
+    _on_input_key = session_panel.SessionPanel._on_input_key
+    _on_output_key = session_panel.SessionPanel._on_output_key
+    _dispatch_bound_combo = session_panel.SessionPanel._dispatch_bound_combo
+    _send_command = session_panel.SessionPanel._send_command
 
     def __init__(self, *, compass: bool, bindings=(), keymap=None):
         self.sent = []
