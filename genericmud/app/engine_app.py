@@ -15,10 +15,10 @@ import time
 import traceback
 from collections.abc import Callable, Iterable
 from dataclasses import replace
-from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from genericmud.app.session_log import SessionLogMixin
 from genericmud.app.sink import AppSink
 from genericmud.automation.channels import ChannelPolicy
 from genericmud.automation.engine import AutomationEngine, Callback, MatchContext, PackWindow
@@ -32,7 +32,7 @@ from genericmud.config.worlds import (
     normalize_connect_method,
     normalize_post_connect,
 )
-from genericmud.logpaths import diagnostic_log_dir, log_count, world_log_dir
+from genericmud.logpaths import world_log_dir
 from genericmud.mapping import RoomMap, load_map, save_map, spoken_count
 from genericmud.model.buffer import Buffer, Line, Link
 from genericmud.navigation import Navigator, SafeWalk, expand_speedwalk
@@ -157,11 +157,6 @@ _LINK_JUMPS = frozenset({"next_link", "prev_link"})
 _CHANNEL_REVIEW_VERBS = frozenset(
     {"prev", "next", "older", "newer", "prev_word", "next_word"}
 )
-
-
-def _files(count: int) -> str:
-    """A spoken file count: "1 file", "2 files". Read aloud, "1 files" sounds like a bug."""
-    return f"{count} file" if count == 1 else f"{count} files"
 
 
 def _redact_secret(text: str, secret: str) -> str:
@@ -310,7 +305,9 @@ def _default_schedule(delay: float, callback: Callable[[], None]) -> object | No
     return loop.call_later(delay, callback)
 
 
-class EngineApp:
+class EngineApp(
+    SessionLogMixin,
+):
     def __init__(
         self,
         voice: VoiceRouter,
@@ -2661,20 +2658,6 @@ class EngineApp:
             self._diag_where()
         # "soundpack:toggle" and other namespaces are wired as features land.
 
-    def _speak_logs(self) -> None:
-        """`/logs`: where each kind of log is kept, and how many are in each folder.
-
-        Two folders, two audiences -- a session log to read back, a diagnostic file to send
-        to someone when something is wrong -- so it is worth being able to ask which is
-        which without opening a file manager and listening to a list.
-        """
-        worlds = world_log_dir()
-        diagnostics = diagnostic_log_dir()
-        self._speak_system(
-            f"world logs in {worlds} ({_files(log_count(worlds))}); "
-            f"diagnostics in {diagnostics} ({_files(log_count(diagnostics))})"
-        )
-
     def _announce_link_under_cursor(self) -> None:
         """Say what the link the follow key would act on does: the keyboard's version of hovering.
 
@@ -2874,18 +2857,6 @@ class EngineApp:
             # the tab. Only the schemes checked by the caller ever reach here.
             self._post(protocol.open_url(url))
         self._speak_system(f"opening {url}")
-
-    def _diag_where(self) -> None:
-        """Speak the diagnostic log path + a one-line summary (often names the failure)."""
-        triggers = sum(
-            len(bucket["trigger"]) for bucket in self.engine.registrations_by_source().values()
-        )
-        packs = len(self._last_activation.loaded) if self._last_activation else 0
-        name = self._diag.path.name if self._diag is not None else "off"
-        self._speak_system(
-            f"diagnostic log {name}; backend {self._diag_backend_kind}; "
-            f"{packs} packs, {triggers} triggers; {self.sink.cues} cues attempted"
-        )
 
     def _handle_nav(self, action: str) -> None:
         if action == "mark":
@@ -3114,49 +3085,3 @@ class EngineApp:
             self._vip_connection_changed(False)
         elif message.startswith("reconnected"):
             self._vip_connection_changed(True)
-
-    def _log(self, text: str) -> None:
-        if self.logger is not None and self.logger.active and not self.logger.log(text):
-            # The write failed and logging auto-stopped; say so once rather than let the
-            # fault abort the line (which would silence and drop everything after it).
-            self.voice.speak("Session logging stopped: write failed.", channel=SYSTEM_CHANNEL,
-                             interrupt=True)
-            self._post(protocol.echo("* Session logging stopped: write failed."))
-
-    def _toggle_log(self) -> None:
-        """Alt+Shift+L: start or stop logging by hand."""
-        if self.logger is not None and self.logger.active:
-            name = self.logger.path.name
-            self.logger.stop()
-            self.logger = None
-            self._speak_system(f"logging stopped: {name}")
-            return
-        self.start_logging()
-
-    def start_logging(self, *, announce: bool = True) -> None:
-        """Log to the file the world's log_files setting names. Every log appends and begins
-        with the time, so a day's or a world's file reads as one session after another."""
-        if self.logger is not None and self.logger.active:
-            return
-        now = datetime.now()
-        # Sanitize the world name -- a pack-derived world could be named "../.." and escape the
-        # logs directory when joined onto the path.
-        safe_name = world_component(self.name or "session")
-        if self.log_files == "world":
-            path = self.log_dir / f"{safe_name}.log"
-        elif self.log_files == "day":
-            path = self.log_dir / f"{safe_name}-{now:%Y-%m-%d}.log"
-        else:
-            path = self.log_dir / f"{safe_name}-{now:%Y%m%d-%H%M%S}.log"
-        logger = SessionLogger(path)
-        try:
-            logger.start()
-        except OSError as error:
-            self._speak_system(f"Couldn't start logging: {error.strerror or error}")
-            return
-        self.logger = logger
-        self._log(f"Session started {now:%Y-%m-%d %H:%M:%S}")
-        if announce:
-            self._speak_system(f"logging to {path.name}")
-        else:
-            self._post(protocol.echo(f"* Logging to {path.name}"))
