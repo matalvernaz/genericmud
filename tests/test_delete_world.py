@@ -215,17 +215,39 @@ def _dialog(window, *names: str):
     return ConnectDialog(window, [World(name, "h.example", 4000) for name in names])
 
 
-def test_the_delete_button_does_not_claim_alt_d(window):
-    # "Connection details" already owns Alt+D; a second claim sent focus to the wrong control.
+def test_the_delete_button_says_its_own_key(window):
+    # A key nobody is told about may as well not exist: the button carries its mnemonic in
+    # the label, so it is read out with the button rather than found by accident.
     wx = pytest.importorskip("wx")
     dialog = _dialog(window, "Pen")
     try:
-        labels = []
+        buttons = [c for c in dialog.GetChildren() if isinstance(c, wx.Button)]
+        labels = [button.GetLabel() for button in buttons]
+        assert "&Delete..." in labels  # Alt+D: the letter it is spelled with
+        assert "Delete..." in [label.replace("&", "") for label in labels]
+    finally:
+        dialog.Destroy()
+
+
+def test_no_two_controls_in_the_world_list_claim_the_same_key(window):
+    # Two controls on one Alt+letter is how a key silently stops working, and how the delete
+    # button once lost its own. Every mnemonic in the dialog must be its own.
+    pytest.importorskip("wx")
+    dialog = _dialog(window, "Pen")
+    try:
+        claimed: dict[str, str] = {}
         for child in dialog.GetChildren():
-            if isinstance(child, wx.Button):
-                labels.append(child.GetLabel())
-        assert "Delete..." in labels
-        assert not any(label.startswith("&Delete") for label in labels)
+            if not hasattr(child, "GetLabel"):
+                continue
+            label = child.GetLabel()
+            if "&" not in label:
+                continue
+            letter = label[label.index("&") + 1].casefold()
+            assert letter not in claimed, (letter, claimed[letter], label)
+            claimed[letter] = label
+        assert claimed["d"] == "&Delete..."  # the delete button's own key
+        # Alt+R is the way back to a breadcrumb everywhere else, so the dialog leaves it alone.
+        assert "r" not in claimed
     finally:
         dialog.Destroy()
 
@@ -246,16 +268,34 @@ def test_the_delete_key_removes_the_picked_world(window):
         dialog.Destroy()
 
 
-def test_alt_r_is_bound_as_an_accelerator():
-    # The button carries no mnemonic, so Alt+R has to be an accelerator of its own.
+def test_the_dialog_binds_no_bare_accelerator_of_its_own():
+    # A key that is not in any label is a key nobody can find. The delete button uses a
+    # mnemonic instead, and gives Alt+R back to the breadcrumb it belongs to.
     source = (Path(__file__).resolve().parents[1] / "genericmud/ui/wx_app.py").read_text(
         encoding="utf-8"
     )
-    call = [line for line in source.splitlines() if "wx.AcceleratorTable(" in line]
-    assert len(call) == 1, call  # one table, not one per button
-    assert "wx.ACCEL_ALT" in call[0]
-    assert 'ord("R")' in call[0]
-    assert "_ID_DELETE_WORLD" in call[0]
+    start = source.index("class ConnectDialog(")
+    end = source.index("class PackManagerDialog(")
+    assert "AcceleratorTable" not in source[start:end]
+
+
+def test_the_details_label_gave_up_its_d_rather_than_share_it(window):
+    # A read-only box is the one control nobody presses a key for, so its letter moved along
+    # the word: the details are still a keystroke away, and Delete has the D it is spelled with.
+    pytest.importorskip("wx")
+    dialog = _dialog(window, "Pen")
+    try:
+        labels = [
+            child.GetLabel().replace("&", "")
+            for child in dialog.GetChildren()
+            if hasattr(child, "GetLabel") and "details" in child.GetLabel().replace("&", "")
+        ]
+        assert labels == ["Connection details:"]
+        assert "Connection de&tails:" in [
+            child.GetLabel() for child in dialog.GetChildren() if hasattr(child, "GetLabel")
+        ]
+    finally:
+        dialog.Destroy()
 
 
 def test_delete_on_an_empty_list_does_nothing(window):
