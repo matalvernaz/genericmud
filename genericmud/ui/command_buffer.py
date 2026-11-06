@@ -56,6 +56,10 @@ class CommandEntryCtrl(wx.TextCtrl):
             low += 1
         if self.text_range(0, low) != prefix:
             raise ValueError("The editor could not locate the command's text position")
+        # MSW GetRange normalizes even a lone CR to LF. A prefix ending at the CR
+        # and one ending after its LF therefore look identical; choose the whole CRLF.
+        while low < self.GetLastPosition() and self.text_range(0, low + 1) == prefix:
+            low += 1
         return low
 
     def line_number(self) -> int:

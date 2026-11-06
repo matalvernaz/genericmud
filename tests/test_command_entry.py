@@ -111,6 +111,7 @@ def _probe():
         assert entry.GetValue() == "north\n", (
             repr(entry.GetValue()), entry.GetSelection(), entry.GetLastPosition(),
         )
+        assert entry.GetSelection() == (entry.GetLastPosition(),) * 2
         entry.WriteText("look target")
         key(entry, wx.WXK_DOWN)
         assert entry.GetValue() == "north\nlook target\n", (
