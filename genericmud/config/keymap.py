@@ -10,7 +10,8 @@ from genericmud.resources import resource_root
 
 # Option counts as Alt on a Mac, and Option and a number types characters there (# on a UK
 # keyboard, brackets and braces on a German one), so the Alt+number tab keys are left free.
-_OPTION_NUMBER = re.compile(r"alt\+[0-9]")
+# Shift is no help: Option+Shift and a number types a character too.
+_OPTION_NUMBER = re.compile(r"alt\+(?:shift\+)?[0-9]")
 
 
 def load_keymap(name: str = "vipmud") -> dict[str, str]:

@@ -64,6 +64,23 @@
 # Past where VIPMud's own tab keys stop, as Ctrl+0 is for recall: Alt+0 is the tenth tab.
 "alt+0" = "tab:select:10"
 
+# Move the tab you are in: Up and Down a place at a time, Alt+Shift+1 to Alt+Shift+0
+# straight to that place (0 is the tenth), the same numbers Alt+1 to Alt+0 switch by. That
+# is also how a tab gets past the tenth, since the digits stop there. A tab already at the
+# top or the bottom says so instead of jumping round to the other end.
+"alt+shift+up" = "tab:move:up"
+"alt+shift+down" = "tab:move:down"
+"alt+shift+1" = "tab:move:1"
+"alt+shift+2" = "tab:move:2"
+"alt+shift+3" = "tab:move:3"
+"alt+shift+4" = "tab:move:4"
+"alt+shift+5" = "tab:move:5"
+"alt+shift+6" = "tab:move:6"
+"alt+shift+7" = "tab:move:7"
+"alt+shift+8" = "tab:move:8"
+"alt+shift+9" = "tab:move:9"
+"alt+shift+0" = "tab:move:10"
+
 # Follow the MXP link on the reviewed line (a tag like <send href="drink">fountain</send>).
 # On a line with several links the review cursor's word picks one, so Alt+Right into the
 # word first; if the word belongs to no link, the links are read out instead of guessed.
