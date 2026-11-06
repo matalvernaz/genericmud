@@ -29,7 +29,7 @@ import traceback
 import webbrowser
 import zipfile
 from collections.abc import Callable
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import wx
@@ -101,7 +101,7 @@ from genericmud.packs.world_share import export_world, import_world
 from genericmud.protocol.charset import AUTO, ENCODING_CHOICES, encoding_label
 from genericmud.safepath import world_component
 from genericmud.scripting import user_scripts
-from genericmud.scripting.api import MESSAGE_BUTTONS, ScriptApi
+from genericmud.scripting.api import ScriptApi
 from genericmud.session.crashlog import install_loop_exception_handler
 from genericmud.session.credentials import CredentialStore, open_credential_store
 from genericmud.session.diaglog import DiagnosticLog, make_diagnostic_log
@@ -110,6 +110,7 @@ from genericmud.sound.bass_backend import make_sound_backend
 from genericmud.transport.connection import MudConnection
 from genericmud.ui.background_work import _run_async
 from genericmud.ui.clipboard import _clipboard_text, _set_clipboard_text
+from genericmud.ui.help_dialog import HelpDialog
 from genericmud.ui.keyboard import (
     _COMPLETE_BACKWARD,
     _COMPLETE_FORWARD,
@@ -117,6 +118,13 @@ from genericmud.ui.keyboard import (
     _PASSTHROUGH_COMBOS,
     _hotkey_taken,
     _key_combo,
+)
+from genericmud.ui.output_dialogs import ChooseDialog, CopyLineDialog, FindDialog
+from genericmud.ui.pack_dialogs import (
+    PackMessageDialog,
+    PackNotepadFrame,
+    PackQuestionDialog,
+    _PackQuestion,
 )
 from genericmud.ui.scrollback import FindState, anchor_after_append, find_line
 from genericmud.update import self_update
@@ -1523,226 +1531,6 @@ class SessionPanel(wx.Panel):
             self.reconnect()
 
 
-class PackNotepadFrame(wx.Frame):
-    """A soundpack's MUSHclient notepad: text to read in a window of its own, while the game
-    carries on. Read-only; Escape or Close puts it away."""
-
-    def __init__(self, parent: wx.Window | None, title: str, text: str) -> None:
-        super().__init__(parent, title=title, size=(640, 480))
-        panel = wx.Panel(self)
-        label = wx.StaticText(panel, label="&Text:")
-        self.text = wx.TextCtrl(
-            panel, value=text, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_RICH2
-        )
-        self.text.SetName(title)
-        close = wx.Button(panel, wx.ID_CLOSE, "&Close")
-        close.Bind(wx.EVT_BUTTON, lambda _event: self.Close())
-        sizer = wx.BoxSizer(wx.VERTICAL)
-        sizer.Add(label, 0, wx.LEFT | wx.TOP, 4)
-        sizer.Add(self.text, 1, wx.EXPAND | wx.ALL, 4)
-        sizer.Add(close, 0, wx.ALIGN_RIGHT | wx.ALL, 4)
-        panel.SetSizer(sizer)
-        self.Bind(wx.EVT_CHAR_HOOK, self._on_key)
-
-    def set_text(self, text: str) -> None:
-        self.text.SetValue(text)
-        self.text.SetInsertionPoint(0)
-
-    def _on_key(self, event: wx.KeyEvent) -> None:
-        if event.GetKeyCode() == wx.WXK_ESCAPE and not event.HasAnyModifiers():
-            self.Close()
-            return
-        event.Skip()
-
-
-class PackQuestionDialog(wx.Dialog):
-    """A soundpack's question: a list to choose one or several items from, or text to type.
-
-    Built from the request a pack's script made through ScriptApi's ask_* methods. The
-    prompt is a StaticText placed right before the control and the control is named after
-    it, the pattern NVDA reads reliably here. :meth:`answer` reads what the player chose.
-    """
-
-    def __init__(self, parent: wx.Window, request: dict, title: str) -> None:
-        super().__init__(parent, title=title, style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
-        self._kind = request["kind"]
-        prompt = request.get("prompt") or ""
-        outer = wx.BoxSizer(wx.VERTICAL)
-        if prompt:
-            label = wx.StaticText(self, label=prompt.replace("&", "&&"))
-            label.Wrap(560)
-            outer.Add(label, 0, wx.LEFT | wx.RIGHT | wx.TOP | wx.EXPAND, 10)
-        if self._kind == "text":
-            multiline = bool(request.get("multiline"))
-            self._control = wx.TextCtrl(
-                self, value=request.get("default") or "",
-                style=wx.TE_MULTILINE if multiline else 0,
-                size=(560, 200) if multiline else (560, -1),
-            )
-            self._control.SelectAll()  # typing replaces what the pack filled in
-        elif self._kind == "choices":
-            # A multiple-selection list: NVDA says "selected" or "not selected" as the
-            # player arrows through, and Space switches the item.
-            self._control = wx.ListBox(
-                self, choices=request["items"], style=wx.LB_MULTIPLE, size=(560, 300)
-            )
-            for index in request.get("selected") or []:
-                self._control.SetSelection(index)
-        else:
-            self._control = wx.ListBox(
-                self, choices=request["items"], style=wx.LB_SINGLE, size=(560, 300)
-            )
-            # Nothing is selected unless the pack names an item, as in MUSHclient, where OK
-            # alone then answers nothing: a mapper's "Choose exit to delete" deletes whatever
-            # comes back. A VIPMud pick list always names one.
-            selected = request.get("selected")
-            if selected is not None:
-                self._control.SetSelection(selected)
-            self._control.Bind(wx.EVT_LISTBOX_DCLICK, lambda _event: self.EndModal(wx.ID_OK))
-        self._control.SetName(prompt or title)
-        outer.Add(self._control, 1, wx.ALL | wx.EXPAND, 10)
-        outer.Add(self.CreateStdDialogButtonSizer(wx.OK | wx.CANCEL), 0, wx.ALL | wx.EXPAND, 10)
-        self.SetSizerAndFit(outer)
-        self._control.SetFocus()
-
-    def answer(self, result: int = wx.ID_OK) -> object | None:
-        """What the player chose, given how the dialog closed (ShowModal's result)."""
-        if result != wx.ID_OK:
-            return None
-        if self._kind == "text":
-            return self._control.GetValue()
-        if self._kind == "choices":
-            return list(self._control.GetSelections())
-        index = self._control.GetSelection()
-        return index if index != wx.NOT_FOUND else None
-
-
-# A msgbox button's id and label, by the name MESSAGE_BUTTONS gives it.
-_MESSAGE_BUTTON_IDS = {
-    "ok": (wx.ID_OK, "OK"),
-    "cancel": (wx.ID_CANCEL, "Cancel"),
-    "yes": (wx.ID_YES, "&Yes"),
-    "no": (wx.ID_NO, "&No"),
-    "retry": (wx.ID_RETRY, "&Retry"),
-    "abort": (wx.ID_ABORT, "&Abort"),
-    "ignore": (wx.ID_IGNORE, "&Ignore"),
-}
-_MESSAGE_ICONS = {
-    "!": wx.ART_WARNING, "?": wx.ART_QUESTION, "i": wx.ART_INFORMATION, ".": wx.ART_ERROR,
-}
-
-
-class PackMessageDialog(wx.Dialog):
-    """A soundpack's message box (MUSHclient's utils.msgbox): its text and its buttons.
-
-    genericMud's own dialog, not the system's, so a closing tab or a question that ran out
-    of time can take it down (EndModal fails on a native one). The text is a StaticText the
-    screen reader reads with the dialog, and the default button has the focus. Escape is
-    Cancel where there is one and OK on a lone OK, and does nothing on Yes/No or
-    Abort/Retry/Ignore, as on Windows' own message boxes. :meth:`answer` names the button.
-    """
-
-    def __init__(self, parent: wx.Window, request: dict, title: str) -> None:
-        super().__init__(parent, title=title)
-        names = MESSAGE_BUTTONS[request["buttons"]]
-        self._names = {_MESSAGE_BUTTON_IDS[name][0]: name for name in names}
-        outer = wx.BoxSizer(wx.VERTICAL)
-        row = wx.BoxSizer(wx.HORIZONTAL)
-        art = _MESSAGE_ICONS.get(request.get("icon"), wx.ART_WARNING)
-        icon = wx.StaticBitmap(self, bitmap=wx.ArtProvider.GetBitmap(art, wx.ART_MESSAGE_BOX))
-        row.Add(icon, 0, wx.ALL, 10)
-        message = wx.StaticText(self, label=(request.get("prompt") or "").replace("&", "&&"))
-        message.Wrap(480)
-        row.Add(message, 1, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 10)
-        outer.Add(row, 1, wx.EXPAND)
-        buttons = wx.BoxSizer(wx.HORIZONTAL)
-        self._buttons: list[wx.Button] = []
-        for name in names:
-            button_id, label = _MESSAGE_BUTTON_IDS[name]
-            button = wx.Button(self, button_id, label=label)
-            button.Bind(wx.EVT_BUTTON, lambda _event, ident=button_id: self.EndModal(ident))
-            buttons.Add(button, 0, wx.ALL, 5)
-            self._buttons.append(button)
-        outer.Add(buttons, 0, wx.ALIGN_CENTER | wx.BOTTOM, 5)
-        self.SetSizerAndFit(outer)
-        if "cancel" in names:
-            self.SetEscapeId(wx.ID_CANCEL)
-        elif names == ("ok",):
-            self.SetEscapeId(wx.ID_OK)
-        else:
-            self.SetEscapeId(wx.ID_NONE)
-        default = self._buttons[min(max(request.get("default", 1), 1), len(names)) - 1]
-        default.SetDefault()
-        default.SetFocus()
-
-    def answer(self, result: int) -> str | None:
-        """The name of the button pressed, given ShowModal's result; None when the dialog
-        was closed some other way."""
-        return self._names.get(result)
-
-
-@dataclass
-class _PackQuestion:
-    """A question a pack's script is waiting on: asked on the loop thread, shown and
-    answered on the UI thread."""
-
-    request: dict
-    answer: object = None
-    done: threading.Event = field(default_factory=threading.Event)
-    dialog: wx.Dialog | None = None  # while it's on screen
-    shown_at: float | None = None  # time.monotonic() when it came up
-
-    def finish(self, answer: object) -> None:
-        if not self.done.is_set():
-            self.answer = answer
-            self.done.set()
-
-
-class ChooseDialog(wx.Dialog):
-    """Pick one of the commands an MXP menu offers.
-
-    Following a menu link never sends anything: it asks. The MUD's own words for the link are
-    in the title, so the question arrives with its context, and each row is numbered so a
-    number key picks it -- the same "type the number" the rest of the client answers to.
-    Arrow keys and Enter work the ordinary way, and Cancel sends nothing at all.
-    """
-
-    def __init__(self, parent: wx.Window, text: str, choices: list[tuple[str, str]]) -> None:
-        super().__init__(parent, title=f"Choose: {text}" if text else "Choose")
-        self._choices = list(choices)
-        outer = wx.BoxSizer(wx.VERTICAL)
-        rows = [
-            f"{number}. {caption or command}"
-            for number, (command, caption) in enumerate(self._choices, 1)
-        ]
-        self._list = wx.ListBox(self, choices=rows, style=wx.LB_SINGLE)
-        self._list.SetName("Choices")
-        outer.Add(self._list, 1, wx.EXPAND | wx.ALL, 10)
-        outer.Add(self.CreateButtonSizer(wx.OK | wx.CANCEL), 0, wx.EXPAND | wx.ALL, 10)
-        self.SetSizer(outer)
-        self.SetMinSize((420, 280))
-        self._list.SetSelection(0)
-        self._list.SetFocus()
-        self._list.Bind(wx.EVT_CHAR, self._on_char)
-
-    def _on_char(self, event: wx.KeyEvent) -> None:
-        code = event.GetKeyCode()
-        # A number picks its row at once only while every row has a one-digit number: with ten
-        # or more, "1" could be the start of "12", so the list keeps its ordinary keys.
-        if len(self._choices) <= 9 and ord("1") <= code <= ord("9"):
-            index = code - ord("1")
-            if index < len(self._choices):
-                self._list.SetSelection(index)
-                self.EndModal(wx.ID_OK)
-                return
-        event.Skip()
-
-    def chosen(self) -> tuple[str, str] | None:
-        """The (command, caption) the player picked, or None if the list has no choice."""
-        index = self._list.GetSelection()
-        return self._choices[index] if 0 <= index < len(self._choices) else None
-
-
 class ConnectionSettingsDialog(wx.Dialog):
     """Global recovery settings; native controls keep Tab, Enter and Escape navigation."""
 
@@ -1773,90 +1561,6 @@ class ConnectionSettingsDialog(wx.Dialog):
 
     def get_settings(self) -> tuple[bool, int]:
         return self._auto.GetValue(), self._interval.GetValue()
-
-
-class FindDialog(wx.Dialog):
-    """Search the output: what to find, which way, and whether case matters.
-
-    Opens holding the previous search, so reopening and pressing Enter repeats it. Every
-    label is a StaticText placed immediately before its control and the text field is
-    named as well, which is the pattern NVDA reads reliably here.
-    """
-
-    def __init__(self, parent: wx.Window, state: FindState) -> None:
-        super().__init__(parent, title="Find in output")
-        outer = wx.BoxSizer(wx.VERTICAL)
-
-        row = wx.BoxSizer(wx.HORIZONTAL)
-        row.Add(wx.StaticText(self, label="Find &what:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
-        self._term = wx.TextCtrl(self, value=state.term)
-        self._term.SetName("Find what")
-        row.Add(self._term, 1, wx.EXPAND)
-        outer.Add(row, 0, wx.ALL | wx.EXPAND, 10)
-
-        # Order must mirror the boolean: index 0 = backwards, index 1 = forwards.
-        self._direction = wx.RadioBox(
-            self,
-            label="&Direction",
-            choices=["Up, towards older lines", "Down, towards newer lines"],
-            majorDimension=1,
-            style=wx.RA_SPECIFY_COLS,
-        )
-        self._direction.SetSelection(1 if state.forward else 0)
-        outer.Add(self._direction, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 10)
-
-        self._case = wx.CheckBox(self, label="Match &case")
-        self._case.SetValue(state.case_sensitive)
-        outer.Add(self._case, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
-
-        outer.Add(self.CreateStdDialogButtonSizer(wx.OK | wx.CANCEL), 0, wx.ALL | wx.EXPAND, 10)
-        self.SetSizerAndFit(outer)
-        self._term.SetFocus()
-        self._term.SelectAll()  # typing replaces the old term; Enter alone repeats it
-
-    def state(self) -> FindState:
-        return FindState(
-            term=self._term.GetValue(),
-            forward=self._direction.GetSelection() == 1,
-            case_sensitive=self._case.GetValue(),
-        )
-
-
-class CopyLineDialog(wx.Dialog):
-    """Copy all or part of the line being reviewed (Ctrl+Shift+C), an idea from MUDBall.
-
-    The line sits in a read-only box with all of it selected, so Enter copies the whole line,
-    and the ordinary selection keys (Shift with the arrows, Ctrl+Shift for whole words) pick
-    out part of it first: a name, a number, an address. The label comes straight before the
-    box and the box is named as well, the pattern NVDA reads reliably here.
-    """
-
-    def __init__(self, parent: wx.Window, line: str) -> None:
-        super().__init__(parent, title="Copy from line")
-        outer = wx.BoxSizer(wx.VERTICAL)
-
-        row = wx.BoxSizer(wx.HORIZONTAL)
-        row.Add(wx.StaticText(self, label="&Line:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
-        self._line = wx.TextCtrl(self, value=line, style=wx.TE_READONLY)
-        self._line.SetName("Line")
-        self._line.SetMinSize((480, -1))  # MUD lines run long; it is still one line
-        row.Add(self._line, 1, wx.EXPAND)
-        outer.Add(row, 0, wx.ALL | wx.EXPAND, 10)
-
-        buttons = wx.StdDialogButtonSizer()
-        copy = wx.Button(self, wx.ID_OK, "&Copy")
-        copy.SetDefault()
-        buttons.AddButton(copy)
-        buttons.AddButton(wx.Button(self, wx.ID_CANCEL, "Close"))
-        buttons.Realize()
-        outer.Add(buttons, 0, wx.ALL | wx.EXPAND, 10)
-        self.SetSizerAndFit(outer)
-        self._line.SetFocus()
-        self._line.SelectAll()
-
-    def chosen(self) -> str:
-        """What to copy: the part selected, or the whole line when nothing is."""
-        return self._line.GetStringSelection() or self._line.GetValue()
 
 
 # What a world's log file choices are called in its details, in LOG_FILES order.
@@ -4441,35 +4145,6 @@ class AutomationScriptEditorDialog(wx.Dialog):
 
     def source(self) -> str:
         return self._source.GetValue()
-
-
-class HelpDialog(wx.Dialog):
-    """One help page: a read-only text box NVDA reads line by line, plus Close.
-
-    The same accessibility shape as the release-notes dialog: label precedes the
-    control, SetName gives it a spoken name, and focus starts at the TOP of the
-    text (a fresh TextCtrl caret sits at the end, which reads as an empty line).
-    """
-
-    def __init__(self, parent: wx.Window, title: str, text: str) -> None:
-        super().__init__(
-            parent, title=title, size=(640, 480),
-            style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER,
-        )
-        sizer = wx.BoxSizer(wx.VERTICAL)
-        sizer.Add(wx.StaticText(self, label=f"&{title}:"), 0, wx.LEFT | wx.TOP, 8)
-        body = wx.TextCtrl(
-            self, value=text,
-            style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_DONTWRAP,
-        )
-        body.SetName(title)
-        body.SetInsertionPoint(0)
-        sizer.Add(body, 1, wx.EXPAND | wx.ALL, 8)
-        close = wx.Button(self, wx.ID_CANCEL, "Cl&ose")
-        close.SetDefault()
-        sizer.Add(close, 0, wx.ALL | wx.ALIGN_RIGHT, 8)
-        self.SetSizer(sizer)
-        body.SetFocus()
 
 
 _ID_UPDATE_NOW = wx.ID_HIGHEST + 101
