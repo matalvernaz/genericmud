@@ -12,7 +12,7 @@ from genericmud.config.worlds import World
 from tests.helpers import RecordingBackend
 
 wx = pytest.importorskip("wx", reason="native session lifecycle requires wxPython")
-from genericmud.ui import main_window, session_panel  # noqa: E402
+from genericmud.ui import main_window, session_connection, session_panel  # noqa: E402
 
 
 class Panel:
@@ -48,14 +48,14 @@ class Panel:
         self.world = World("Test", "mud.example", 4000)
         # No saved worlds here: a reconnect re-reads the saved world, and these tests are not
         # about that -- the real config folder should not be read while testing either.
-        monkeypatch.setattr(session_panel, "load_worlds", list)
+        monkeypatch.setattr(session_connection, "load_worlds", list)
         self.posted = []
         self.backend = RecordingBackend()
         self._post = self.posted.append
         self._send_raw = self._sound_error = self._ask_from_pack = lambda *args: None
         self.close_notepads = lambda: None
-        monkeypatch.setattr(session_panel, "make_voice_backend", lambda: self.backend)
-        monkeypatch.setattr(session_panel, "make_sound_backend", lambda **kwargs: None)
+        monkeypatch.setattr(session_connection, "make_voice_backend", lambda: self.backend)
+        monkeypatch.setattr(session_connection, "make_sound_backend", lambda **kwargs: None)
 
 
 class Writer:

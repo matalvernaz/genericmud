@@ -43,9 +43,9 @@ def _panel(world: World):
 
 
 def _saving(monkeypatch, *worlds: World) -> None:
-    from genericmud.ui import session_panel
+    from genericmud.ui import session_connection
 
-    monkeypatch.setattr(session_panel, "load_worlds", lambda: list(worlds))
+    monkeypatch.setattr(session_connection, "load_worlds", lambda: list(worlds))
 
 
 def test_a_reconnect_takes_the_port_and_tls_the_world_has_now(monkeypatch):
