@@ -13,3 +13,12 @@ Codex and other coding agents read this file automatically; Claude Code reads it
 - Update `README.md` and `genericmud/help_text.py` for anything a player can notice. In a contribution, leave `CHANGELOG.md` alone: release notes are written at release time.
 - One change per pull request, titled as one plain sentence about what changes for a player. Fill in the pull request template.
 - Before you finish, run `uv run ruff check .`, `uv run pytest -q` (not piped), the `node --test` line from `CONTRIBUTING.md`, and `node --check frontend/src/app.js`.
+
+## Where things live
+
+- Shared session: `genericmud/app/engine_app.py`, with methods grouped by job in sibling mixins.
+- Native window: `genericmud/ui/main_window.py` and `session_panel.py`; `wx_app.py` starts them.
+- Web window: `genericmud/web_launcher.py`, `genericmud/bridge/` and `frontend/`.
+- Follow the [full code map in CONTRIBUTING.md](CONTRIBUTING.md#where-things-live) for protocols,
+  automation, scripting, soundpacks, speech, audio, settings, tests and packaging.
+- Patch a name in the module that reads it. Use `tests/ui_source.py` for native source assertions.
