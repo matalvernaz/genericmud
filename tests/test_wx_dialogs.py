@@ -288,7 +288,7 @@ def test_focus_returns_to_the_field_only_after_the_picker_has_closed(frame, tmp_
 
     deferred: list = []
     monkeypatch.setattr(wx_app.VariablesDialog, "ShowModal", lambda _picker: wx.ID_CANCEL)
-    monkeypatch.setattr(wx_app.wx, "CallAfter", lambda func, *args: deferred.append((func, args)))
+    monkeypatch.setattr(wx, "CallAfter", lambda func, *args: deferred.append((func, args)))
     editor = wx_app.KeyEditorDialog(frame, tmp_path, UserKey(), variables=_rows)
     try:
         focused: list = []
@@ -405,7 +405,7 @@ def test_the_automation_manager_refuses_a_hotkey_genericmud_already_uses(
     answers = iter([wx.ID_OK, wx.ID_CANCEL])  # press OK, read the refusal, then cancel
     monkeypatch.setattr(wx_app.KeyEditorDialog, "ShowModal", lambda _editor: next(answers))
     told: list[str] = []
-    monkeypatch.setattr(wx_app.wx, "MessageBox", lambda text, *_args: told.append(text))
+    monkeypatch.setattr(wx, "MessageBox", lambda text, *_args: told.append(text))
     manager = wx_app.AutomationManagerDialog(frame, panel)
     try:
         assert manager._edit_rule("key", UserKey(key="alt+up", send="score")) is None
@@ -772,7 +772,7 @@ def test_world_dialog_refuses_a_separator_that_cant_work(frame, monkeypatch):
     from genericmud.ui import wx_app
 
     told: list[str] = []
-    monkeypatch.setattr(wx_app.wx, "MessageBox", lambda text, *_args: told.append(text))
+    monkeypatch.setattr(wx, "MessageBox", lambda text, *_args: told.append(text))
     dialog = wx_app.WorldDialog(frame, World("A", "a.example", 23))
     try:
         dialog._separator.SetValue("/")
@@ -1225,7 +1225,7 @@ def test_the_soundpacks_menu_opens_a_notepad_the_player_picks(frame, tmp_path, m
         def Destroy(self):
             pass
 
-    monkeypatch.setattr(wx_app.wx, "SingleChoiceDialog", _Chooser)
+    monkeypatch.setattr(wx, "SingleChoiceDialog", _Chooser)
     loop = asyncio.new_event_loop()
     main = wx_app.GenericMudFrame(loop, {})
     try:
@@ -1603,13 +1603,13 @@ def test_genericmud_is_in_front_while_it_is_the_active_program(frame, tmp_path, 
     loop = asyncio.new_event_loop()
     main = wx_app.GenericMudFrame(loop, {})
     try:
-        monkeypatch.setattr(wx_app.wx, "GetActiveWindow", lambda: None)  # a native message box
+        monkeypatch.setattr(wx, "GetActiveWindow", lambda: None)  # a native message box
         assert main._world_in_front()
-        monkeypatch.setattr(wx_app.wx, "GetActiveWindow", lambda: main)
+        monkeypatch.setattr(wx, "GetActiveWindow", lambda: main)
         assert main._world_in_front()
-        monkeypatch.setattr(wx_app.wx, "GetActiveWindow", lambda: _Notepad())
+        monkeypatch.setattr(wx, "GetActiveWindow", lambda: _Notepad())
         assert not main._world_in_front()
-        monkeypatch.setattr(wx_app.wx, "GetActiveWindow", lambda: main)
+        monkeypatch.setattr(wx, "GetActiveWindow", lambda: main)
         active_program[0] = False  # another program is in front
         assert not main._world_in_front()
     finally:
@@ -1683,7 +1683,6 @@ def test_a_soundpack_world_on_another_server_gets_no_saved_login(frame, tmp_path
 
 def test_a_login_the_store_refuses_keeps_the_dialog_open_and_says_why(frame, monkeypatch):
     from genericmud.config.worlds import World
-    from genericmud.ui import wx_app
     from genericmud.ui.wx_app import WorldDialog
 
     class LockedStore:
@@ -1697,7 +1696,7 @@ def test_a_login_the_store_refuses_keeps_the_dialog_open_and_says_why(frame, mon
             pass
 
     told: list[str] = []
-    monkeypatch.setattr(wx_app.wx, "MessageBox", lambda text, *_args: told.append(text))
+    monkeypatch.setattr(wx, "MessageBox", lambda text, *_args: told.append(text))
     dialog = WorldDialog(frame, World("gw", "h.example", 4000), credentials=LockedStore())
     ended: list[int] = []
     dialog.EndModal = ended.append
@@ -1916,7 +1915,7 @@ def test_the_manager_offers_mud_data_sixth_and_makes_a_rule(frame, tmp_path, mon
         rule = UserWatch(name="Char.Vitals.hp", speak="${value}")
         assert manager._edit_rule("data", rule) == rule
         told: list[str] = []
-        monkeypatch.setattr(wx_app.wx, "MessageBox", lambda text, *_args: told.append(text))
+        monkeypatch.setattr(wx, "MessageBox", lambda text, *_args: told.append(text))
         answers = iter([wx.ID_OK, wx.ID_CANCEL])
         monkeypatch.setattr(wx_app.DataRuleEditorDialog, "ShowModal", lambda _e: next(answers))
         assert manager._edit_rule("data", UserWatch(name="")) is None  # a name is required

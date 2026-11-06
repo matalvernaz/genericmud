@@ -59,7 +59,6 @@ def _frame(*, panels: list[_Panel] | None = None):
 def answer(monkeypatch):
     """Answer the confirmation without showing it, and record what it asked."""
     wx = pytest.importorskip("wx")
-    from genericmud.ui import wx_app
 
     class FakeDialog:
         asked: list[str] = []
@@ -77,7 +76,7 @@ def answer(monkeypatch):
 
     FakeDialog.asked = []
     FakeDialog.result = wx.ID_YES
-    monkeypatch.setattr(wx_app.wx, "MessageDialog", FakeDialog)
+    monkeypatch.setattr(wx, "MessageDialog", FakeDialog)
     return FakeDialog
 
 
@@ -162,6 +161,7 @@ def test_a_tab_that_is_only_disconnected_is_not_mentioned(answer, monkeypatch):
 
 def test_a_failed_save_keeps_the_login(answer, monkeypatch):
     # The world is still in the file, so its password must stay with it.
+    wx = pytest.importorskip("wx")
     from genericmud.ui import wx_app
 
     monkeypatch.setattr(wx_app, "load_worlds", lambda: [World("Pen", "pen.example", 9500)])
@@ -171,7 +171,7 @@ def test_a_failed_save_keeps_the_login(answer, monkeypatch):
 
     monkeypatch.setattr(wx_app, "save_worlds", refuse)
     told: list[str] = []
-    monkeypatch.setattr(wx_app.wx, "MessageBox", lambda text, *_a, **_k: told.append(text))
+    monkeypatch.setattr(wx, "MessageBox", lambda text, *_a, **_k: told.append(text))
     frame = _frame()
 
     frame._delete_saved_world(World("Pen", "pen.example", 9500))
