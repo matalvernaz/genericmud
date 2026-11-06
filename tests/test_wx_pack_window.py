@@ -10,6 +10,7 @@ from __future__ import annotations
 import sys
 import threading
 import time
+import webbrowser
 
 import pytest
 
@@ -124,10 +125,9 @@ def test_a_notepad_opens_beside_the_game_and_reopens_in_place(panel):
 
 
 def test_a_link_opens_in_the_browser_and_says_so(panel, monkeypatch):
-    from genericmud.ui import wx_app
 
     opened: list[str] = []
-    monkeypatch.setattr(wx_app.webbrowser, "open", lambda url: opened.append(url) or True)
+    monkeypatch.setattr(webbrowser, "open", lambda url: opened.append(url) or True)
     posted: list[dict] = []
     monkeypatch.setattr(panel, "_post", posted.append)
     outcome = _on_loop_thread(lambda: {"ok": panel.open_url("https://example.com/help")})

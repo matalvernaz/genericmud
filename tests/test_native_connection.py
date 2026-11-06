@@ -11,7 +11,7 @@ from genericmud.config.ui_prefs import UiPrefs
 from genericmud.config.worlds import World
 from tests.helpers import RecordingBackend
 
-pytest.importorskip("wx", reason="native session lifecycle requires wxPython")
+wx = pytest.importorskip("wx", reason="native session lifecycle requires wxPython")
 from genericmud.ui import wx_app  # noqa: E402
 
 
@@ -553,7 +553,7 @@ async def test_connection_settings_save_and_reach_all_sessions(monkeypatch, tmp_
             assert current is prefs
 
         def ShowModal(self):
-            return wx_app.wx.ID_OK if accepted else wx_app.wx.ID_CANCEL
+            return wx.ID_OK if accepted else wx.ID_CANCEL
 
         def get_settings(self):
             return True, 300

@@ -311,14 +311,14 @@ def test_altgr_typing_reaches_the_input_box_past_the_channel_keys(monkeypatch):
 
 
 def test_off_windows_the_layout_is_never_asked(monkeypatch):
-    monkeypatch.setattr(wx_app.sys, "platform", "linux")
+    monkeypatch.setattr(sys, "platform", "linux")
     assert wx_app._altgr_types_a_character(KeyEvent(ord("0"), ctrl=True, alt=True)) is False
 
 
 def test_a_layout_that_cannot_be_asked_leaves_the_shortcut_working(monkeypatch):
     # Pretend to be on Windows: the fake event has no raw key code, so asking fails, and the
     # key must stay the shortcut it always was rather than vanish.
-    monkeypatch.setattr(wx_app.sys, "platform", "win32")
+    monkeypatch.setattr(sys, "platform", "win32")
     assert wx_app._altgr_types_a_character(KeyEvent(ord("0"), ctrl=True, alt=True)) is False
 
 
