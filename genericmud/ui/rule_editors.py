@@ -294,6 +294,16 @@ class TriggerEditorDialog(_RuleEditorBase):
         self._match.SetSelection(MATCH_CHOICES.index(trigger.match_kind()))
         grid.Add(wx.StaticText(self, label=""))
         grid.Add(self._match, 1, wx.EXPAND)
+        # How the match reads the capitals, so it sits with the rest of "how to match": MUD text
+        # is capitalised however its author felt, and someone who cannot glance at the line has
+        # no way to see why a rule written "brady pages" stayed silent on "Brady pages".
+        self._ignore_case = wx.CheckBox(
+            self, label="Ignore capitals when matching (an&y capitals match)"
+        )
+        self._ignore_case.SetName("Ignore capitals when matching")
+        self._ignore_case.SetValue(trigger.ignore_case)
+        grid.Add(wx.StaticText(self, label=""))
+        grid.Add(self._ignore_case)
         self._send = self._command_text(grid, trigger.send, captures=True)
         self._send_to = self._send_to_choice(grid, trigger.send_to)
         self._variable = self._variable_name(grid, trigger.variable)
@@ -381,6 +391,7 @@ class TriggerEditorDialog(_RuleEditorBase):
             channel=self._channel.GetValue().strip(),
             stop_channel=self._stop_channel.GetValue().strip(),
             match=match,
+            ignore_case=self._ignore_case.GetValue(),
             label=self._label.GetValue().strip(),
             group=self._group.GetValue().strip(),
             order=self._order_value(self._order),
@@ -421,6 +432,15 @@ class AliasEditorDialog(_RuleEditorBase):
         self._regex.SetValue(alias.regex)
         grid.Add(wx.StaticText(self, label=""))
         grid.Add(self._regex)
+        # As for a trigger: what you type is not always spelled one way, and an alias that sits
+        # silent because of a capital is the hardest kind of rule to diagnose by ear.
+        self._ignore_case = wx.CheckBox(
+            self, label="Ignore capitals when matching (an&y capitals match)"
+        )
+        self._ignore_case.SetName("Ignore capitals when matching")
+        self._ignore_case.SetValue(alias.ignore_case)
+        grid.Add(wx.StaticText(self, label=""))
+        grid.Add(self._ignore_case)
         self._send = self._command_text(grid, alias.send, captures=True)
         self._send_to = self._send_to_choice(grid, alias.send_to)
         self._variable = self._variable_name(grid, alias.variable)
@@ -447,6 +467,7 @@ class AliasEditorDialog(_RuleEditorBase):
             send_to=SEND_TO_CHOICES[self._send_to.GetSelection()],
             variable=self._variable.GetValue().strip(),
             speak=self._speak.GetValue().strip(),
+            ignore_case=self._ignore_case.GetValue(),
             interrupt=self._interrupt.GetValue(),
             enabled=self._enabled.GetValue(),
         )
