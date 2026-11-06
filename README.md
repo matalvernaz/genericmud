@@ -557,8 +557,13 @@ are spoken once and written to the diagnostics rather than swallowed. Every rule
 world shares one Lua space for this, and a rule can call any function of any of that
 world's scripts.
 
-Triggers and aliases also take a **Label**: the name a script uses to turn the rule off
-and on, in MUSHclient's style. A rule with a label can be switched by a script with
+Triggers and aliases also take a **Group**: rules sharing a name switch together, so
+`mud.set_group_enabled("combat", false)` turns all of them off in one call -- MUSHclient's
+EnableGroup. A group nothing belongs to is not an error; it is a group waiting for its
+first rule.
+
+They take a **Label** too: the name a script uses to turn *that* rule off and on, in
+MUSHclient's style. A rule with a label can be switched by a script with
 `mud.set_enabled("watch-backups", false)`; one without can only be switched in the
 Automation Manager. The manager reads the label first, because it is what you called
 the rule.

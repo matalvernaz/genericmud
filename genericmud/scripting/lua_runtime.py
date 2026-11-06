@@ -349,6 +349,7 @@ class LuaPackRuntime:
         mud.on_data = self._lua_on_data()
         mud.set_channel = self._lua_set_channel()
         mud.set_enabled = api.set_enabled  # MUSHclient's EnableTrigger, by label
+        mud.set_group_enabled = api.set_group_enabled  # its EnableGroup, by group name
         self._lua.globals().mud = mud
 
     def _run_callback(self, callback, ctx: MatchContext | None, *args: object):
