@@ -42,7 +42,11 @@ from genericmud.render.ansi import strip_ansi
 from genericmud.safepath import is_absolute
 from genericmud.scripting.api import MESSAGE_BUTTONS, ScriptApi
 from genericmud.scripting.guard import ScriptGuard
-from genericmud.scripting.lua_runtime import install_pack_require, make_sandboxed_runtime
+from genericmud.scripting.lua_runtime import (
+    MudTable,
+    install_pack_require,
+    make_sandboxed_runtime,
+)
 from genericmud.scripting.mushclient_audio import AudioDll
 from genericmud.scripting.mushclient_bass import BassWrapper
 from genericmud.scripting.mushclient_rules import (
@@ -571,9 +575,15 @@ def _normalize_key_spec(spec: object) -> str:
 
 
 class MushclientPack:
-    def __init__(self, api: ScriptApi, *, full_stdlib: bool = False) -> None:
+    def __init__(
+        self, api: ScriptApi, *, full_stdlib: bool = False, player_scripts: bool = False
+    ) -> None:
         self._api = api
         self._base_dir = api.base_dir
+        # genericMud's own vocabulary, for the state that hosts the player's own scripts: they get
+        # `mud.*` *beside* MUSHclient's names (see genericmud.scripting.world_runtime). A pack
+        # does not: it was written in MUSHclient's dialect, and that is what it should get.
+        self._mud: MudTable | None = None
         # Default @sppath to the pack dir when the session didn't pre-set it from world.sounds, so
         # _find_in_sounds_dir can locate bundled audio by basename when the pack's own
         # GetInfo()-anchored paths miss (e.g. Erion's split sounds/ + worlds/sounds/
@@ -672,7 +682,12 @@ class MushclientPack:
         # MUSHclient rather than shipped with a pack, so packs call their commands without
         # loading them (Stellarmush, Mystavaria, Empire). Answer them for every pack, after
         # the pack's own aliases, or "tts_interrupt <text>" goes to the MUD instead of aloud.
-        self._install_speech_commands()
+        #
+        # The player's own space does not get them. Those aliases take a line off the command
+        # box, which is the right trade for a pack whose author assumed them and the wrong one
+        # for a world where nobody installed anything: a MUD command named "sapi" is the MUD's.
+        if not player_scripts:
+            self._install_speech_commands()
         self._install_sendpkt()
         self._install_audio()
         self._install_nvda()
@@ -731,10 +746,6 @@ class MushclientPack:
             "  loadfile = adopt(rawget(_G, 'loadfile'))\n"
             "end"
         )(lambda: self._env_for(self._current_plugin))
-        # Hand each plugin our own ppi (its bundled ppi.lua needs package.seeall, which the
-        # sandbox strips). Then make any still-unimplemented host name a "black hole" that is
-        # callable AND indexable (returns itself) -- so Window/InfoBox/etc. we don't implement
-        # no-op (even Foo.bar.baz()) and the plugin loads + its sound path runs.
         # A black hole: callable AND self-indexing (returns itself), so Window/InfoBox/socket
         # and any other host API we don't implement no-op, even Foo.bar.baz(). It backs both an
         # unresolved require (native/external modules) and any unknown global, so a plugin loads
@@ -742,24 +753,27 @@ class MushclientPack:
         black_hole = self._lua.eval(
             "setmetatable({}, {__call=function(t) return t end, __index=function(t) return t end})"
         )
-        bass_bridge = self._make_bass_bridge()
-        json_bridge = self._make_json_bridge()
-        lfs_bridge = self._make_lfs_bridge()
-        socket_bridge = self._make_socket_bridge()
-        http_bridge, ltn12_bridge = self._make_http_bridges()
-        socket_bridge.http = http_bridge
-        sqlite_bridge = make_sqlite_bridge(
-            self._lua, self._base_dir, lambda: self._client_dir
-        )
-        self._lua.globals().json = json_bridge
-        self._lua.globals().ltn12 = ltn12_bridge
-        self._lua.globals().socket = socket_bridge
-        self._lua.globals().sqlite3 = sqlite_bridge
-        self._forget_scope = install_pack_require(
-            self._lua,
-            self._base_dir,
-            builtins={
-                "ppi": self._make_ppi(),
+        # Hand each plugin our own ppi (its bundled ppi.lua needs package.seeall, which the
+        # sandbox strips), and the libraries packs bundle or expect to find installed.
+        builtins = {"ppi": self._make_ppi()}
+        if not player_scripts:
+            # None of these for the player's own scripts: the documentation promises them no
+            # disk, no network and no native code, and these bridges are exactly that surface.
+            # A pack's author knows what it reaches for; the player is told they cannot.
+            bass_bridge = self._make_bass_bridge()
+            json_bridge = self._make_json_bridge()
+            lfs_bridge = self._make_lfs_bridge()
+            socket_bridge = self._make_socket_bridge()
+            http_bridge, ltn12_bridge = self._make_http_bridges()
+            socket_bridge.http = http_bridge
+            sqlite_bridge = make_sqlite_bridge(
+                self._lua, self._base_dir, lambda: self._client_dir
+            )
+            self._lua.globals().json = json_bridge
+            self._lua.globals().ltn12 = ltn12_bridge
+            self._lua.globals().socket = socket_bridge
+            self._lua.globals().sqlite3 = sqlite_bridge
+            builtins.update({
                 # The ffi-based BASS wrapper packs ship: Miriani-Next and Toastush under the
                 # Miriani name, Chatpack and the yugioh pack as "audio.bass". It needs
                 # LuaJIT and bass.dll; this plays through genericMud's sound instead.
@@ -775,8 +789,14 @@ class MushclientPack:
                 "socket": socket_bridge,
                 "socket.http": http_bridge,
                 "sqlite3": sqlite_bridge,
-            },
-            fallback=black_hole,
+            })
+        self._forget_scope = install_pack_require(
+            self._lua,
+            self._base_dir,
+            builtins=builtins,
+            # A pack's missing native/external module no-ops so the pack still loads; the
+            # player's own script would rather be told the module is not there.
+            fallback=None if player_scripts else black_hole,
             on_error=self._module_failed,
             # A module that defines plain globals runs once in each plugin that requires
             # it, as each plugin has its own Lua state in MUSHclient.
@@ -841,17 +861,22 @@ class MushclientPack:
         # back as nil -- assigning nil to a global DELETES it, so an unconditional fallback
         # made `if var ~= nil` true right after `var = nil` and Erion's OnPluginInstall
         # stored the black hole into every sound toggle instead of defaulting them to 1.
-        self._lua.eval(
-            "function(bh)\n"
-            "  local hosted = {utils=true, rex=true, serialize=true}\n"
-            "  setmetatable(_G, {__index = function(_, key)\n"
-            "    if type(key) == 'string' and (string.match(key, '^%u') or hosted[key]) then\n"
-            "      return bh\n"
-            "    end\n"
-            "    return nil\n"
-            "  end})\n"
-            "end"
-        )(black_hole)
+        #
+        # Not for the player's own scripts. MUSHclient itself raises on an undefined global, and
+        # a script of the player's own is the one place a wrongly-capitalised typo would never be
+        # found if it quietly did nothing: it gets the error instead.
+        if not player_scripts:
+            self._lua.eval(
+                "function(bh)\n"
+                "  local hosted = {utils=true, rex=true, serialize=true}\n"
+                "  setmetatable(_G, {__index = function(_, key)\n"
+                "    if type(key) == 'string' and (string.match(key, '^%u') or hosted[key]) then\n"
+                "      return bh\n"
+                "    end\n"
+                "    return nil\n"
+                "  end})\n"
+                "end"
+            )(black_hole)
         # A plugin's globals: its own table, starting with genericMud's own globals (the host
         # functions and Lua's libraries, as they stand now, before any pack code runs) and
         # reading through to the shared ones for the rest (the world's script, unknown host
@@ -878,6 +903,11 @@ class MushclientPack:
             "  return setmetatable({loaded = loaded}, {__index = shared})\n"
             "end"
         )
+        if player_scripts:
+            # genericMud's vocabulary beside MUSHclient's, installed last so nothing it defines
+            # can be mistaken for a host name a MUSHclient script relies on.
+            self._mud = MudTable(self._lua, self._api, self._guard)
+            self._mud.install()
 
     def _install_io_compat(self) -> None:
         """Match MUSHclient's pack-relative file paths and legacy read modes."""
@@ -1895,8 +1925,9 @@ class MushclientPack:
             g[name] = fn
         # MUSHclient points Lua's print at the output window, joining its arguments with
         # spaces. Packs rely on it: Empire's "omit and reprint" triggers hide a line and
-        # print a reworded copy, which would otherwise go to a console nobody can see.
-        g["print"] = joined(self._note, " ")
+        # print a reworded copy, which would otherwise go to a console nobody can see. A print
+        # is not a note: it is shown and never written to the log.
+        g["print"] = joined(self._print, " ")
         # Packs call both bare (Sound(...)) and through the world object
         # (world.Sound(...), world.getvariable(...)). Mirror funcs onto a world
         # table, with lowercase aliases for the world.lowercase() callers.
@@ -2161,16 +2192,27 @@ class MushclientPack:
         return _SCRIPT_ERROR_OK  # MUSHclient's Send answers eOK, and some packs Note() it
 
     def _note(self, text: object = "") -> None:
-        """A finished output line: whatever Tell/ColourTell started, then ``text``.
+        """MUSHclient's Note: a finished output line, and part of the session log.
 
         Spoken as well as shown. genericMud stands in for MushReader, the screen-reader plugin
         these packs are written for, and its OnPluginScreendraw reads a note (type 1) just as
         it reads the MUD's own lines (type 0), blank ones excepted. Without that, a pack that
         hides a line and prints a reworded copy (Empire's death message) would go silent.
+
+        A note is always logged and a print never is -- the same pair this client's own rules
+        offer as destinations, and what MUSHclient means by the two names.
         """
         line = self._pending_tell + str(text)
         self._pending_tell = ""
-        self._api.echo(line)
+        self._api.note(line)
+        if line.strip() and self._api.line_speech():
+            self._api.speak(line)
+
+    def _print(self, text: object = "") -> None:
+        """MUSHclient's print: the same line, shown and spoken, never in the log."""
+        line = self._pending_tell + str(text)
+        self._pending_tell = ""
+        self._api.print(line)
         if line.strip() and self._api.line_speech():
             self._api.speak(line)
 
@@ -2536,7 +2578,9 @@ class MushclientPack:
             if not state["one_shot"] and self._timer_is_current(key, state, generation):
                 self._schedule_timer(key, state)
 
-        self._api.add_timer(state["interval"], fire)
+        self._api.add_timer(
+            state["interval"], fire, while_disconnected=bool(state["active_closed"])
+        )
 
     def _run_timer(self, state: dict) -> None:
         state["fired"] += 1
@@ -3291,6 +3335,8 @@ class MushclientPack:
             if rule.kind == TRIGGER and rule.omit_from_output:
                 ctx.line.gagged = True
                 ctx.line.display_when_gagged = False
+            if rule.kind == TRIGGER and rule.omit_from_log:
+                ctx.line.omit_from_log = True
             if rule.one_shot:
                 self._retire_rule(rule)  # first, so its script can add the name again
             previous = self._current_plugin
@@ -3911,6 +3957,43 @@ class MushclientPack:
         if env is not None:
             self._setfenv(chunk, env)
         return chunk()
+
+    # --- the world's own scripting space ---
+
+    def run_source(self, source: str) -> object:
+        """Run Lua in the world's own globals: a script file's text, or a rule's inline code."""
+        return self._guard.run_strict(self._execute_lua, source)
+
+    def run_file(self, path: str) -> object:
+        """Run one of the player's own ``.lua`` files: UTF-8, plain Lua, named for its errors."""
+        target = Path(path)
+        previous = self._current_document
+        self._current_document = target
+        try:
+            return self.run_source(target.read_text(encoding="utf-8"))
+        finally:
+            self._current_document = previous
+
+    def function(self, name: str):
+        """The world's own Lua function of that name, or None (MUSHclient's named routine).
+
+        Read with ``rawget``, not by indexing: a pack's state answers an unknown capitalised
+        name with the do-nothing stand-in, so indexing would report a routine that is not there
+        -- and a rule naming such a routine has to say so instead.
+        """
+        try:
+            value = self._rawget(self._lua.globals(), str(name))
+        except Exception:  # noqa: BLE001 - a name that is not there is simply not there
+            return None
+        return value if callable(value) else None
+
+    def set_match(self, line: str, wildcards) -> None:
+        """Offer the match to code that runs next: globals ``line`` and ``wildcards``."""
+        self._mud.set_match(line, wildcards)
+
+    def table_of(self, values):
+        """Values as a 1-based Lua table, the shape a ``mud`` callback's captures take."""
+        return self._mud.table_of(values)
 
     def _index_pack_files(self) -> dict[str, list[Path]]:
         if self._file_index is not None:

@@ -23,8 +23,8 @@ class SessionLogMixin:
 
     Writes: logger.
 
-    Reads: _diag, _diag_backend_kind, _last_activation, _post, engine, log_dir, log_files, name,
-    sink, voice.
+    Reads: _diag, _diag_backend_kind, _last_activation, _post, engine, log_dir, log_files,
+    name, sink, voice.
 
     Calls: _speak_system.
     """

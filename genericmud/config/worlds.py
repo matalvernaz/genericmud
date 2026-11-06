@@ -76,6 +76,8 @@ class World:
     # not speak Pueblo reads it as a character name. So it is switched on for a world known to
     # want it, never for the next world by accident.
     pueblo: bool = False
+    # Write the client's own notes to the session log. Print lines are never written either
+    # way: that is the difference between the two, and why a rule offers both.
     # Where an <IMAGE> looks for its file when the tag carries no URL of its own. Most MUDs
     # expect the client to have this configured, the same way MSP's U= expects a sounds
     # location -- without one an image can't be located, and is quietly dropped.
