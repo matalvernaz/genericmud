@@ -139,6 +139,7 @@ class UserTimer:
     send: str = ""
     send_to: str = "world"
     omit_log: bool = False  # leave whatever it writes out of the session log
+    group: str = ""  # as for triggers: switched together with the rest of its group
 
 
 @dataclass
@@ -530,29 +531,38 @@ def clock_seconds(now: datetime | None = None) -> float:
 
 
 def _register_timer(api: ScriptApi, t: UserTimer, *, clock=clock_seconds) -> None:
-    """Schedule one timer, and reschedule it after each fire unless it is a one-shot."""
+    """Schedule one timer under a name, so a label or a group can switch it later.
+
+    A draft with no label still gets a name of its own (its place in the file), so every timer
+    is findable: the manager and the script calls work the same whether the player named it or
+    not.
+    """
     if not t.enabled or not t.send.strip():
         return
     at = parse_at(t.at) if t.at.strip() else None
     if at is None and t.every <= 0:
         return  # neither shape: nothing to schedule
 
-    def delay() -> float:
-        return seconds_until(at, now=clock()) if at is not None else float(t.every)
-
     def fire() -> None:
         commands = _commands(t.send, keep_spaces=send_to_kind(t.send_to) == "command")
         if commands:
             deliver(api, list(commands), t.send_to)
-        if not t.one_shot:
-            schedule()  # the next one, from this moment
 
-    def schedule() -> None:
-        # The api's timer call is the one that counts against the session's limit and is
-        # cancelled with this source when the rules reload.
-        api.add_timer(delay(), fire)
-
-    schedule()
+    # A timer that names a time of day has no fixed period -- its wait is "until the next
+    # 03:00" -- so it asks the clock each time; an interval timer just repeats.
+    daily = at is not None and not t.one_shot
+    every = None if t.one_shot or at is not None else float(t.every)
+    delay = seconds_until(at, now=clock()) if at is not None else float(t.every)
+    name = t.label.strip() or f"timer {t.at or f'{t.every:g}s'}"
+    api.add_named_timer(
+        name,
+        delay,
+        fire,
+        every=every,
+        next_delay=(lambda: seconds_until(at, now=clock())) if daily else None,
+        group=t.group.strip(),
+        enabled=t.enabled,
+    )
 
 
 def _register_alias(api: ScriptApi, a: UserAlias) -> None:

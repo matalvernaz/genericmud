@@ -524,8 +524,17 @@ The shortcut has to be a word of its own, so `sh` never takes `shout`.
 
 A **timer** fires every so often (`every 30 seconds`) or once a day at a time
 (`03:00`), and answers the same question the other rules do: a text and a **Send it to**
-target. **Do it once only** makes it a one-shot. It has a **Label** like triggers and
-aliases, which is what a script switches it by.
+target. **Do it once only** makes it a one-shot. It has a **Label** and a **Group**
+like triggers and aliases, so a script switches it by name or with its group.
+
+Timers are named things in the engine, which is what makes that possible, and the names
+are MUSHclient's:
+
+```lua
+mud.add_timer("tick", 5, function() mud.command("look") end, {every=5, group="combat"})
+mud.enable_timer("tick", false)
+mud.delete_timer("tick")
+```
 
 **Send it to** sits beside the response text and says where it goes, the way
 MUSHclient's "send to" does. One text, one destination:
