@@ -262,6 +262,44 @@ def test_rule_editors_offer_variables_only_with_a_live_session(frame, tmp_path):
             without.Destroy()
 
 
+def test_a_hotkey_and_a_data_rule_keep_their_group(frame, tmp_path):
+    from genericmud.packs.user_rules import UserKey, UserWatch
+    from genericmud.ui.rule_editors import DataRuleEditorDialog, KeyEditorDialog
+
+    hotkey = KeyEditorDialog(
+        frame, tmp_path, UserKey(key="f2", speak="health", group="combat")
+    )
+    try:
+        assert hotkey._group.GetValue() == "combat"
+        assert hotkey.result().group == "combat"
+        hotkey._group.SetValue("movement")
+        assert hotkey.result().group == "movement"
+    finally:
+        hotkey.Destroy()
+
+    rule = UserWatch(name="Char.Vitals.hp", speak="${value}", group="combat")
+    data = DataRuleEditorDialog(frame, tmp_path, rule)
+    try:
+        assert data._group.GetValue() == "combat"
+        assert data.result().group == "combat"
+    finally:
+        data.Destroy()
+
+
+def test_a_rule_editor_keeps_the_variable_its_target_stores_under(frame, tmp_path):
+    from genericmud.packs.user_rules import UserTrigger
+    from genericmud.ui.rule_editors import TriggerEditorDialog
+
+    rule = UserTrigger(pattern="backup", send="${1}", send_to="variable", variable="pager")
+    dialog = TriggerEditorDialog(frame, tmp_path, rule)
+    try:
+        assert dialog._variable.GetValue() == "pager"
+        result = dialog.result()
+        assert (result.send_to, result.variable) == ("variable", "pager")
+    finally:
+        dialog.Destroy()
+
+
 def test_inserting_a_variable_puts_its_reference_at_the_caret(frame, tmp_path, monkeypatch):
     from genericmud.packs.user_rules import UserKey
     from genericmud.ui import rule_editors, variables_dialog

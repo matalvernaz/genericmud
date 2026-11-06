@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from genericmud.automation.engine import AutomationEngine
 from genericmud.model.buffer import Line
+from genericmud.scripting import user_scripts
 from genericmud.scripting.api import ScriptApi
 from genericmud.scripting.lua_runtime import LuaPackRuntime
 from genericmud.scripting.mushclient_compat import MushclientPack
@@ -53,3 +54,18 @@ def test_packs_do_not_cross_fire():
 
     engine.process_line(Line("only vip here"))
     assert sink.spoken == [("vip", "main", False)]
+
+
+def test_the_worlds_own_scripts_sit_beside_a_mushclient_pack(tmp_path):
+    # Two states, both speaking MUSHclient's dialect: yours, and the pack's. They do not mix --
+    # a pack's variables and triggers are its own -- but both answer the same line.
+    sink = RecordingSink()
+    engine = AutomationEngine(sink)
+    user_scripts.save_script(
+        tmp_path, "main.lua", 'mud.trigger("ping", function() Send("world") end)'
+    )
+    assert user_scripts.load_scripts(engine, tmp_path, source_prefix="user-script:1")
+    MushclientPack(ScriptApi(engine, source="mushclient")).load_source(_MUSHCLIENT_PACK)
+
+    engine.process_line(Line("ping"))
+    assert sorted(sink.sent) == ["pong", "world"]

@@ -175,6 +175,8 @@ class EngineApp(
             window=lambda: self.pack_window,
             update_packs=self.update_packs,
             check_pack_updates=self.check_pack_updates,
+            log_note=self._log_note_asked_for,
+            log_line=self._log,
         )
         # Set by a front end that can show dialogs (the wx window): called with the question
         # and a function to call while it waits. A window-less session's questions are
@@ -221,6 +223,7 @@ class EngineApp(
         self.log_automatically = False
         self.log_files = "session"
         self.log_commands = True
+        self.log_notes = True  # a world's own setting replaces this when one is opened
         # Echo what you type into the output (MUSHclient's "echo input"). Off unless the world
         # asks for it, and separate from logging it: either one can be wanted without the other.
         self.echo_input = False
@@ -327,6 +330,7 @@ class EngineApp(
         self.log_automatically = world.log_automatically
         self.log_files = world.log_files
         self.log_commands = world.log_commands
+        self.log_notes = world.log_notes
         self.echo_input = world.echo_input
         # How this session reached the world: an offer of an encrypted port has to know whether
         # this link is already encrypted, and whether the offered port is even a change.
@@ -478,6 +482,10 @@ class EngineApp(
         auto-login stranded at the login screen.
         """
         self.engine.connected = True
+        # The timers that paused on the disconnect start again, each with its wait from now: a
+        # world's rules are registered once per session, so without this a dropped link would
+        # silently cost the player every timer rule until the rules were reloaded.
+        self.engine.resume_timers()
         # An offer belongs to the connection that made it: a reconnect asks the MUD again,
         # because a game can move its port and a stale offer would point at nothing.
         self._secure_port = None
@@ -553,7 +561,11 @@ class EngineApp(
             # Also mark the engine disconnected: packs read IsConnected(), and the
             # OnPluginTick chain pauses so a tick can't restart music after quit.
             self.engine.connected = False
-            self.engine.cancel_timers()  # a pending #alarm must not fire into a dead session
+            # Not a blanket cancel any more: a timer asked to keep its clock through a disconnect
+            # goes on, and the rest pause here and come back in after_reconnect(). What is still
+            # dropped is the anonymous work -- a one-shot mud.timer, a pending #alarm, a sound
+            # still downloading -- which has nothing to resume into.
+            self.engine.suspend_timers()
             self._pack_timers_cancelled = True
             self.sound.flush()
             if message.startswith("protocol error"):

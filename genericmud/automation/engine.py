@@ -67,9 +67,20 @@ class EngineSink:
 
     def send(self, text: str) -> None: ...
     def send_packet(self, data: bytes) -> None: ...
-    def echo(self, text: str, channel: str = "main") -> None: ...
+    def echo(self, text: str, channel: str = "main", *, log: bool = False) -> None:
+        """Show ``text`` in the output as a line of the client's own (MUSHclient's echo).
+
+        ``log`` asks for it to be written to the session log too, which is the difference
+        between a note and a print: a note is part of the record, a print is not.
+        """
     def file_line(self, text: str, channel: str) -> None:
         """Keep ``text`` in the scrollback under ``channel``, without showing or speaking it."""
+    def type_text(self, text: str) -> None:
+        """Put ``text`` in the player's command box, unsent (MUSHclient's "send to command")."""
+
+    def log_line(self, text: str) -> None:
+        """Write ``text`` to the session log without showing it (MUSHclient's "send to log")."""
+
     def speak(self, text: str, channel: str = "main", interrupt: bool = False) -> None: ...
     def stop_speech(self) -> None: ...
     def play(
@@ -177,9 +188,14 @@ class _Rule:
     enabled: bool = True
     gag: bool = False
     gag_but_display: bool = False
+    omit_from_log: bool = False
     keep_evaluating: bool = True
     source: str = ""
     channel: str | None = None
+    # MUSHclient's group: rules sharing a name can be switched together. Read from the rules
+    # when it is asked for rather than kept in a list of its own, so a reload cannot leave a
+    # group pointing at rules that no longer exist.
+    group: str = ""
     # When a trigger with a stop scope stops evaluation, only the later triggers in the same
     # scope are skipped. MUSHclient stops within one plugin's list, so a pack's trigger can't
     # silence another pack's or the player's own. Without one, a stop ends the whole line.
@@ -211,13 +227,125 @@ def _named(match: re.Match[str]) -> dict[str, str]:
     return {name: value if value is not None else "" for name, value in match.groupdict().items()}
 
 
-def _cancel_pending(entry: tuple[object, str, Callable[[], None] | None]) -> None:
-    handle, _source, on_cancel = entry
-    cancel = getattr(handle, "cancel", None)
+class _NamedTimer:
+    """One named timer: when to fire, what to do, and whether it is on.
+
+    Kept on the engine rather than only in a handle so that "the timer called tick" can be
+    switched off, moved to another group's fate, or deleted by name -- which is what makes a
+    timer something a player can manage rather than a callback that runs until the session ends.
+    """
+
+    def __init__(
+        self,
+        engine: AutomationEngine,
+        name: str,
+        delay: float,
+        callback: Callback,
+        *,
+        every: float | None = None,
+        next_delay: Callable[[], float] | None = None,
+        group: str = "",
+        source: str = "",
+        while_disconnected: bool = False,
+    ) -> None:
+        self._engine = engine
+        self.name = name
+        self.delay = max(0.0, float(delay))
+        self.every = None if every is None else max(0.0, float(every))
+        # Asked each time instead of a fixed repeat, for a timer that fires at a time of day:
+        # its wait is "until the next 03:00", which changes with the clock.
+        self.next_delay = next_delay
+        self.callback = callback
+        self.group = group
+        self.source = source
+        # MUSHclient's ActiveWhenClosed: a timer that keeps its clock through a disconnect. Every
+        # other timer waits for the world to come back (see AutomationEngine.suspend_timers).
+        self.while_disconnected = while_disconnected
+        self.enabled = True
+        self._pending: object | None = None
+
+    @property
+    def armed(self) -> bool:
+        """Whether a fire is waiting on the clock right now."""
+        return self._pending is not None
+
+    def _schedule(self, delay: float) -> None:
+        self._pending = self._engine.schedule_timer(
+            delay, self._fire, source=self.source,
+            while_disconnected=self.while_disconnected,
+        )
+
+    def arm(self) -> None:
+        self.disarm()
+        if not self.enabled:
+            return
+        self._schedule(self.delay)
+
+    def disarm(self) -> None:
+        if self._pending is not None:
+            cancel = getattr(self._pending, "cancel", None)
+            if cancel is not None:
+                cancel()
+            self._engine.discard_timer(self._pending)
+            self._pending = None
+
+    def _fire(self) -> None:
+        self._pending = None
+        if not self.enabled:
+            return
+        self.callback()
+        if not self.enabled:
+            return
+        if self.next_delay is not None:  # a time-of-day timer asks the clock each time
+            self._schedule(self.next_delay())
+        elif self.every is not None:
+            self._schedule(self.every)
+
+    def set_enabled(self, enabled: bool) -> None:
+        self.enabled = enabled
+        if enabled:
+            self.arm()
+        else:
+            self.disarm()
+
+
+@dataclass
+class _KeyBinding:
+    """One source's binding of a key combo (see :meth:`AutomationEngine.add_key`).
+
+    ``_keys`` holds the effective binding per combo: the last *enabled* one, so switching a
+    group off lets the combo fall back to whatever owned it before -- as if that source had
+    never bound it, which is what MUDclient's EnableGroup does to an accelerator.
+    """
+
+    key: str
+    source: str
+    callback: Callback
+    group: str = ""
+    enabled: bool = True
+
+
+@dataclass
+class _PendingTimer:
+    """One scheduled callback the engine holds a handle for, so it can be taken back.
+
+    ``while_disconnected`` marks the work that must survive a dropped connection: a timer the
+    player asked to keep going, or a pack's timer flagged ActiveWhenClosed. Everything else is
+    cancelled when the world disconnects, because it has nothing left to run against.
+    """
+
+    handle: object
+    source: str
+    on_cancel: Callable[[], None] | None = None
+    while_disconnected: bool = False
+
+
+def _cancel_pending(entry: _PendingTimer) -> None:
+    cancel = getattr(entry.handle, "cancel", None)
     if cancel is not None:
         cancel()
-    if on_cancel is not None:
-        on_cancel()
+    if entry.on_cancel is not None:
+        entry.on_cancel()
 
 
 # A watch may start with one of these to hear only that protocol: gmcp.Char.Vitals.
@@ -238,6 +366,8 @@ class _DataWatch:
     only_changes: bool = False
     source: str = ""
     last: object = _UNSEEN
+    group: str = ""  # switched with the rest of its group (set_group_enabled)
+    enabled: bool = True  # a group can turn this watch off without unregistering it
 
 
 def _walk(value: object, parts: tuple[str, ...]) -> tuple[bool, object]:
@@ -278,11 +408,13 @@ def _heard(
 class AutomationEngine:
     def __init__(self, sink: EngineSink | None = None, *, sound: SoundBus | None = None) -> None:
         self.sink = sink or EngineSink()
+        self._named_timers: list[_NamedTimer] = []  # named timers, findable by name and group
         self._triggers: list[_Rule] = []
         self._aliases: list[_Rule] = []
-        self._keys: dict[str, Callback] = {}  # effective binding (last writer wins)
-        # (key, source, callback) log: conflict reports + replay-rebuild on remove_source.
-        self._key_bindings: list[tuple[str, str, Callback]] = []
+        self._keys: dict[str, Callback] = {}  # effective binding (last enabled writer wins)
+        # Every binding, in registration order: conflict reports, replay on remove_source, and
+        # the enabled flag a group switches.
+        self._key_bindings: list[_KeyBinding] = []
         self._vars: dict[str, str] = {}
         self.vars_version = 0  # goes up whenever a variable changes; readers cache by it
         self._gvars: dict[str, str] = {}
@@ -311,10 +443,12 @@ class AutomationEngine:
         self.current_line: Line | None = None
         # False while a pack wants incoming lines kept quiet (Miriani-Next's Do Not Disturb).
         self.line_speech = True
-        # (handle, source) pairs let a live script reload cancel only the retiring script set.
-        # Each pending timer or other cancellable job: its handle, the source that made it,
-        # and what to run if it's cancelled instead of firing (see ScriptApi.add_timer).
-        self._timer_handles: list[tuple[object, str, Callable[[], None] | None]] = []
+        # Each pending timer or other cancellable job: its handle, the source that made it (so a
+        # live reload cancels only the retiring set), what to run if it is cancelled instead of
+        # firing (see ScriptApi.add_timer), and whether it outlives a disconnect.
+        self._timer_handles: list[_PendingTimer] = []
+        # The named timers a disconnect paused, so resume_timers() can start them again.
+        self._paused_timers: list[_NamedTimer] = []
 
     # --- registration ---
 
@@ -328,11 +462,13 @@ class AutomationEngine:
         name: str = "",
         gag: bool = False,
         gag_but_display: bool = False,
+        omit_from_log: bool = False,
         keep_evaluating: bool = True,
         source: str = "",
         channel: str | None = None,
         stop_scope: str | None = None,
         tiebreak: str = "",
+        group: str = "",
     ) -> _Rule:
         rule = _Rule(
             compile_pattern(pattern, regex),
@@ -342,11 +478,13 @@ class AutomationEngine:
             True,
             gag,
             gag_but_display,
+            omit_from_log,
             keep_evaluating,
-            source,
-            channel,
-            stop_scope,
-            tiebreak,
+            source=source,
+            channel=channel,
+            group=group,
+            stop_scope=stop_scope,
+            tiebreak=tiebreak,
         )
         self._triggers.append(rule)
         self._triggers.sort(key=_rule_order)
@@ -366,16 +504,120 @@ class AutomationEngine:
         stop_scope: str | None = None,
         consumes: bool = False,
         fallback: bool = False,
+        group: str = "",
     ) -> _Rule:
         # process_input anchors every alias at the start; a wildcard alias is anchored at the
         # end too, so it has to be the whole command. Regex aliases keep whatever their
         # author wrote.
         rule = _Rule(compile_pattern(pattern, regex, whole=True), callback, priority, name, True,
                      source=source, keep_evaluating=keep_evaluating, tiebreak=tiebreak,
-                     stop_scope=stop_scope, consumes=consumes, fallback=fallback)
+                     stop_scope=stop_scope, consumes=consumes, fallback=fallback,
+                     group=group)
         self._aliases.append(rule)
         self._aliases.sort(key=_rule_order)
         return rule
+
+    def add_named_timer(
+        self,
+        name: str,
+        delay: float,
+        callback: Callback,
+        *,
+        every: float | None = None,
+        next_delay: Callable[[], float] | None = None,
+        group: str = "",
+        source: str = "",
+        enabled: bool = True,
+        while_disconnected: bool = False,
+    ) -> _NamedTimer:
+        """A timer with a name, so it can be found, switched and cancelled like a rule.
+
+        ``delay`` is the first wait; ``every`` is the wait after each fire (None makes it a
+        one-shot). MUSHclient's timer model: a named thing with a group, an on/off switch and
+        a send-to action, which a script or a rule can start and stop. ``while_disconnected``
+        is its ActiveWhenClosed: the timer keeps its clock through a dropped connection.
+        """
+        timer = _NamedTimer(
+            self, name, delay, callback, every=every, next_delay=next_delay,
+            group=group, source=source, while_disconnected=while_disconnected,
+        )
+        self._named_timers = [t for t in self._named_timers if t.name != name]
+        self._named_timers.append(timer)
+        if enabled:
+            timer.arm()
+        return timer
+
+    def named_timer(self, name: str) -> _NamedTimer | None:
+        for timer in self._named_timers:
+            if timer.name == name:
+                return timer
+        return None
+
+    def remove_named_timer(self, name: str) -> bool:
+        """Cancel and forget one named timer (MUSHclient's DeleteTimer)."""
+        timer = self.named_timer(name)
+        if timer is None:
+            return False
+        timer.disarm()
+        self._named_timers = [t for t in self._named_timers if t is not timer]
+        return True
+
+    def set_timer_enabled(self, name: str, enabled: bool) -> bool:
+        """Switch one named timer on or off (MUSHclient's EnableTimer)."""
+        timer = self.named_timer(name)
+        if timer is None:
+            return False
+        timer.set_enabled(enabled)
+        return True
+
+    def set_group_enabled(self, group: str, enabled: bool) -> int:
+        """Turn every rule in a named group on or off; returns how many changed.
+
+        MUSHclient's EnableGroup, and the reason to put a name on a set of rules: "all the
+        combat triggers off" is one call rather than a list the player has to keep in step with
+        the rules. A group nothing belongs to is not an error -- it is a group waiting.
+        """
+        if not group:
+            return 0
+        changed = 0
+        for rule in [*self._triggers, *self._aliases]:
+            if rule.group == group:
+                rule.enabled = enabled
+                changed += 1
+        for timer in self._named_timers:
+            if timer.group == group:
+                timer.set_enabled(enabled)
+                changed += 1
+        for binding in self._key_bindings:
+            if binding.group == group:
+                binding.enabled = enabled
+                changed += 1
+        self._rebuild_keys()  # a combo whose binding went off falls back to an earlier owner
+        for watch in self._data_watches:
+            if watch.group == group:
+                watch.enabled = enabled
+                changed += 1
+        return changed
+
+    def set_enabled(self, name: str, enabled: bool) -> bool:
+        """Turn a named trigger, alias or key on or off; True if one had that name.
+
+        MUSHclient's EnableTrigger/EnableAlias/EnableKey, which act by name because a script has
+        no other handle on a rule the player made. A rule without a name can only be switched
+        from the manager, which is what makes naming one worth doing.
+        """
+        if not name:
+            return False
+        found = False
+        # Hotkeys are not in this sweep: a binding has no name to be switched by, and
+        # iterating the effective dict would hand ``rule.name`` a plain string.
+        for rule in [*self._triggers, *self._aliases]:
+            if rule.name == name:
+                rule.enabled = enabled
+                found = True
+        if self.set_timer_enabled(name, enabled):
+            found = True
+        return found
 
     def remove_trigger(self, name: str) -> None:
         self._triggers = [rule for rule in self._triggers if rule.name != name]
@@ -383,21 +625,29 @@ class AutomationEngine:
     def remove_alias(self, name: str) -> None:
         self._aliases = [rule for rule in self._aliases if rule.name != name]
 
-    def add_key(self, key: str, callback: Callback, *, source: str = "") -> None:
-        self._keys[key.lower()] = callback
-        self._key_bindings.append((key.lower(), source, callback))
+    def add_key(
+        self, key: str, callback: Callback, *, source: str = "", group: str = ""
+    ) -> None:
+        """Bind a combo. ``group`` lets one EnableGroup switch it with the other rules."""
+        self._key_bindings.append(_KeyBinding(key.lower(), source, callback, group))
+        self._rebuild_keys()
+
+    def _rebuild_keys(self) -> None:
+        """The effective binding per combo: the last enabled one, in registration order."""
+        keys: dict[str, Callback] = {}
+        for binding in self._key_bindings:
+            if binding.enabled:
+                keys[binding.key] = binding.callback
+        self._keys = keys  # replaced, not mutated: has_key reads it from another thread
 
     def remove_key(self, key: str, *, source: str = "") -> None:
         """Drop one source's bindings of ``key``; an earlier owner's binding comes back."""
         key = key.lower()
         self._key_bindings = [
-            binding for binding in self._key_bindings if binding[:2] != (key, source)
+            binding for binding in self._key_bindings
+            if (binding.key, binding.source) != (key, source)
         ]
-        survivors = [callback for bound, _source, callback in self._key_bindings if bound == key]
-        if survivors:
-            self._keys[key] = survivors[-1]
-        else:
-            self._keys.pop(key, None)
+        self._rebuild_keys()
 
     def registrations_by_source(self) -> dict[str, dict[str, list[str]]]:
         """Every trigger/alias/key grouped by the pack that registered it.
@@ -414,8 +664,8 @@ class AutomationEngine:
             bucket(rule.source)["trigger"].append(rule.pattern.pattern)
         for rule in self._aliases:
             bucket(rule.source)["alias"].append(rule.pattern.pattern)
-        for key, source, _callback in self._key_bindings:
-            bucket(source)["key"].append(key)
+        for binding in self._key_bindings:
+            bucket(binding.source)["key"].append(binding.key)
         return reg
 
     # --- variables ---
@@ -435,11 +685,13 @@ class AutomationEngine:
         """
         self._triggers = [rule for rule in self._triggers if rule.source != source]
         self._aliases = [rule for rule in self._aliases if rule.source != source]
-        if any(bind_source == source for _key, bind_source, _cb in self._key_bindings):
-            self._key_bindings = [b for b in self._key_bindings if b[1] != source]
+        if any(binding.source == source for binding in self._key_bindings):
+            self._key_bindings = [
+                binding for binding in self._key_bindings if binding.source != source
+            ]
             # Replay the surviving bindings in order: last writer wins again, and a
             # combo the removed source had shadowed falls back to the earlier owner.
-            self._keys = {key: callback for key, _source, callback in self._key_bindings}
+            self._rebuild_keys()
         self._data_watches = [watch for watch in self._data_watches if watch.source != source]
         self.channels.remove_source(source)
         self.cancel_source_timers(source)
@@ -532,6 +784,7 @@ class AutomationEngine:
         *,
         only_changes: bool = False,
         source: str = "",
+        group: str = "",
     ) -> _DataWatch:
         """Call ``callback(name, value)`` whenever the MUD sends data at ``path``.
 
@@ -550,7 +803,7 @@ class AutomationEngine:
             raise ValueError("no MUD data name to watch")
         watch = _DataWatch(
             ".".join(parts), tuple(part.casefold() for part in parts), protocol, callback,
-            only_changes, source,
+            only_changes, source, group=str(group),
         )
         self._data_watches.append(watch)
         return watch
@@ -562,6 +815,8 @@ class AutomationEngine:
         message = tuple(part.casefold() for part in name.split("."))
         self._data_times[name.casefold()] = time.monotonic()
         for watch in list(self._data_watches):
+            if not watch.enabled:
+                continue  # its group is switched off for now
             if watch.protocol is not None and watch.protocol != protocol.casefold():
                 continue
             heard = _heard(watch, message, name, value)
@@ -594,42 +849,72 @@ class AutomationEngine:
         *,
         source: str = "",
         on_cancel: Callable[[], None] | None = None,
+        while_disconnected: bool = False,
     ) -> object | None:
-        """Schedule a pack timer through the sink and track its handle.
+        """Schedule a timer through the sink and track its handle.
 
         Tracked so :meth:`cancel_timers` can drop everything still pending at session close;
         a one-shot cue timer that outlives its tab would otherwise fire and start audio with no
-        session left to stop it. ``on_cancel`` runs if it's cancelled instead of firing.
+        session left to stop it. ``on_cancel`` runs if it's cancelled instead of firing, and
+        ``while_disconnected`` keeps it through a dropped connection.
         """
         handle = self.sink.schedule(delay, callback)
         if handle is not None:
-            self._timer_handles.append((handle, source, on_cancel))
+            self._timer_handles.append(
+                _PendingTimer(handle, source, on_cancel, while_disconnected)
+            )
         return handle
 
     def track_pending(self, handle: object, *, source: str = "") -> None:
         """Hold other cancellable pending work (a sound still downloading) with the timers,
         so session teardown and a source's reload cancel it the same way."""
-        self._timer_handles.append((handle, source, None))
+        self._timer_handles.append(_PendingTimer(handle, source))
 
     def discard_timer(self, handle: object) -> None:
         """Forget a handle once it has fired, so the tracking list can't grow unbounded."""
-        self._timer_handles = [entry for entry in self._timer_handles if entry[0] is not handle]
+        self._timer_handles = [entry for entry in self._timer_handles if entry.handle is not handle]
 
     def cancel_source_timers(self, source: str) -> None:
         """Cancel pending timers registered by one retiring script/pack source."""
-        keep: list[tuple[object, str, Callable[[], None] | None]] = []
-        cancelled: list[tuple[object, str, Callable[[], None] | None]] = []
-        for entry in self._timer_handles:
-            (cancelled if entry[1] == source else keep).append(entry)
-        self._timer_handles = keep
+        cancelled = [entry for entry in self._timer_handles if entry.source == source]
+        self._timer_handles = [entry for entry in self._timer_handles if entry.source != source]
         for entry in cancelled:
             _cancel_pending(entry)
 
     def cancel_timers(self) -> None:
-        """Cancel every still-pending pack timer (session teardown, or a dropped connection)."""
+        """Cancel every still-pending timer (session teardown)."""
         cancelled, self._timer_handles = self._timer_handles, []
+        self._paused_timers = []
         for entry in cancelled:
             _cancel_pending(entry)
+
+    def suspend_timers(self) -> None:
+        """A dropped connection: stop the clocks, except the ones asked to keep going.
+
+        A timer that did not ask to outlive the connection is paused -- dropped now, armed again
+        by :meth:`resume_timers` -- so its schedule survives the drop instead of vanishing with
+        the socket. Everything anonymous (a one-shot ``mud.timer``, a sound still downloading)
+        has nothing to resume into, so it is cancelled as it always was.
+        """
+        newly_paused = [
+            timer for timer in self._named_timers
+            if timer.enabled and timer.armed and not timer.while_disconnected
+        ]
+        for timer in newly_paused:
+            timer.disarm()  # takes its handle out of the tracking list too
+        # Added, never replaced: a world that says it dropped twice must not lose the timers the
+        # first disconnect paused.
+        self._paused_timers.extend(newly_paused)
+        cancelled = [entry for entry in self._timer_handles if not entry.while_disconnected]
+        self._timer_handles = [entry for entry in self._timer_handles if entry.while_disconnected]
+        for entry in cancelled:
+            _cancel_pending(entry)
+
+    def resume_timers(self) -> None:
+        """The world is back: start the paused timers again, each with its wait from now."""
+        paused, self._paused_timers = self._paused_timers, []
+        for timer in paused:
+            timer.arm()
 
     # --- evaluation ---
 
@@ -674,6 +959,8 @@ class AutomationEngine:
             if rule.gag or rule.gag_but_display:
                 line.gagged = True
                 line.display_when_gagged = rule.gag_but_display
+            if rule.omit_from_log:
+                line.omit_from_log = True
             if rule.callback is not None:
                 rule.callback(MatchContext(line, _wildcards(match), _named(match), self))
             if not rule.keep_evaluating:
