@@ -414,6 +414,10 @@ def _probe():
                     event = wx.KeyEvent(wx.wxEVT_CHAR)
                     event.SetUnicodeKey(ord(char))
                     event.SetKeyCode(ord(char))
+                    assert event.GetUnicodeKey() == ord(char), (
+                        "Synthetic event cannot represent this character", char,
+                        event.GetUnicodeKey(), event.GetKeyCode(),
+                    )
                     alpha.output.GetEventHandler().ProcessEvent(event)
                 elif sys.platform == "darwin":
                     key(alpha.output, wx.WXK_TAB, char=True)
@@ -423,7 +427,10 @@ def _probe():
                 stage = "settle"
             elif stage == "settle" and entry.HasFocus() and time.monotonic() >= settle_at:
                 text, char, _typing = current
-                assert focus_events and entry.GetValue() == text + char
+                assert focus_events and entry.GetValue() == text + char, (
+                    current, entry.GetValue(), entry.GetSelection(), focus_events,
+                    alpha.output.HasFocus(), entry.HasFocus(),
+                )
                 assert entry.GetSelection() == (entry.GetLastPosition(),) * 2
                 stage = "next"
             elif stage == "worker" and not worker.is_alive():
