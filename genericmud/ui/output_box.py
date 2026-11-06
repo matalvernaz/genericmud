@@ -10,7 +10,7 @@ import wx
 from genericmud.bridge import protocol
 from genericmud.ui.clipboard import _set_clipboard_text
 from genericmud.ui.command_buffer import CommandEntryCtrl
-from genericmud.ui.keyboard import _key_combo
+from genericmud.ui.keyboard import _gtk_key_character, _key_combo
 from genericmud.ui.output_dialogs import ChooseDialog, CopyLineDialog, FindDialog
 from genericmud.ui.scrollback import anchor_after_append, find_line
 
@@ -247,6 +247,18 @@ class OutputBoxMixin:
         combo = _key_combo(event, allow_numpad=not self._prefs.numpad_compass)
         if self._dispatch_bound_combo(combo):
             return
+        if wx.Platform == "__WXGTK__" and not (
+            event.ControlDown() or event.AltDown() or event.MetaDown()
+        ):
+            # GTK's read-only text view consumes printable keys in its input method without
+            # sending EVT_CHAR. Forward the native character here and consume KEY_DOWN so
+            # GTK cannot also insert it. Other ports keep their normal character events.
+            character = _gtk_key_character(event)
+            if character:
+                translated = wx.KeyEvent(wx.wxEVT_CHAR)
+                translated.SetUnicodeKey(character)
+                self._on_output_char(translated)
+                return
         event.Skip()
 
     def _open_find(self) -> None:

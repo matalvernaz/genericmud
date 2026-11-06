@@ -7,6 +7,7 @@ moves), and why a hotkey can't have one of those keys.
 from __future__ import annotations
 
 import sys
+from functools import cache
 
 import wx
 
@@ -50,6 +51,27 @@ _VK_RMENU = 0xA5
 _KEY_IS_DOWN = 0x80
 # Work the character out without disturbing a dead key the player is part-way through.
 _TO_UNICODE_KEEP_STATE = 0x4
+
+
+@cache
+def _gdk_library():
+    """Use the GTK library wx already depends on to translate native keyvals."""
+    import ctypes
+
+    library = ctypes.CDLL("libgdk-3.so.0")
+    library.gdk_keyval_to_unicode.argtypes = [ctypes.c_uint]
+    library.gdk_keyval_to_unicode.restype = ctypes.c_uint
+    return library
+
+
+def _gtk_key_character(event: wx.KeyEvent) -> int:
+    """The typed character, including its layout and case, or zero for a special/dead key.
+
+    GTK's raw key is a GDK keyval. KEY_DOWN's UnicodeKey uppercases ASCII and is not
+    suitable for text; GDK also translates legacy non-Latin keyvals correctly.
+    """
+    character = _gdk_library().gdk_keyval_to_unicode(event.GetRawKeyCode())
+    return character if character >= 32 and character != 127 else 0
 
 
 def _ctrl_alt_types(

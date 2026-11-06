@@ -129,8 +129,11 @@ An optional foreground smoke test sends keys with wx.UIActionSimulator:
 It is disabled by default and skipped whenever CI or GITHUB_ACTIONS is set, even
 with an inherited opt-in flag. Permission and plain-control input checks prevent
 missing OS input from looking like a pass.
-This environment denies event posting by Python, so that particular driver remains
-unverified here; the desktop driver provided the successful OS-input coverage.
+The macOS review environment denied event posting by Python, so the desktop driver
+provided its successful OS-input coverage. A later GTK X11 run under isolated Xvfb
+executed this simulator test successfully after fixing printable-key forwarding
+from read-only Output. Both Standard and editable modes preserve their drafts;
+letter case and Unicode keyval conversion have regression coverage.
 
 These checks do not establish hardware keyboard/IME delivery, actual VoiceOver
 speech, Windows/NVDA/JAWS or GTK/Orca accessibility. VIPMud/NVDA observations do not

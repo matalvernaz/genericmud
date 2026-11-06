@@ -49,6 +49,9 @@ class KeyEvent:
     def GetKeyCode(self):
         return self.code
 
+    def GetRawKeyCode(self):
+        return 0  # These routing fixtures do not represent a native GTK character.
+
     def ControlDown(self):
         return self.ctrl
 
@@ -57,6 +60,9 @@ class KeyEvent:
 
     def ShiftDown(self):
         return self.shift
+
+    def MetaDown(self):
+        return False
 
     def Skip(self):
         self.skipped = True

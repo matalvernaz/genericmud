@@ -202,7 +202,15 @@ def _probe():
         assert entry.HasFocus() and entry.GetSelection() == (9, 9)
         fixture(editable, "old\ndraft", 0, 3, output=True)
         yield editable.output, ord("X"), 0
-        assert entry.GetValue() == "old\ndraftx" and entry.HasFocus()
+        assert entry.GetValue() == "old\ndraftx" and entry.HasFocus(), (
+            entry.GetValue(), entry.GetSelection(), entry.HasFocus(),
+        )
+        assert entry.GetSelection() == (10, 10)
+        assert editable.output.GetValue() == "Local fake engine only"
+        submissions()
+        fixture(editable, "old\ndraft", 0, 3, output=True)
+        yield editable.output, ord("X"), wx.MOD_SHIFT
+        assert entry.GetValue() == "old\ndraftX" and entry.HasFocus()
         submissions()
         fixture(editable, "look dragon\nlook goblin\nlo", 26)
         yield entry, ord("R"), wx.MOD_CONTROL
@@ -229,6 +237,13 @@ def _probe():
         yield command, wx.WXK_RETURN, 0
         assert command.GetValue() == ""
         submissions("look")
+
+        fixture(standard, "abcd draft", 1, 3, output=True)
+        yield standard.output, ord("X"), 0
+        assert command.GetValue() == "axd draft" and command.HasFocus()
+        assert command.GetSelection() == (2, 2)
+        assert standard.output.GetValue() == "Local fake engine only"
+        submissions()
 
     simulator = wx.UIActionSimulator()
     sequence = scenarios()

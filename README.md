@@ -216,7 +216,7 @@ The editable buffer holds old commands and several unsent drafts in their origin
 places. Up and Down move through those lines. Down on the final unfinished line
 adds an empty tail without sending the draft. Tab back from Output, or Ctrl+Enter,
 returns to the existing tail; a final draft remains there. Typing from Output
-also goes to that tail.
+also goes to that tail, preserving letter case and non-English characters on GTK too.
 
 Enter executes the logical line at the start of the selection and leaves an empty
 tail, copying an older line to the bottom. Shift+Enter executes the current line,
@@ -243,8 +243,8 @@ long sessions may need manual deletion. Lines scroll horizontally instead of wra
 This first version supports the default Line Entry Mode; its Off setting, VIPMud
 script-brace assembly, and exact mouse/IME behavior remain outside the compatibility
 claim. The original VIPMud behavior was corroborated by a user's keyboard/NVDA
-observations. macOS OS-delivered keyboard tests passed, but genericMud's new mode
-still needs Windows/NVDA, GTK/Orca, VoiceOver and hardware keyboard/IME validation.
+observations. macOS and GTK X11 OS-delivered keyboard tests passed, but genericMud's new mode
+still needs Windows/NVDA, Orca, VoiceOver and hardware keyboard/IME validation.
 See [command input details](docs/command-entry.md).
 
 ## More than one MUD at once
