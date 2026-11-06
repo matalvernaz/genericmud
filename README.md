@@ -567,7 +567,8 @@ a value, not only send a command. One text, one destination:
 |---|---|
 | The MUD | the commands are sent, as before |
 | My command box, unsent | the text lands in your command box to finish and send yourself -- a trailing space is kept, so `reply ${1} ` waits for the message |
-| The output, as a note | shown in the window and kept in the session log |
+| The output, as a note | shown in the window and always kept in the session log |
+| The output, as a print | shown in the window and never kept in the log |
 | The session log only | written down, never shown |
 | This client again | run as if you had typed it, so your own aliases see it first and only what falls through reaches the MUD |
 | A script variable | stored under the name you give it, so `${script:name}` can read it later |
@@ -628,10 +629,11 @@ A switch a script makes shows where you edit the rule: open the manager after
 rule through its group (a hotkey has no name; MUSHclient's accelerators do not either). That is the state the manager saves, so a rule a script parked stays
 parked, and a save from the manager won't quietly switch it back on.
 
-The world's **Log the notes automation writes** setting decides whether notes reach
-the log; clear it and notes behave like prints without rewriting a rule. Nothing here
-speaks: what you want to hear goes in **Speak this text**, because what belongs in the
-record and what belongs in your ears are different needs.
+A note always goes into the session log and a print never does, so the destination
+you pick is the whole decision -- there is no separate switch for it, and none is needed:
+*log this* and *show this* are the same as *note* and *print*. Nothing here speaks: what
+you want to hear goes in **Speak this text**, because what belongs in the record and what
+belongs in your ears are different needs.
 
 Each trigger, alias, or hotkey can send one command or a sequence. Put one
 command on each line. The whole sequence is filled in before its first command

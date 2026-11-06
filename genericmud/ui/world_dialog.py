@@ -176,13 +176,6 @@ class WorldDialog(wx.Dialog):
         self._log_commands.SetName("Log what you type (passwords stay hidden)")
         self._log_commands.SetValue(True)
         grid.Add(self._log_commands, 1, wx.EXPAND)
-        # A note a rule writes is part of the record; a print never is. This is the switch
-        # MUSHclient has for the first, and it is the only thing that decides it.
-        grid.Add((0, 0))
-        self._log_notes = wx.CheckBox(self, label="Log the n&otes automation writes")
-        self._log_notes.SetName("Log the notes automation writes")
-        self._log_notes.SetValue(True)
-        grid.Add(self._log_notes, 1, wx.EXPAND)
         # Next to the log switch but deliberately separate: showing a command in the output and
         # writing it to the log are two different wants (MUSHclient splits them too).
         grid.Add((0, 0))
@@ -299,7 +292,6 @@ class WorldDialog(wx.Dialog):
             self._log_automatically.SetValue(initial.log_automatically)
             self._log_files.SetSelection(LOG_FILES.index(initial.log_files))
             self._log_commands.SetValue(initial.log_commands)
-            self._log_notes.SetValue(initial.log_notes)
             self._echo_input.SetValue(initial.echo_input)
             self._download_sounds.SetValue(initial.download_sounds)
             methods = [value for value, _label in _CONNECT_LABELS]
@@ -375,7 +367,6 @@ class WorldDialog(wx.Dialog):
             log_automatically=self._log_automatically.GetValue(),
             log_files=LOG_FILES[self._log_files.GetSelection()],
             log_commands=self._log_commands.GetValue(),
-            log_notes=self._log_notes.GetValue(),
             echo_input=self._echo_input.GetValue(),
             download_sounds=self._download_sounds.GetValue(),
             connect_method=_CONNECT_LABELS[self._connect.GetSelection()][0],

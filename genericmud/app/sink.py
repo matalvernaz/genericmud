@@ -22,7 +22,7 @@ class AppSink(EngineSink):
         self, *, send, post, schedule, voice: VoiceRouter, buffer: Buffer, sound: SoundBus,
         diag: DiagnosticLog | None = None, send_raw=None, ask=None, simulate=None,
         save_state=None, window=None, update_packs=None, check_pack_updates=None,
-        log_note=None, log_line=None,
+        log_line=None,
     ) -> None:
         self._send = send
         self._send_raw = send_raw
@@ -38,7 +38,6 @@ class AppSink(EngineSink):
         self._update_packs = update_packs
         self._check_pack_updates = check_pack_updates
         self._window = window
-        self._log_note = log_note
         self._log_line = log_line
         self.cues = 0  # play/music calls reaching the bus -- 0 means no cue ever fired
 
@@ -58,7 +57,7 @@ class AppSink(EngineSink):
         self._buffer.append(Line(text, channel=channel))
         self._post(protocol.echo(text, channel))
         if log:
-            self._log_note(text)  # the world's "log notes" setting decides whether it lands
+            self._log_line(text)  # a note is part of the record; a print passes log=False
 
     def type_text(self, text: str, *, only_if_empty: bool = False) -> None:
         # only_if_empty is what a rule's "send to command" asks for: MUSHclient's SetCommand
