@@ -147,9 +147,10 @@ Make a trigger without code:
 Show Triggers and choose New. Enter the text to watch for. The line contains
 this text is usually the right match choice. "Send it to" says where the response
 goes: the MUD, your command box (unsent, to finish yourself), the output as a note,
-the log alone, this client again, or a script -- a function name, or Lua code such as
-mud.set_enabled("combat", false). Add any spoken text, sound, line handling, or channel
-routing you need, then choose OK. Leave this line out of the
+the log alone, this client again, a script -- a function name, or Lua code such as
+mud.set_enabled("combat", false) -- or a script variable, which stores the text under
+a name you give it so ${script:name} can read it later. Add any spoken text, sound,
+line handling, or channel routing you need, then choose OK. Leave this line out of the
 session log is separate from hiding it: the line still works as it did, it just never
 reaches the file, which is how a repeating notice stops filling the record.
 
@@ -166,8 +167,8 @@ about the line. A player trigger that stops the search never silences a soundpac
 A timer (Timers in the Automation Manager) acts on a clock rather than on a line:
 every so often, or once a day at a time such as 03:00. What it does is the same
 question the other rules answer, so it can send commands, fill your command box, write
-a note, or run Lua. Do it once only makes it a one-shot: it runs once and is then
-removed, here and from the saved rules the next time they are saved.
+a note, store a value, or run Lua. Do it once only makes it a one-shot: it runs once
+and is then removed, here and from the saved rules the next time they are saved.
 
 Trigger, alias, and hotkey command fields accept one command per line. ${1}
 means the first matched part. ${script:attack} reads a value saved by a script.

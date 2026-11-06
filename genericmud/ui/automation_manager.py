@@ -24,6 +24,7 @@ from genericmud.packs.user_rules import (
     load_rules,
     register_rules,
     save_rules,
+    send_to_kind,
 )
 from genericmud.scripting import user_scripts
 from genericmud.scripting.api import ScriptApi
@@ -38,6 +39,16 @@ from genericmud.ui.rule_editors import (
     TriggerEditorDialog,
 )
 from genericmud.ui.session_panel import SessionPanel
+
+
+def _sends(rule, commands: str) -> str:
+    """One rule's response text in the words its destination deserves, for the manager list."""
+    if not commands:
+        return ""
+    if send_to_kind(getattr(rule, "send_to", "world")) == "variable":
+        name = str(getattr(rule, "variable", "") or "").strip() or "(no variable name)"
+        return f"store {commands} in variable {name}"
+    return f"send {commands}"
 
 
 def _rule_summary(kind: str, rule) -> str:
@@ -57,7 +68,7 @@ def _rule_summary(kind: str, rule) -> str:
         actions = [part for part in (
             f"sound {Path(rule.sound).name}" if rule.sound else "",
             f"speak {rule.speak}" if rule.speak else "",
-            f"send {commands}" if commands else "",
+            _sends(rule, commands),
             "interrupts speech" if rule.interrupt else "",
             {"speech": "silence line", "line": "remove line"}.get(rule.gag, ""),
             "left out of the log" if getattr(rule, "omit_log", False) else "",
@@ -76,12 +87,19 @@ def _rule_summary(kind: str, rule) -> str:
             else f"each day at {rule.at or '?'}"
         )
         once = ", once only" if rule.one_shot else ""
-        return f"{status}{named}Timer: {when}{once}: {commands or 'nothing'}"
+        # "every 30 seconds: look" already reads as what happens; only a variable target needs
+        # saying, because "every 30 seconds: ${1}" would not tell you where it went.
+        doing = (
+            _sends(rule, commands)
+            if send_to_kind(getattr(rule, "send_to", "world")) == "variable"
+            else commands
+        )
+        return f"{status}{named}Timer: {when}{once}: {doing or 'nothing'}"
 
     if kind == "alias":
         return (
             f"{status}{named}Alias{grouped}: {rule.pattern} "
-            f"sends {commands or 'nothing'}"
+            f"{_sends(rule, commands) or 'sends nothing'}"
         )
     if kind == "key":
         action = commands or rule.speak or rule.sound or "nothing"

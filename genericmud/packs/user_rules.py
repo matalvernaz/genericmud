@@ -40,7 +40,7 @@ _CAPTURE_RE = re.compile(r"%(\d)")
 _GAG_CHOICES = ("none", "speech", "line")
 # Where a rule's response text goes -- MUSHclient's "send to" box (its eSendTo* enum). The
 # order is the order they are offered in, and matches SEND_TO_LABELS.
-SEND_TO_CHOICES = ("world", "command", "output", "log", "execute", "script")
+SEND_TO_CHOICES = ("world", "command", "output", "log", "execute", "script", "variable")
 SEND_TO_LABELS = (
     "The MUD (send these commands)",
     "My command box, unsent (finish it myself)",
@@ -48,6 +48,7 @@ SEND_TO_LABELS = (
     "The session log only (never shown)",
     "This client again (run it as if I typed it)",
     "A script (a function name, or Lua code)",
+    "A script variable (store the text under a name)",
 )
 
 
@@ -83,6 +84,9 @@ class UserTrigger:
     # question for triggers, aliases and timers -- the text is one field, the destination
     # another. Never a separate field per destination.
     send_to: str = "world"
+    # The name the text is stored under when "send to" is a variable: MUSHclient's variable
+    # target, which is how a capture becomes something ${script:name} can use later.
+    variable: str = ""
     gag: str = "none"  # "none" | "speech" (silent but shown) | "line" (removed)
     omit_log: bool = False  # leave the line out of the session log, whatever gag does
     channel: str = ""  # route the line to this channel ("" = leave on main)
@@ -117,6 +121,7 @@ class UserAlias:
     regex: bool = False
     send: str = ""  # what to do with the typed command; capture/variable templates allowed
     send_to: str = "world"  # where that text goes, as for triggers (SEND_TO_CHOICES)
+    variable: str = ""  # as for triggers: the name a variable target stores under
     speak: str = ""  # optional speech, same templates; can read a value with no commands
     label: str = ""  # as for triggers: the handle that turns it off and on
     group: str = ""  # as for triggers: switched together with the rest of its group
@@ -153,6 +158,7 @@ class UserTimer:
     one_shot: bool = False
     send: str = ""
     send_to: str = "world"
+    variable: str = ""  # as for triggers: the name a variable target stores under
     omit_log: bool = False  # leave whatever it writes out of the session log
     group: str = ""  # as for triggers: switched together with the rest of its group
 
@@ -333,6 +339,19 @@ def _commands(text: str, *, keep_spaces: bool = False) -> tuple[str, ...]:
     return commands
 
 
+def _response_parts(text: str, send_to: str) -> tuple[str, ...]:
+    """A rule's text, cut into the pieces its destination wants.
+
+    Every destination but a variable is a stack: one command per line, for the MUD, the command
+    box, the output, the log, or the client. A variable holds one value, so its text is not cut
+    at all -- a semicolon in it is part of the value, not another command.
+    """
+    if send_to_kind(send_to) == "variable":
+        value = text.strip()
+        return (value,) if value else ()
+    return _commands(text, keep_spaces=send_to_kind(send_to) == "command")
+
+
 def _capture_values(ctx: MatchContext | None) -> dict[str, object]:
     """``${1}``.. and named groups from a match, for template expansion."""
     wildcards = ctx.wildcards if ctx is not None else [""]
@@ -357,24 +376,44 @@ def _speech(api: ScriptApi, text: str, ctx: MatchContext | None = None) -> str:
 
 
 def _expand_commands(
-    api: ScriptApi, commands: tuple[str, ...], ctx: MatchContext | None = None
+    api: ScriptApi,
+    commands: tuple[str, ...],
+    ctx: MatchContext | None = None,
+    *,
+    as_value: bool = False,
 ) -> list[str]:
-    """Expand a command stack completely without sending any part of it."""
+    """Expand a command stack completely without sending any part of it.
+
+    ``as_value`` is text going into a variable rather than out to the MUD: a line break in it is
+    then content, not a second command. The guard against one belongs where the value is used as
+    a command, and stays there.
+    """
     wildcards = ctx.wildcards if ctx is not None else [""]
     values = _capture_values(ctx)
     expanded = []
     for command in commands:
         # Expand ${...} before legacy %1 replacement. Captured MUD text containing
         # `${...}` must stay literal instead of becoming a second command template.
-        value = _substitute(api.expand_command(command, values), wildcards)
-        if any(char in value for char in ("\r", "\n", "\x00")):
-            raise ValueError("expanded command contains a line break or NUL")
+        value = _substitute(
+            api.expand_command(command, values, one_line=not as_value), wildcards
+        )
+        forbidden = ("\x00",) if as_value else ("\r", "\n", "\x00")
+        if any(char in value for char in forbidden):
+            raise ValueError(
+                "expanded text contains a NUL" if as_value
+                else "expanded command contains a line break or NUL"
+            )
         expanded.append(value)
     return expanded
 
 
 def _command_action(
-    api: ScriptApi, text: str, *, send_to: str = "world", carry_words: bool = False
+    api: ScriptApi,
+    text: str,
+    *,
+    send_to: str = "world",
+    variable: str = "",
+    carry_words: bool = False,
 ) -> tuple[tuple[str, ...], Callable[[MatchContext | None], bool]]:
     """A contained action and whether it has any text, delivering to the rule's send-to target.
 
@@ -396,12 +435,13 @@ def _command_action(
 
         return ((script,) if script else ()), run_script
 
-    commands = _commands(text, keep_spaces=send_to_kind(send_to) == "command")
+    commands = _response_parts(text, send_to)
+    as_value = send_to_kind(send_to) == "variable"
     spoken_errors: set[str] = set()
 
     def run(ctx: MatchContext | None = None) -> bool:
         try:
-            expanded = _expand_commands(api, commands, ctx)
+            expanded = _expand_commands(api, commands, ctx, as_value=as_value)
         except ValueError as error:
             detail = str(error)
             if api.diag is not None:
@@ -421,7 +461,7 @@ def _command_action(
             # Added after expansion, so the player's own words go out as typed and are never
             # read as a template.
             expanded[-1] = f"{expanded[-1].rstrip()} {ctx.wildcards[1]}"
-        deliver(api, expanded, send_to, ctx)
+        deliver(api, expanded, send_to, ctx, variable=variable)
         return True
 
     return commands, run
@@ -477,12 +517,17 @@ def _without_captures(ctx: MatchContext | None) -> MatchContext | None:
 
 
 def deliver(
-    api: ScriptApi, lines: list[str], send_to: str, ctx: MatchContext | None = None
+    api: ScriptApi,
+    lines: list[str],
+    send_to: str,
+    ctx: MatchContext | None = None,
+    *,
+    variable: str = "",
 ) -> None:
     """Put the expanded text where the rule says (MUSHclient's "send to" targets).
 
-    The text is one field and the destination another, for triggers, aliases and -- later --
-    timers alike: never a separate field per destination.
+    The text is one field and the destination another, for triggers, aliases and timers alike:
+    never a separate field per destination.
     """
     kind = send_to_kind(send_to)
     if kind == "command":
@@ -495,6 +540,11 @@ def deliver(
     elif kind == "log":
         for line in lines:
             api.log_line(line)
+    elif kind == "variable":
+        name = variable.strip()
+        if not name:
+            return  # register_rules refuses a variable target with no name, so this is unreached
+        api.set_var(name, "\n".join(lines))
     elif kind == "script":
         line = ctx.line.plain_text if ctx is not None else ""
         # ctx.wildcards[0] is the whole matched line; a Lua function's wildcards[1] is the
@@ -540,6 +590,44 @@ def extra_words_pattern(shortcut: str) -> str:
     return re.escape(shortcut) + r"[ \t]+(.*\S)[ \t]*\Z"
 
 
+def _rule_name(rule: object) -> str:
+    """What to call a rule in a spoken complaint: its label, else what it matches or when."""
+    label = str(getattr(rule, "label", "") or "").strip()
+    if label:
+        return label
+    pattern = str(getattr(rule, "pattern", "") or "").strip()
+    if pattern:
+        return pattern
+    at = str(getattr(rule, "at", "") or "").strip()
+    if at:
+        return f"at {at}"
+    every = getattr(rule, "every", 0) or 0
+    if isinstance(every, (int, float)) and every > 0:
+        return f"every {every:g} seconds"
+    return "with no label"
+
+
+def _check_variable_targets(rules: UserRules) -> None:
+    """Refuse a rule that stores to a variable without saying which one.
+
+    Before registering anything: a rule that cannot do what it says would otherwise be a rule
+    that quietly does nothing, and the reload speaks this instead. Only rules that will actually
+    register are checked, so a draft left half-finished cannot stop the working set loading.
+    """
+    live = [
+        *(t for t in rules.triggers if t.enabled and t.pattern),
+        *(a for a in rules.aliases if a.enabled and a.pattern),
+        *(t for t in rules.timers if t.enabled),
+    ]
+    for rule in live:
+        if not str(rule.send).strip():
+            continue  # nothing to store
+        if send_to_kind(rule.send_to) == "variable" and not str(rule.variable).strip():
+            raise ValueError(
+                f"the rule {_rule_name(rule)} stores to a variable but has no variable name"
+            )
+
+
 def register_rules(api: ScriptApi, rules: UserRules) -> None:
     """Register every rule on the engine under the ``user`` source.
 
@@ -547,6 +635,7 @@ def register_rules(api: ScriptApi, rules: UserRules) -> None:
     (the builder copies picked files there). Call ``engine.remove_source(SOURCE)``
     first when reloading.
     """
+    _check_variable_targets(rules)
     for channel in rules.channels:
         if channel.enabled and channel.name:
             api.set_channel(
@@ -588,7 +677,9 @@ def _trigger_pattern(t: UserTrigger) -> tuple[str, bool]:
 
 def _register_trigger(api: ScriptApi, t: UserTrigger, *, place: int = 0) -> None:
     gag = t.gag if t.gag in _GAG_CHOICES else "none"
-    commands, send_commands = _command_action(api, t.send, send_to=t.send_to)
+    commands, send_commands = _command_action(
+        api, t.send, send_to=t.send_to, variable=t.variable
+    )
     has_actions = bool(t.sound or t.speak or commands or t.stop_channel or t.interrupt)
 
     def fire(ctx: MatchContext) -> None:
@@ -744,9 +835,9 @@ def _register_timer(
         return
 
     def fire() -> None:
-        commands = _commands(t.send, keep_spaces=send_to_kind(t.send_to) == "command")
-        if commands:
-            deliver(api, list(commands), t.send_to)
+        parts = _response_parts(t.send, t.send_to)
+        if parts:
+            deliver(api, list(parts), t.send_to, variable=t.variable)
 
     # A timer that names a time of day has no fixed period -- its wait is "until the next
     # 03:00" -- so it asks the clock each time; an interval timer just repeats.
@@ -786,7 +877,9 @@ def _timer_refused(api: ScriptApi, t: UserTimer, reason: str) -> None:
 
 
 def _register_alias(api: ScriptApi, a: UserAlias, *, place: int = 0) -> None:
-    commands, send_commands = _command_action(api, a.send, send_to=a.send_to)
+    commands, send_commands = _command_action(
+        api, a.send, send_to=a.send_to, variable=a.variable
+    )
 
     def fire(ctx: MatchContext) -> None:
         sent = send_commands(ctx)
@@ -823,7 +916,7 @@ def _register_alias(api: ScriptApi, a: UserAlias, *, place: int = 0) -> None:
         return
     places_words = any(_FIRST_CAPTURE_RE.search(command) for command in commands)
     _, send_with_words = _command_action(
-        api, a.send, send_to=a.send_to, carry_words=not places_words
+        api, a.send, send_to=a.send_to, variable=a.variable, carry_words=not places_words
     )
 
     def fire_with_words(ctx: MatchContext) -> None:

@@ -552,6 +552,12 @@ MUSHclient's "send to" does. One text, one destination:
 | The output, as a note | shown in the window and kept in the session log |
 | The session log only | written down, never shown |
 | This client again | run as if you had typed it, so your own aliases see it first and only what falls through reaches the MUD |
+| A script variable | stored under the name you give it, so `${script:name}` can read it later |
+
+The variable target is how a rule remembers something without a line of Lua: a trigger on
+`* pages: *` sending `${1}` to a variable called `pager` keeps the pager's name, and an alias
+answering `page back` with `reply ${script:pager}` uses it. Its text is one value, so it is not
+split into commands -- a semicolon in it stays a semicolon.
 
 **A script** is the target that opens everything else up. Its text is read two ways:
 
