@@ -27,13 +27,19 @@ sent commands. Each session owns a separate document.
 | Ctrl+Enter | Focus the current session's existing buffer tail, including from Output. |
 | Ctrl+Space / Ctrl+Shift+Space | Keep genericMud's word completion from recent output, scoped to the logical line. |
 
+On macOS, Ctrl+R and Ctrl+Enter use Command+R and Command+Enter.
+Physical Control+Enter opens Cocoa's native context menu. Standard keeps its
+existing wx modifier mapping. Modifier-only press/release events preserve the
+completion cycle; an editing key or text change ends it.
+
 Tab back from Output collapses the selection at the existing tail. A final unsent
 draft remains active. Focus never clears text or creates a row. Typing a printable
 character from Output also targets the tail, even if an old row was selected before
-leaving. Native mouse positioning can happen after focus; exact mouse/drag behavior
-still needs manual platform testing. Explicit pack/user keys on Escape, Ctrl+R or
-Ctrl+Enter override these defaults. Other shortcuts retain their genericMud meaning;
-this is not a replacement for the entire VIPMud keymap. In particular, genericMud's
+leaving. A native Cocoa mouse test confirms that click positioning can override the
+focus handler's tail movement. Other platforms and dragging still need testing.
+Explicit pack/user keys on Escape, Ctrl+R or Ctrl+Enter override these defaults.
+Other shortcuts retain their genericMud meaning; this is not a replacement for
+the entire VIPMud keymap. In particular, genericMud's
 numpad and output review shortcuts are retained.
 
 Ctrl+Enter changes meaning only for sessions opened in editable mode. Autoretype
@@ -109,7 +115,24 @@ controls and focus, with synthetic key/character/submission events and determini
 native caret/selection/deletion operations. They cover the confirmed scenarios,
 Unicode/non-BMP and combining marks, completion, plugins on the loop thread, password
 isolation, session/mode isolation, large documents, and Standard regressions.
-They do not establish physical key delivery, IME composition, actual VoiceOver speech,
-Windows/NVDA/JAWS or GTK/Orca accessibility. VIPMud/NVDA observations do not validate
-genericMud's accessibility. Manual testing of that matrix, focus/click ordering,
-announcement timing, clipboard/undo, and plugin integrations remains required.
+A separate macOS review used the desktop driver's genuine OS-delivered keys and a
+local recording fake engine. It verified Enter/Shift+Enter dispatch counts, arrows
+and selection, Down, Escape, boundary/selection deletion, Output focus/typing,
+Command+R cycling, Command+Enter, Standard regressions, undo/redo, clipboard and
+mouse positioning. Unicode clipboard paste and subsequent dispatch passed; the
+typing path did not deliver the non-ASCII characters to wx, so Unicode keyboard
+input and IME remain unverified. No screen reader was used. See
+[native input review](command-entry-native-review.md) for fixtures, evidence and limits.
+
+An optional foreground smoke test sends keys with wx.UIActionSimulator:
+`GENERICMUD_TEST_OS_INPUT=1 uv run pytest -q -rs tests/test_command_entry_os_input.py`.
+It is disabled by default and skipped whenever CI or GITHUB_ACTIONS is set, even
+with an inherited opt-in flag. Permission and plain-control input checks prevent
+missing OS input from looking like a pass.
+This environment denies event posting by Python, so that particular driver remains
+unverified here; the desktop driver provided the successful OS-input coverage.
+
+These checks do not establish hardware keyboard/IME delivery, actual VoiceOver
+speech, Windows/NVDA/JAWS or GTK/Orca accessibility. VIPMud/NVDA observations do not
+validate genericMud's accessibility. Manual testing of that matrix, other platforms'
+focus/click ordering, announcement timing and plugin integrations remains required.

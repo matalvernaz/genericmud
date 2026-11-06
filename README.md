@@ -233,14 +233,19 @@ presses cycle backwards. Explicit soundpack/user bindings on Ctrl+R, Ctrl+Enter,
 or Escape still win. Ctrl+Enter does not toggle autoretype in this mode; autoretype
 keeps its saved setting and can be toggled in Standard or by a custom key binding.
 
+On macOS, use **Command+R** and **Command+Enter** for these two shortcuts;
+physical Control+Enter opens Cocoa's native context menu.
+Standard keeps its existing wx keyboard mapping.
+
 Passwords use a separate temporary field and never enter the document. Closing a
 session discards its in-memory buffer. There is no automatic pruning of old drafts;
 long sessions may need manual deletion. Lines scroll horizontally instead of wrapping.
 This first version supports the default Line Entry Mode; its Off setting, VIPMud
 script-brace assembly, and exact mouse/IME behavior remain outside the compatibility
 claim. The original VIPMud behavior was corroborated by a user's keyboard/NVDA
-observations; genericMud's new mode still needs Windows/NVDA, GTK/Orca, VoiceOver,
-and physical keyboard/IME validation. See [command input details](docs/command-entry.md).
+observations. macOS OS-delivered keyboard tests passed, but genericMud's new mode
+still needs Windows/NVDA, GTK/Orca, VoiceOver and hardware keyboard/IME validation.
+See [command input details](docs/command-entry.md).
 
 ## More than one MUD at once
 
