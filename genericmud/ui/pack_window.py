@@ -14,7 +14,7 @@ import wx
 
 from genericmud.bridge import protocol
 from genericmud.ui.clipboard import _clipboard_text, _set_clipboard_text
-from genericmud.ui.command_entry import CommandEntryCtrl
+from genericmud.ui.command_buffer import CommandEntryCtrl
 from genericmud.ui.pack_dialogs import (
     PackMessageDialog,
     PackNotepadFrame,

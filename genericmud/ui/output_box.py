@@ -9,7 +9,7 @@ import wx
 
 from genericmud.bridge import protocol
 from genericmud.ui.clipboard import _set_clipboard_text
-from genericmud.ui.command_entry import CommandEntryCtrl
+from genericmud.ui.command_buffer import CommandEntryCtrl
 from genericmud.ui.keyboard import _key_combo
 from genericmud.ui.output_dialogs import ChooseDialog, CopyLineDialog, FindDialog
 from genericmud.ui.scrollback import anchor_after_append, find_line
