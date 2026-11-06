@@ -429,8 +429,13 @@ def _probe():
                 stage = "settle"
             elif stage == "settle" and entry.HasFocus() and time.monotonic() >= settle_at:
                 text, char, _typing = current
-                assert focus_events and entry.GetValue() == text + char
-                assert entry.GetSelection() == (entry.GetLastPosition(),) * 2
+                assert focus_events and entry.GetValue() == text + char, (
+                    repr(text), repr(char), current[2],
+                    repr(entry.GetValue()), entry.GetSelection(), focus_events,
+                )
+                assert entry.GetSelection() == (entry.GetLastPosition(),) * 2, (
+                    repr(text), repr(char), entry.GetSelection(), entry.GetLastPosition(),
+                )
                 stage = "next"
             elif stage == "worker" and not worker.is_alive():
                 assert worker_result == {"read": "worker draft", "replaced": "worker draft"}
