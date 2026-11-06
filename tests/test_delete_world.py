@@ -333,3 +333,35 @@ class _KeyEvent:
 
     def Skip(self) -> None:
         self.skipped = True
+
+
+def test_the_mac_delete_key_removes_the_picked_world(window, monkeypatch):
+    # On a Mac keyboard the key labelled "delete" arrives as Backspace; the forward delete the
+    # README's "Delete key" means elsewhere needs fn there.
+    wx = pytest.importorskip("wx")
+    from genericmud.ui import wx_app
+
+    dialog = _dialog(window, "Pen")
+    ended: list[int] = []
+    dialog.EndModal = ended.append
+    try:
+        monkeypatch.setattr(sys, "platform", "darwin")
+        dialog._on_choice_key(_KeyEvent(wx.WXK_BACK))
+        assert ended == [wx_app._ID_DELETE_WORLD]
+    finally:
+        dialog.Destroy()
+
+
+def test_backspace_is_left_to_the_list_off_the_mac(window, monkeypatch):
+    wx = pytest.importorskip("wx")
+    dialog = _dialog(window, "Pen")
+    ended: list[int] = []
+    dialog.EndModal = ended.append
+    try:
+        monkeypatch.setattr(sys, "platform", "win32")
+        event = _KeyEvent(wx.WXK_BACK)
+        dialog._on_choice_key(event)
+        assert ended == []
+        assert event.skipped is True
+    finally:
+        dialog.Destroy()

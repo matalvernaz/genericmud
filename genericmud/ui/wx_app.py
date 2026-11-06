@@ -2406,7 +2406,11 @@ class ConnectDialog(wx.Dialog):
 
     def _on_choice_key(self, event: wx.KeyEvent) -> None:
         """Delete removes the picked world -- only with the list focused and one selected."""
-        if event.GetKeyCode() == wx.WXK_DELETE and self.get_world() is not None:
+        code = event.GetKeyCode()
+        # The key a Mac keyboard labels "delete" reaches wx as Backspace; forward delete
+        # needs fn there, so it counts too. A list box has no use for Backspace either way.
+        deleting = code == wx.WXK_DELETE or (code == wx.WXK_BACK and sys.platform == "darwin")
+        if deleting and self.get_world() is not None:
             self.EndModal(_ID_DELETE_WORLD)
             return
         event.Skip()
