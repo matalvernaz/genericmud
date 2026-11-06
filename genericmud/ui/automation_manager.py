@@ -41,6 +41,9 @@ def _rule_summary(kind: str, rule) -> str:
     """One spoken line per rule for the manager list."""
     # Plain words, no arrow/dash glyphs: these lines are read by a screen reader.
     status = "Disabled. " if not rule.enabled else ""
+    # The label first when it has one: it is what the player named the rule, and what a script
+    # refers to it by, so it is the thing they are looking for in the list.
+    named = f"{rule.label}: " if getattr(rule, "label", "") else ""
     commands = "; ".join(
         line.strip() for line in rule.send.splitlines() if line.strip()
     ) if hasattr(rule, "send") else ""
@@ -58,9 +61,9 @@ def _rule_summary(kind: str, rule) -> str:
         ) if part]
         how = rule.match_kind()
         label = f"{rule.pattern}" if how == "wildcard" else f"{rule.pattern} ({how})"
-        return f"{status}Trigger: {label}: {'; '.join(actions) or 'no action'}"
+        return f"{status}{named}Trigger: {label}: {'; '.join(actions) or 'no action'}"
     if kind == "alias":
-        return f"{status}Alias: {rule.pattern} sends {commands or 'nothing'}"
+        return f"{status}{named}Alias: {rule.pattern} sends {commands or 'nothing'}"
     if kind == "key":
         action = commands or rule.speak or rule.sound or "nothing"
         return f"{status}Hotkey: {rule.key} runs {action}"
