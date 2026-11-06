@@ -8,6 +8,50 @@ fails the build on purpose.
 
 Entries start at 0.7.1. Earlier releases were tagged before this file existed.
 
+## 0.25.0 — 2026-11-06
+
+**An optional editable command buffer**, from have-you-met-matt
+
+* View, Command input mode, Editable command buffer (VIPMud-style) lets you
+  keep earlier commands and several unsent drafts in one editable document.
+  Standard remains the default. The choice is saved for newly opened tabs;
+  existing tabs keep their mode and text. This is for the native window only.
+* Enter sends the current line and goes to an empty tail. Sending an older
+  line leaves it in place and appends a copy. Shift+Enter sends the current
+  line, or just the selected text, without moving or changing it. A selection
+  across several lines sends its nonblank lines separately.
+* Up and Down move through the document. Down on an unfinished final line
+  adds an empty tail without sending the draft. Escape inserts a blank line
+  without deleting selected text. Backspace at the start of a line preserves
+  its boundary; selected text and Delete still use ordinary native editing.
+* Ctrl+R completes a prefix from earlier rows, including drafts; press it
+  again to cycle. Ctrl+Enter returns to the existing tail, including from
+  Output. On macOS, use Command+R and Command+Enter. Soundpack and user
+  bindings on these keys still take priority.
+* Passwords use a separate labelled field and stay out of the document and
+  command history. Unhiding clears an unsent password and says so. Each tab
+  has its own buffer, kept in memory until the tab closes, without automatic
+  deletion of old drafts.
+* The editable mode still needs live screen-reader and input-method testing.
+  The web window keeps its existing input behavior.
+
+**Typing fixes**
+
+* On Windows, moving to the next line no longer leaves the caret inside a
+  line ending, which could join the next draft onto the previous command.
+  Emoji typed from Output are kept intact in both input modes.
+* On GTK, typing from Output now keeps the first character, its case and
+  keyboard layout, then puts focus in the command box.
+* Sending an older line keeps a draft ending in a pasted tab separate from
+  the executed copy. Moving rows ends word completion so an earlier line's
+  suffix cannot be carried into another draft.
+
+**For contributors**
+
+* The native window and shared session code are split into smaller modules,
+  with purpose descriptions and a code map in the contributor guide. This
+  internal reorganization does not change how you play.
+
 ## 0.24.0 — 2026-11-06
 
 **Reconnecting by itself**, from have-you-met-matt
