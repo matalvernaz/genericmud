@@ -1162,11 +1162,18 @@ class SessionPanel(wx.Panel):
         A pasted block is several commands, and they go out one at a time, in order, each down
         the same input path a typed line takes -- so aliases apply to each, and a world with
         stacking off still gets several commands from one paste.
+
+        One line goes out exactly as typed, an empty one included: a blank Enter is how a pager
+        ("press return to continue") is answered, and with autoretype on the engine turns it
+        into the last command again. Spaces are kept as well, for in-game editors and
+        passwords. Only a block is split, and its blank lines are dropped; a block holding
+        nothing but blank lines is one blank Enter.
         """
-        lines = [line.strip() for line in self.input.GetValue().splitlines() if line.strip()]
-        if not lines:
-            self.input.SetValue("")
-            return
+        value = self.input.GetValue()
+        if "\n" in value or "\r" in value:
+            lines = [line for line in value.splitlines() if line.strip()] or [""]
+        else:
+            lines = [value]
         # genericMud's own commands ("/to", "/alias", "/map", ...) don't need this tab's
         # connection: "/to" goes out through another session. Asking first left no way to
         # run them here at all, since Cancel keeps the line and Enter asks again. An unknown
@@ -1187,7 +1194,7 @@ class SessionPanel(wx.Panel):
         self.input.SetInsertionPointEnd()
         if not self._input_masked:
             # Each line is its own command, so each is its own thing to recall.
-            self._remember(lines)
+            self._remember([line for line in lines if line])
         else:
             self._hist_index = len(self._history)
         if self.app is not None:
