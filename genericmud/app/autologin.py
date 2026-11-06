@@ -1,3 +1,5 @@
+"""Automatic login, post-connect commands and hidden typing kept out of history."""
+
 from __future__ import annotations
 
 from genericmud.bridge import protocol

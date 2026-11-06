@@ -1,3 +1,5 @@
+"""Typed input, command stacking, aliases and genericMud client commands."""
+
 from __future__ import annotations
 
 import re

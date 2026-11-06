@@ -1,10 +1,8 @@
-"""Integration core: turns the telnet event stream and renderer messages into
-engine processing, self-voice, and outbound render messages.
+"""One world's session state, settings and connection lifecycle.
 
-Decoupled from transport and UI via three injected callables — ``send`` (to the
-MUD), ``post`` (to the renderer), ``schedule`` (timers) — plus a VoiceRouter, so
-the whole glue layer is unit-testable without a socket, a webview, or NVDA.
-"""
+EngineApp builds the services shared by its mixins and owns their initial state. The window
+injects transport, rendering, scheduling and other callbacks so this code does not depend on
+either the native or web window. Its bases name the modules that handle each kind of work."""
 
 from __future__ import annotations
 

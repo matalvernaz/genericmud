@@ -1,3 +1,5 @@
+"""Speedwalks, room reports, map destinations and breadcrumb navigation."""
+
 from __future__ import annotations
 
 from genericmud.mapping import spoken_count

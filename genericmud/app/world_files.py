@@ -1,3 +1,5 @@
+"""This world's rules, scripts, room map and saved soundpack variables."""
+
 from __future__ import annotations
 
 import json

@@ -1,3 +1,5 @@
+"""Reviewing and following MUD links, and checking commands they offer to type."""
+
 from __future__ import annotations
 
 from genericmud.app.typed_commands import CLIENT_PREFIX

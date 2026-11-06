@@ -1,3 +1,5 @@
+"""MUD text from telnet bytes through markup, triggers, logs, speech and output."""
+
 from __future__ import annotations
 
 import re

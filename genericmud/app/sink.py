@@ -1,3 +1,5 @@
+"""The automation engine's side effects, routed through its world's session."""
+
 from __future__ import annotations
 
 from collections.abc import Callable
