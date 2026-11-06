@@ -663,8 +663,9 @@ and **Insert a variable into the commands** open the same list; choose a value
 and press **Insert** to put its reference where the cursor was in that field.
 
 Use **Duplicate** to start from an existing item. **Disable** keeps a trigger,
-alias, hotkey, or channel saved without letting it run. Changes work on the next
-matching line.
+alias, hotkey, timer, MUD data rule or channel saved without letting it run. The same
+switch is the **Enabled** box at the top of every one of those editors, so a rule can be
+parked while you edit it. Changes work on the next matching line.
 
 Choose **Scripts** in the same manager when the automation needs decisions,
 timers, reusable functions, or other Lua code. Scripts are sandboxed, load

@@ -186,6 +186,20 @@ class _RuleEditorBase(wx.Dialog):
         except ValueError:
             return fallback
 
+    def _enabled_checkbox(self, grid: wx.FlexGridSizer, rule) -> wx.CheckBox:
+        """Whether the rule is on, as the first field of the dialog that edits it.
+
+        The manager could already switch a rule off, but the dialog is where a rule is written,
+        and "is this one on?" is the first thing worth knowing about it: a rule can be kept and
+        parked here. It comes first in the tab order so a screen reader reads it on opening.
+        """
+        check = wx.CheckBox(self, label="&Enabled")
+        check.SetName("Enabled")
+        check.SetValue(rule.enabled)
+        grid.Add(wx.StaticText(self, label=""))
+        grid.Add(check)
+        return check
+
     def _send_to_choice(self, grid: wx.FlexGridSizer, current: str) -> wx.Choice:
         """The "send to" box: one response text, one destination (MUSHclient's arrangement)."""
         grid.Add(wx.StaticText(self, label="Send it &to:"), 0, wx.ALIGN_CENTER_VERTICAL)
@@ -215,9 +229,9 @@ class TriggerEditorDialog(_RuleEditorBase):
         )
         self._variables = variables
         self._pack_dir = pack_dir
-        self._enabled = trigger.enabled
         outer = wx.BoxSizer(wx.VERTICAL)
         grid = self._grid()
+        self._enabled = self._enabled_checkbox(grid, trigger)
         self._pattern = self._text(
             grid, "When the MUD sends &text matching:", trigger.pattern
         )
@@ -324,7 +338,7 @@ class TriggerEditorDialog(_RuleEditorBase):
             order=self._order_value(self._order),
             keep_evaluating=self._keep_evaluating.GetValue(),
             interrupt=self._interrupt.GetValue(),
-            enabled=self._enabled,
+            enabled=self._enabled.GetValue(),
         )
 
 
@@ -335,9 +349,9 @@ class AliasEditorDialog(_RuleEditorBase):
             style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER,
         )
         self._variables = variables
-        self._enabled = alias.enabled
         outer = wx.BoxSizer(wx.VERTICAL)
         grid = self._grid()
+        self._enabled = self._enabled_checkbox(grid, alias)
         self._pattern = self._text(
             grid, "&When I type (* = anything, e.g. sh *):", alias.pattern
         )
@@ -371,7 +385,7 @@ class AliasEditorDialog(_RuleEditorBase):
             send_to=SEND_TO_CHOICES[self._send_to.GetSelection()],
             variable=self._variable.GetValue().strip(),
             speak=self._speak.GetValue().strip(),
-            enabled=self._enabled,
+            enabled=self._enabled.GetValue(),
         )
 
 
@@ -385,9 +399,9 @@ class KeyEditorDialog(_RuleEditorBase):
         )
         self._variables = variables
         self._pack_dir = pack_dir
-        self._enabled = key.enabled
         outer = wx.BoxSizer(wx.VERTICAL)
         grid = self._grid()
+        self._enabled = self._enabled_checkbox(grid, key)
         grid.Add(wx.StaticText(self, label="&Press the key combination:"), 0,
                  wx.ALIGN_CENTER_VERTICAL)
         self._key = _KeyCaptureCtrl(self)
@@ -423,7 +437,7 @@ class KeyEditorDialog(_RuleEditorBase):
             speak=self._speak.GetValue().strip(),
             sound=self._sound.GetValue().strip(),
             group=self._group.GetValue().strip(),
-            enabled=self._enabled,
+            enabled=self._enabled.GetValue(),
         )
 
 
@@ -491,9 +505,9 @@ class DataRuleEditorDialog(_RuleEditorBase):
         )
         self._variables = variables
         self._pack_dir = pack_dir
-        self._enabled = watch.enabled
         outer = wx.BoxSizer(wx.VERTICAL)
         grid = self._grid()
+        self._enabled = self._enabled_checkbox(grid, watch)
         self._name = self._text(
             grid, "When the MUD sends this &value (for example Char.Vitals.hp):", watch.name
         )
@@ -568,7 +582,7 @@ class DataRuleEditorDialog(_RuleEditorBase):
             send=self._send.GetValue().strip(),
             interrupt=self._interrupt.GetValue(),
             group=self._group.GetValue().strip(),
-            enabled=self._enabled,
+            enabled=self._enabled.GetValue(),
         )
 
 
@@ -577,9 +591,9 @@ class TimerEditorDialog(_RuleEditorBase):
         super().__init__(
             parent, title="Timer", style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER
         )
-        self._enabled = timer.enabled
         outer = wx.BoxSizer(wx.VERTICAL)
         grid = self._grid()
+        self._enabled = self._enabled_checkbox(grid, timer)
         self._label = self._text(
             grid, "&Label (a script turns it off and on by this name):", timer.label
         )
@@ -627,7 +641,7 @@ class TimerEditorDialog(_RuleEditorBase):
     def result(self) -> UserTimer:
         return UserTimer(
             label=self._label.GetValue().strip(),
-            enabled=self._enabled,
+            enabled=self._enabled.GetValue(),
             every=max(0.0, self._number(self._every.GetValue())),
             offset=max(0.0, self._number(self._offset.GetValue())),
             at=self._at.GetValue().strip() if self._kind.GetSelection() == 1 else "",
@@ -650,9 +664,9 @@ class TimerEditorDialog(_RuleEditorBase):
 class ChannelEditorDialog(_RuleEditorBase):
     def __init__(self, parent: wx.Window, channel: UserChannel) -> None:
         super().__init__(parent, title="Channel")
-        self._enabled = channel.enabled
         outer = wx.BoxSizer(wx.VERTICAL)
         grid = self._grid()
+        self._enabled = self._enabled_checkbox(grid, channel)
         self._name = self._text(grid, "Channel &name:", channel.name)
         self._speak = wx.CheckBox(self, label="&Speak lines on this channel")
         self._speak.SetValue(channel.speak)
@@ -671,5 +685,5 @@ class ChannelEditorDialog(_RuleEditorBase):
             speak=self._speak.GetValue(),
             display=self._display.GetValue(),
             interrupt=self._interrupt.GetValue(),
-            enabled=self._enabled,
+            enabled=self._enabled.GetValue(),
         )
