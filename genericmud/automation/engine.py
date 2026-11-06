@@ -212,6 +212,9 @@ class _Rule:
     # again. Not part of what makes two rules equal.
     required: str | None = field(default=None, compare=False, repr=False)
     screened: object = field(default=None, compare=False, repr=False)
+    # The pattern as it was written. The compiled form has the wildcard translation in it, which
+    # is not what a script wrote and not what a player wants read out.
+    text: str = field(default="", compare=False)
 
 
 def _rule_order(rule: _Rule) -> tuple[int, str]:
@@ -225,6 +228,25 @@ def _wildcards(match: re.Match[str]) -> list[str]:
 
 def _named(match: re.Match[str]) -> dict[str, str]:
     return {name: value if value is not None else "" for name, value in match.groupdict().items()}
+
+
+@dataclass
+class LiveRule:
+    """One rule the engine is running, for the window that lists what a script registered.
+
+    A rule a script made has no file of its own: the script's text is the only copy, so it can be
+    listed and switched off, but not edited there -- a change would be put back the next time the
+    script loads. ``handle`` is what :meth:`AutomationEngine.set_live_enabled` takes, and is of no
+    use to anything else.
+    """
+
+    kind: str  # "trigger", "alias", "key", "timer" or "data"
+    name: str  # what a script named it; "" for one it did not
+    summary: str  # what it matches, or how often a timer fires
+    group: str
+    source: str
+    enabled: bool
+    handle: object = field(default=None, repr=False, compare=False)
 
 
 class _NamedTimer:
@@ -323,6 +345,15 @@ class _KeyBinding:
     callback: Callback
     group: str = ""
     enabled: bool = True
+
+
+def _timer_words(timer: _NamedTimer) -> str:
+    """How often a timer fires, in words the manager can read out."""
+    if timer.next_delay is not None:
+        return "once a day, as it was set"
+    if timer.every:
+        return f"every {timer.every:g} seconds"
+    return "once"
 
 
 @dataclass
@@ -491,6 +522,7 @@ class AutomationEngine:
             source=source,
             channel=channel,
             group=group,
+            text=pattern,
             stop_scope=stop_scope,
             tiebreak=tiebreak,
         )
@@ -520,7 +552,7 @@ class AutomationEngine:
         rule = _Rule(compile_pattern(pattern, regex, whole=True), callback, priority, name, True,
                      source=source, keep_evaluating=keep_evaluating, tiebreak=tiebreak,
                      stop_scope=stop_scope, consumes=consumes, fallback=fallback,
-                     group=group)
+                     group=group, text=pattern)
         self._aliases.append(rule)
         self._aliases.sort(key=_rule_order)
         return rule
@@ -576,6 +608,71 @@ class AutomationEngine:
         if timer is None:
             return False
         timer.set_enabled(enabled)
+        return True
+
+    def live_rules(self, prefixes: tuple[str, ...] = ()) -> list[LiveRule]:
+        """Every rule the engine is running whose source starts with one of ``prefixes``.
+
+        The manager lists these as the rules your scripts made: a script's ``mud.trigger``,
+        ``mud.alias``, ``mud.key``, ``mud.timer``, ``mud.add_timer`` or ``mud.on_data`` has no
+        file behind it, so without this a trigger a script got wrong is invisible -- it either
+        fires when it should not or does nothing, and the diagnostic log is the only clue.
+        """
+        def wanted(source: str) -> bool:
+            return not prefixes or any(source.startswith(prefix) for prefix in prefixes)
+
+        found: list[LiveRule] = []
+        for kind, rules in (("trigger", self._triggers), ("alias", self._aliases)):
+            for rule in rules:
+                if wanted(rule.source):
+                    found.append(
+                        LiveRule(
+                            kind, rule.name, rule.text or rule.pattern.pattern, rule.group,
+                            rule.source, rule.enabled, rule,
+                        )
+                    )
+        for binding in self._key_bindings:
+            if wanted(binding.source):
+                found.append(
+                    LiveRule(
+                        "key", "", binding.key, binding.group, binding.source, binding.enabled,
+                        binding,
+                    )
+                )
+        for timer in self._named_timers:
+            if wanted(timer.source):
+                found.append(
+                    LiveRule(
+                        "timer", timer.name, _timer_words(timer), timer.group, timer.source,
+                        timer.enabled, timer,
+                    )
+                )
+        for watch in self._data_watches:
+            if wanted(watch.source):
+                found.append(
+                    LiveRule(
+                        "data", "", watch.path, watch.group, watch.source, watch.enabled, watch,
+                    )
+                )
+        return found
+
+    def set_live_enabled(self, handle: object, enabled: bool) -> bool:
+        """Switch one rule from :meth:`live_rules`; False if the engine no longer has it.
+
+        By handle rather than by name, because a rule a script made need not have a name at all,
+        and a name it did give is not a promise that it kept it.
+        """
+        if isinstance(handle, _NamedTimer):
+            handle.set_enabled(enabled)
+        elif isinstance(handle, _KeyBinding):
+            handle.enabled = enabled
+            self._rebuild_keys()
+        elif isinstance(handle, _DataWatch):
+            handle.enabled = enabled
+        elif isinstance(handle, _Rule):
+            handle.enabled = enabled
+        else:
+            return False
         return True
 
     def set_group_enabled(self, group: str, enabled: bool) -> int:

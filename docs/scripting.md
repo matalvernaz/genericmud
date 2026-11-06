@@ -12,7 +12,7 @@ not run in your other worlds.
 1. Connect to the saved world you want to change.
 2. Press **Ctrl+B**, or choose **Automation > Manage automation**.
 3. In the **Show** box, choose **Triggers**, **Aliases**, **Hotkeys**,
-   **Channels**, **Scripts**, **MUD data**, or **Timers**.
+   **Channels**, **Scripts**, **MUD data**, **Timers**, or **From your scripts**.
 4. Choose **New**.
 
 These are categories in one manager, not separate simple and advanced tools:
@@ -28,6 +28,8 @@ These are categories in one manager, not separate simple and advanced tools:
 - A **script** contains reusable Lua automation.
 - A **timer** acts on a clock: every so often, or once a day at a time such as
   `03:00`.
+- **From your scripts** lists the rules your Lua made, so you can see and switch
+  them off without editing the script that owns them.
 
 Choose an item and press Enter to edit it. **Duplicate** opens a copy that you
 can change. **Disable** keeps an ordinary item saved without letting it run.
@@ -36,7 +38,7 @@ used.
 
 Keyboard shortcuts inside the manager:
 
-- **Ctrl+1** through **Ctrl+7** show the seven categories in order.
+- **Ctrl+1** through **Ctrl+8** show the categories in order.
 - **Ctrl+N** creates an item in the category being shown.
 - **Enter** edits the selected item.
 - **Delete** deletes the selected item after confirmation.
@@ -812,11 +814,12 @@ Rules and timing:
 - `mud.on_data(name, callback [, options])`
 
 The alias and trigger options are `regex` and `priority`, plus `label` and `group`.
-A label is the name a rule is switched by -- `mud.set_enabled("shoot", false)` -- and the
-manager reads it out first; a group is what `mud.set_group_enabled` switches as one.
-`mud.key` takes a `group` too. A trigger can also use `channel`. The `mud.add_timer`
-options are `every`, `offset`, `group`, `enabled` and `while_disconnected`. The only
-`mud.on_data` option is `changes`.
+A trigger can also use `channel`. A label is the name a rule is switched by --
+`mud.set_enabled("shoot", false)` -- and the manager reads it out first; a group is what
+`mud.set_group_enabled` switches as one. `mud.key` takes a `group` too, and a trigger or
+alias a script makes shows up in the manager under From your scripts, unless it has been
+switched off there. The `mud.add_timer` options are `every`, `offset`, `group`, `enabled`
+and `while_disconnected`. The only `mud.on_data` option is `changes`.
 
 Commands and output:
 

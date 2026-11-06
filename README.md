@@ -502,8 +502,9 @@ off its own map — some clan halls and quest rooms are deliberately unmapped.
 ## Automation: triggers, aliases, hotkeys, channels, and scripts
 
 **Ctrl+B** opens one Automation Manager for the current world. Choose
-**Triggers**, **Aliases**, **Hotkeys**, **Channels**, **Scripts**, **MUD data** or
-**Timers** from the **Show** box. There is no separate simple or advanced builder.
+**Triggers**, **Aliases**, **Hotkeys**, **Channels**, **Scripts**, **MUD data**,
+**Timers** or **From your scripts** from the **Show** box. There is no separate simple
+or advanced builder.
 
 A trigger reacts to text from the MUD. It can play a sound, speak something
 shorter, send commands, hide the matched line, interrupt speech, or route the
@@ -684,6 +685,14 @@ mud.alias("combo *", function(line, captures)
 end)
 ```
 
+**From your scripts** lists the rules your Lua made -- `mud.trigger`, `mud.alias`,
+`mud.key`, `mud.timer`, `mud.add_timer`, `mud.on_data` -- one line each saying what it
+is, what it matches, whether it is on, and its group. It is read-only apart from
+Disable/Enable, and deliberately: the script's text is the only copy of a rule it
+made, so an edit here would be undone the next time the script loads. Without the
+list a rule a script got wrong would be invisible -- it either fires when it should
+not or does nothing, and the diagnostic log is the only other clue.
+
 Read the [step-by-step automation and scripting guide](docs/scripting.md) for
 plain-language instructions, copyable examples, and the full Lua API. The same
 shorter guide is available offline under **Automation → Automation help**.
@@ -848,7 +857,7 @@ View, **Alt+H** Help.
 | Ctrl+Shift+B | Browse soundpacks online |
 | Ctrl+B | Open the Automation Manager |
 | Ctrl+Shift+V | List the values the MUD has sent and scripts have saved |
-| Ctrl+1..7 in Automation Manager | Show triggers / aliases / hotkeys / channels / scripts / MUD data / timers |
+| Ctrl+1..8 in Automation Manager | Show triggers / aliases / hotkeys / channels / scripts / MUD data / timers / the rules your scripts made |
 | Ctrl+N in Automation Manager | Create an item in the category being shown |
 | Enter / Delete in an automation list | Edit / delete the selected item |
 | Enter / F5 in the variables list | Copy the reference / refresh the values |

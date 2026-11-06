@@ -121,7 +121,8 @@ Automation and Lua scripting
 Start here:
 Connect to the saved world you want to change, or delete it from the same dialog.
 Press Ctrl+B or open the Automation menu and choose Manage automation. In the Show
-box, choose Triggers, Aliases, Hotkeys, Channels, Scripts, MUD data, or Timers.
+box, choose Triggers, Aliases, Hotkeys, Channels, Scripts, MUD data, Timers,
+or From your scripts.
 They are categories in one manager.
 
 Make an alias without code:
@@ -192,13 +193,18 @@ value such as Char.Vitals.hp: a sound, speech, commands. ${value} is the new
 value, so speaking ${value} health reads your health. Only when it changes is on
 for new rules.
 
+From your scripts lists the rules your Lua made with mud.trigger, mud.alias,
+mud.key, mud.timer, mud.add_timer or mud.on_data: what each one is, what it matches,
+and whether it is on. It can be read and switched off, never edited, because the
+script's own text is the only copy of a rule it made.
+
 Choose Duplicate to start from a copy. Disable keeps an item saved without
 letting it run, and every editor has the same switch as the Enabled box at its top,
 so a rule can be parked while you work on it. A switch a script makes shows here too:
 after mud.set_enabled or mud.set_group_enabled the item reads Disabled and its Enabled
-box is clear, and that is the state the manager saves. Ctrl+1 through Ctrl+7 change categories,
-Ctrl+N creates an item, Enter edits, and Delete deletes after confirmation. F2
-renames a script.
+box is clear, and that is the state the manager saves. Ctrl+1 through Ctrl+8 change
+categories, Ctrl+N creates an item, Enter edits, and Delete deletes after confirmation.
+F2 renames a script.
 
 MUSHclient's own names work too:
 Your world's scripts, and the code a rule sends to a script, run in Lua 5.1 with
@@ -396,8 +402,8 @@ Ctrl+B            Open the Automation Manager
 Ctrl+Shift+V      List the MUD's variables and script values
 Ctrl+Shift+B      Browse soundpacks online
 Automation Manager:
-Ctrl+1 to 7       Show triggers, aliases, hotkeys, channels, scripts, MUD data,
-                  or timers
+Ctrl+1 to 8       Show triggers, aliases, hotkeys, channels, scripts, MUD data,
+                  timers, or the rules your scripts made
 Ctrl+N            Create an item in the category being shown
 Enter / Delete    Edit / delete the selected item
 F2                Rename the selected script
