@@ -32,6 +32,7 @@ import re
 from dataclasses import dataclass
 
 from genericmud.model.buffer import Link
+from genericmud.protocol.mxp import _printable_code_point
 
 CLIENT_VERSION = "2.50"
 # What the client announces. The checksum the spec allows is left out: a world may keep it to
@@ -47,25 +48,30 @@ CLIENT_LINE = f"PUEBLOCLIENT {CLIENT_VERSION}"
 # <img> is a sound to play, not a switch -- and reading those as a switch turned a sound tag into
 # a mode change back to plain text.
 _PAGE_MODES = {"html": True, "purehtml": True, "text": False, "plain": False}
-_MODE = re.compile(r"<img\b[^>]*\bxch_mode\s*=\s*[\"']?(html|purehtml|text|plain)\b", re.I)
+#
+# Every pattern here stops a tag at the next "<" as well as at ">": with [^>]* a line holding
+# thousands of "<img" and no ">" made each one scan to the end of the line, which a 64 KB line
+# turned into half a minute of the session doing nothing else.
+_MODE = re.compile(r"<img\b[^<>]*\bxch_mode\s*=\s*[\"']?(html|purehtml|text|plain)\b", re.I)
 _MODE_TAG = re.compile(
-    r"<img\b[^>]*\bxch_mode\s*=\s*[\"']?(?:html|purehtml|text|plain)\b[^>]*>", re.I
+    r"<img\b[^<>]*\bxch_mode\s*=\s*[\"']?(?:html|purehtml|text|plain)\b[^<>]*>", re.I
 )
 # A picture, or with xch_mode="sound" something to play: what a later stage would carry, and for
 # now only noted, so that "does this MUD use them at all?" is a fact from a log.
-_IMAGE = re.compile(r"<img\b([^>]*)>", re.IGNORECASE)
+_IMAGE = re.compile(r"<img\b([^<>]*)>", re.IGNORECASE)
 # Where Pueblo puts a line break. <p> and <hr> end a line as well: both mean "new line here",
 # and reading them as one is what stops a paragraph arriving as a wall of text.
-_BREAKS = re.compile(r"<br\s*/?>|</p\s*>|<p\b[^>]*>|<hr\s*/?>", re.IGNORECASE)
-_COMMENTS = re.compile(r"<!--.*?-->", re.DOTALL)
+_BREAKS = re.compile(r"<br\s*/?>|</p\s*>|<p\b[^<>]*>|<hr\s*/?>", re.IGNORECASE)
 # Fenced off entirely: a script aimed at a browser is code, and reading it aloud is noise.
-_SILENT = re.compile(r"<(script|style|title)\b[^>]*>.*?</\1\s*>", re.IGNORECASE | re.DOTALL)
-_TAG = re.compile(r"<[^>]*>")
+# Found by _without_fenced rather than one pattern, which rescanned to the end of the line for
+# every opening that had no close.
+_SILENT_OPEN = re.compile(r"<(script|style|title)\b[^<>]*>", re.IGNORECASE)
+_TAG = re.compile(r"<[^<>]*>")
 _ENTITY = re.compile(r"&(#[xX]?[0-9a-fA-F]+|[a-zA-Z]+);")
 # A command link, as Pueblo writes it, with the older href form some worlds used instead:
 # <a xch_cmd="north">north</a> and <a href="xch_cmd:north">north</a>. An unclosed one runs to
 # the end of its line rather than being thrown away, which is what a browser would do.
-_LINK = re.compile(r"<a\b([^>]*)>(.*?)(?=</a\s*>|$)", re.IGNORECASE | re.DOTALL)
+_LINK = re.compile(r"<a\b([^<>]*)>(.*?)(?=</a\s*>|$)", re.IGNORECASE | re.DOTALL)
 _ATTRIBUTE = re.compile(r"\b([a-zA-Z_:-]+)\s*=\s*(\"([^\"]*)\"|'([^']*)'|([^\s>]+))")
 _ENTITIES = {"amp": "&", "lt": "<", "gt": ">", "quot": '"', "apos": "'", "nbsp": " "}
 
@@ -115,7 +121,7 @@ class PuebloParser:
                 return [PuebloLine(line)]
         elif not self.active:
             return [PuebloLine(line)]
-        body = _SILENT.sub("", _COMMENTS.sub("", line))
+        body = _without_fenced(_without_comments(line))
         if self.first_image is None:
             found = _IMAGE.search(body)
             source = _attribute(found.group(1), "src").strip() if found is not None else ""
@@ -126,6 +132,56 @@ class PuebloParser:
             pieces.pop()  # a break at the end is not a blank line of its own, and a mode
             # switch on its own leaves nothing to say at all
         return pieces
+
+
+def _without_comments(text: str) -> str:
+    """The text without its ``<!-- ... -->`` comments. An unclosed one is left as it stands.
+
+    A scan rather than a pattern: a lazy pattern looks for the close again from every opening,
+    so a line of nothing but openings took seconds.
+    """
+    kept: list[str] = []
+    position = 0
+    while True:
+        start = text.find("<!--", position)
+        if start < 0:
+            break
+        end = text.find("-->", start + 4)
+        if end < 0:
+            break  # no close anywhere after it, so none after any later opening either
+        kept.append(text[position:start])
+        position = end + 3
+    kept.append(text[position:])
+    return "".join(kept)
+
+
+def _without_fenced(text: str) -> str:
+    """The text without ``<script>``, ``<style>`` and ``<title>`` blocks, contents and all.
+
+    One left unclosed is left as it stands, and its tags go with the rest later. A kind found
+    unclosed once is not looked for again: no later opening of it can have a close either.
+    """
+    kept: list[str] = []
+    position = 0
+    unclosed: set[str] = set()
+    while True:
+        opening = _SILENT_OPEN.search(text, position)
+        if opening is None:
+            break
+        name = opening.group(1).lower()
+        closing = None
+        if name not in unclosed:
+            closing = re.compile(rf"</{name}\s*>", re.IGNORECASE).search(text, opening.end())
+            if closing is None:
+                unclosed.add(name)
+        if closing is None:
+            kept.append(text[position:opening.end()])
+            position = opening.end()
+            continue
+        kept.append(text[position:opening.start()])
+        position = closing.end()
+    kept.append(text[position:])
+    return "".join(kept)
 
 
 def _read_piece(piece: str) -> PuebloLine:
@@ -187,8 +243,12 @@ def _read_entities(text: str) -> str:
             return _ENTITIES.get(name.lower(), match.group(0))
         hexadecimal = name[:2].lower() == "#x"
         try:
-            return chr(int(name[2:] if hexadecimal else name[1:], 16 if hexadecimal else 10))
-        except (ValueError, OverflowError):
+            code = int(name[2:] if hexadecimal else name[1:], 16 if hexadecimal else 10)
+        except ValueError:
             return match.group(0)
+        # As MXP does: no control characters (an escape would start ANSI), no half of a
+        # surrogate pair (a log cannot be written with one, and speech drops the line), and not
+        # the client's own picture marker.
+        return chr(code) if _printable_code_point(code) else ""
 
     return _ENTITY.sub(replace, text)
