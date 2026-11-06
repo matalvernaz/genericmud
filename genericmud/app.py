@@ -2252,7 +2252,12 @@ class EngineApp:
         term = message.get("term", "")
         forward = bool(message.get("forward", False))
         restart = bool(message.get("restart", False)) or not self.review.active
-        if message.get("from_bottom"):
+        if self._anchor_review(message):
+            # The reader's own line, in either direction: a search that ignored it both
+            # skipped matches between the caret and the last hit and sent a fresh Find back
+            # to the newest match, which is the line they had already read.
+            include_current = restart
+        elif message.get("from_bottom"):
             # The reader has been put back below the newest line, so the search goes on
             # from there: back, the newest line is the first one it looks at; forward,
             # there's nothing past it.
@@ -2260,8 +2265,10 @@ class EngineApp:
             include_current = not forward
         else:
             if restart:
-                # A new Find starts at the chosen edge and includes that edge line. Repeats
-                # remain exclusive, so F3 advances instead of finding the same line forever.
+                # Nothing said where the reader is (the browser renderer has no caret of
+                # its own), so a new Find starts at the chosen edge and includes that edge
+                # line. Repeats remain exclusive, so F3 advances instead of finding the same
+                # line forever.
                 self.review.enter()
                 if forward:
                     self.review.top()
@@ -2274,6 +2281,30 @@ class EngineApp:
         )
         self._post(protocol.find_result(hit, found=bool(hit)))
         self._speak_review(hit or f"not found: {term}")
+
+    def _anchor_review(self, message: dict) -> bool:
+        """Put the review cursor on the output line the reader is standing on.
+
+        The output box holds fewer lines than the buffer and keeps a caret of its own, so the
+        window says which line it is: the line's text, and how far it sits from the end. The
+        search then runs from there, which is what makes it go on from the reader's position
+        rather than from wherever the last search left off -- and what stops a fresh Find from
+        jumping back to the newest match the reader has already read.
+
+        False when the window said nothing or the line is no longer in the buffer, leaving the
+        caller to fall back on the edges. A line that was trimmed away is not a position.
+        """
+        text = str(message.get("text") or "")
+        from_end = message.get("from_end")
+        if not text or not isinstance(from_end, int):
+            return False
+        lines = self.buffer.lines()
+        matches = [index for index, line in enumerate(lines) if line.plain_text == text]
+        if not matches:
+            return False
+        near = len(lines) - 1 - max(0, from_end)
+        self.review.go_to(min(matches, key=lambda index: abs(index - near)))
+        return True
 
     def _handle_client_error(self, message: dict) -> None:
         """A renderer-side failure (e.g. Web Audio couldn't load/decode a sound)."""

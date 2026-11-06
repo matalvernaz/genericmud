@@ -121,11 +121,15 @@ def find(
     case_sensitive: bool = False,
     restart: bool = False,
     from_bottom: bool = False,
+    text: str = "",
+    from_end: int = 0,
 ) -> dict[str, Any]:
     """Ask the engine to search the scrollback. Backwards by default: it is history.
 
-    ``restart`` starts a new search at the edge it runs from; ``from_bottom`` searches on
-    from below the newest line, where the reader has just been put back.
+    ``restart`` starts a new search rather than going on from the last hit. ``text`` and
+    ``from_end`` are the line the reader is standing on -- the output box keeps a caret of its
+    own, which the engine cannot see -- so the search runs from there; ``from_bottom`` is the
+    reader who is below the newest line, where going back to the output puts them.
     """
     return {
         "type": FIND,
@@ -134,6 +138,8 @@ def find(
         "case_sensitive": case_sensitive,
         "restart": restart,
         "from_bottom": from_bottom,
+        "text": text,
+        "from_end": from_end,
     }
 
 

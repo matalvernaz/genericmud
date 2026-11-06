@@ -261,7 +261,9 @@ always in the output box.
   to a web page opens in a new tab.
 - **Alt+T** repeats the last tell; **Alt+C** the last chat line.
 - **Ctrl+F** searches the output, and **F3** / **Shift+F3** find the next and
-  previous match. These work while the output box has focus.
+  previous match. These work while the output box has focus, and each search
+  starts from the line the caret is on, so arrowing back through the output and
+  searching again carries on from where you are rather than from the last match.
 
 **Chat channels** get their own history. When your triggers route lines to
 channels (tells, gossip, auction...), **Ctrl+Alt+Left/Right** cycle between
