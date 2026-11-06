@@ -15,6 +15,19 @@ _MAP_SAVE_INTERVAL = 25
 
 
 class WalkingMixin:
+    """Speedwalks, room reports, map destinations and breadcrumb navigation.
+
+    Part of EngineApp (engine_app.py). Every attribute below starts in its constructor.
+
+    Writes: _map_unsaved, _walk.
+
+    Reads: _schedule, _send, follow_mode, map, nav, voice.
+
+    Calls: _speak_system, world_files (_save_map).
+
+    _map_unsaved is shared: walking counts new rooms; world_files resets it after saving.
+    """
+
     def _wrong_direction(self, direction: object) -> None:
         """GMCP ``room.wrongdir``: the MUD says that exit doesn't exist. Stop walking.
 
@@ -114,7 +127,6 @@ class WalkingMixin:
             self.nav.record(direction)
         return True
 
-    # --- room map ---
 
     def _goto(self, query: str) -> None:
         """Walk to a mapped room named by ``query``, step by step so it can halt."""

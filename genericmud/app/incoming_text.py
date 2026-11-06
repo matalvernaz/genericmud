@@ -96,7 +96,23 @@ def _link_positions(
 
 
 class IncomingTextMixin:
-    # --- inbound from the MUD (telnet events) ---
+    """MUD text from telnet bytes through markup, triggers, logs, speech and output.
+
+    Part of EngineApp (engine_app.py). Every attribute below starts in its constructor.
+
+    Writes: _msdp_offered, _msp_url, _mxp, _mxp_held_lines, _mxp_join, _mxp_join_images,
+    _mxp_join_links, _mxp_negotiated, _mxp_timer_armed, _mxp_timer_token, _pending, _prompt_gen,
+    _pueblo_image_noted, _pueblo_links_noted.
+
+    Reads: _closed, _diag, _login, _mush_packs, _password_guard, _post, _pueblo, _raw_send,
+    _schedule, _walk, buffer, channels, codec, engine, images_url, interrupt_mode, media,
+    mxp_enabled, pueblo_enabled, sound, voice, word_index.
+
+    Calls: autologin (_mxp_login, _send_post_connect, _set_input_masked), mud_data
+    (_dispatch_msdp_start, _handle_subnegotiation), server_media (_start_media, _stop_media),
+    session_log (_log).
+    """
+
 
     def on_telnet_event(self, event: T.Event) -> None:
         if isinstance(event, T.DataReceived):

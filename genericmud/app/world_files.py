@@ -16,7 +16,19 @@ from genericmud.voice.router import SYSTEM_CHANNEL
 
 
 class WorldFilesMixin:
-    # --- user rules (the no-code soundpack builder) ---
+    """This world's rules, scripts, room map and saved soundpack variables.
+
+    Part of EngineApp (engine_app.py). Every attribute below starts in its constructor.
+
+    Writes: _map_unsaved, _user_script_generation, _user_script_runtimes, map.
+
+    Reads: _diag, _other_worlds, _vip_packs, _world_paths, engine, map_dir, name, packs, voice.
+
+    Calls: nothing outside.
+
+    _map_unsaved is shared: walking counts new rooms; world_files resets it after saving.
+    """
+
 
     def user_rules_dir(self) -> Path | None:
         """This world's user-pack dir (rules, sounds, and scripts); None headless."""
@@ -137,9 +149,7 @@ class WorldFilesMixin:
             )
         return True
 
-    # --- pack-variable persistence (MUSHclient SaveState equivalent) ---
 
-    # --- room map ---
 
     def _map_path(self) -> Path | None:
         """This world's map file, or None for a session with no name to file it under."""

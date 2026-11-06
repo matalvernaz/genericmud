@@ -17,6 +17,18 @@ def _files(count: int) -> str:
 
 
 class SessionLogMixin:
+    """Session log files, spoken log locations and the diagnostic summary.
+
+    Part of EngineApp (engine_app.py). Every attribute below starts in its constructor.
+
+    Writes: logger.
+
+    Reads: _diag, _diag_backend_kind, _last_activation, _post, engine, log_dir, log_files, name,
+    sink, voice.
+
+    Calls: _speak_system.
+    """
+
     def _speak_logs(self) -> None:
         """`/logs`: where each kind of log is kept, and how many are in each folder.
 

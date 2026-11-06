@@ -24,6 +24,18 @@ _ALLOWED_LOW_PORTS = frozenset({443})
 
 
 class MudDataMixin:
+    """GMCP, MSDP and MSSP data, soundpack notifications and encrypted-port offers.
+
+    Part of EngineApp (engine_app.py). Every attribute below starts in its constructor.
+
+    Writes: _msdp_routed, _secure_port.
+
+    Reads: _diag, _gauges, _mush_packs, _post, _suppress_reconnect, _world_port, _world_tls, codec,
+    engine, pack_window, sink, voice.
+
+    Calls: _speak_system, server_media (_client_media), walking (_update_room, _wrong_direction).
+    """
+
     def variable_listing(self) -> tuple[list[VariableEntry], bool]:
         """Every value this session knows, for the MUD Variables dialog and the picker.
 

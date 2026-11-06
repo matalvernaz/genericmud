@@ -66,7 +66,18 @@ def _media_timing(body: dict) -> CueTiming | None:
 
 
 class ServerMediaMixin:
-    # --- server media (MSP U= and GMCP Client.Media) ---
+    """Sounds and music requested by the server through MSP or GMCP Client.Media.
+
+    Part of EngineApp (engine_app.py). Every attribute below starts in its constructor.
+
+    Writes: _media_facing, _media_seq, _media_url.
+
+    Reads: _diag, _media_cues, _media_gen, _native_audio, _post, download_media, engine, media,
+    packs, sink, sound.
+
+    Calls: nothing outside.
+    """
+
 
     def _start_media(
         self, name: str, url: str, channel: str, play: Callable[[str], None]

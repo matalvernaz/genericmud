@@ -37,6 +37,19 @@ _TOGGLE_ACTIONS = {
 
 
 class KeyActionsMixin:
+    """Review keys, Find, channel history, clipboard requests and speech toggles.
+
+    Part of EngineApp (engine_app.py). Every attribute below starts in its constructor.
+
+    Writes: none.
+
+    Reads: _post, buffer, chan_review, engine, keymap, map, pref_sink, review, sound, voice (and
+    follow_mode, interrupt_mode, autoretype by name in _toggle).
+
+    Calls: _speak_system, links (_activate_link, _announce_link_under_cursor, _jump_to_link),
+    autologin (_unhide_on_request), session_log (_diag_where, _toggle_log), walking (_handle_nav).
+    """
+
     def _handle_find(self, message: dict) -> None:
         """Search the scrollback and park the review cursor on the hit.
 
