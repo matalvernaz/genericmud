@@ -1,3 +1,5 @@
+"""Session log files, spoken log locations and the diagnostic summary."""
+
 from __future__ import annotations
 
 from datetime import datetime

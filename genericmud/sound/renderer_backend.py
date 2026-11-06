@@ -1,3 +1,5 @@
+"""The web window's sound backend: post playback requests to the renderer."""
+
 from __future__ import annotations
 
 from genericmud.bridge import protocol

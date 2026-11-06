@@ -1,3 +1,5 @@
+"""Review keys, Find, channel history, clipboard requests and speech toggles."""
+
 from __future__ import annotations
 
 from genericmud.bridge import protocol

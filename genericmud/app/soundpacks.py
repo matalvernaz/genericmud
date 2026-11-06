@@ -1,3 +1,5 @@
+"""Soundpack loading, connection and focus hooks, ticks, saved state and updates."""
+
 from __future__ import annotations
 
 import traceback

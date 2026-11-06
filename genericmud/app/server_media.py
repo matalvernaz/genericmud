@@ -1,3 +1,5 @@
+"""Sounds and music requested by the server through MSP or GMCP Client.Media."""
+
 from __future__ import annotations
 
 from collections.abc import Callable

@@ -1,7 +1,8 @@
-"""EngineApp, one world's session: the engine between the MUD's connection and the window.
+"""One world's session, connecting the MUD, automation, sound and the window.
 
-It is defined in engine_app.py. Import it from here, as `from genericmud.app import EngineApp`.
-"""
+Import EngineApp from this package. Its constructor and connection lifecycle live in
+engine_app.py; the sibling modules hold its methods grouped by job. Each mixin documents the
+state it uses from EngineApp.__init__. The automation engine's side effects go through sink.py."""
 
 from genericmud.app.engine_app import EngineApp
 
