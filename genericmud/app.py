@@ -50,6 +50,8 @@ from genericmud.protocol.charset import AUTO, ServerTextCodec
 from genericmud.protocol.msp import SoundCue, parse_msp_line
 from genericmud.protocol.mxp import IMAGE_MARK, MxpParser, resolve_image_url
 from genericmud.protocol.oob import OobMessage, ServerStatus, from_subnegotiation
+from genericmud.protocol.pueblo import CLIENT_LINE as PUEBLO_CLIENT_LINE
+from genericmud.protocol.pueblo import PuebloParser
 from genericmud.render.ansi import parse_ansi
 from genericmud.review.channels import ChannelReview
 from genericmud.review.cursor import ReviewCursor
@@ -485,6 +487,7 @@ class EngineApp:
         connect_method: str = DEFAULT_CONNECT_METHOD,
         post_connect_commands: str = "",
         mxp: bool = True,
+        pueblo: bool = False,
         other_worlds: Callable[[], Iterable[str]] | None = None,
         clock: Callable[[], float] | None = None,
         withdraw_option: Callable[[int], None] | None = None,
@@ -609,6 +612,13 @@ class EngineApp:
         # Where an <IMAGE> without a URL argument looks for its file. Most MUDs expect the
         # client to have this configured, the same way MSP's U= expects a sounds location.
         self.images_url = ""
+        # Pueblo's HTML is read here too. Off unless the world asked for it: switching it on is
+        # what makes the client announce itself, and a world that does not speak Pueblo reads
+        # that announcement as a character name at its login screen.
+        self.pueblo_enabled = pueblo
+        self._pueblo = PuebloParser()
+        self._pueblo_links_noted = False  # the first offered link is logged, once
+        self._pueblo_image_noted = False  # and so is the first picture or sound
         self._mxp = MxpParser()
         self._mxp_join = ""  # text held across lines by <NOBR> or an open <P>
         # Whether this connection's server has offered MXP (IAC WILL MXP). The world's setting
@@ -758,6 +768,7 @@ class EngineApp:
         # MXP is parsed here, not by the window, so switching it off for a world that is already
         # open can take effect at once: no reconnect needed to stop seeing its markup.
         self.mxp_enabled = world.mxp
+        self.pueblo_enabled = world.pueblo
         self.images_url = world.images_url
 
     def on_connect(self, world: str, *, socket_open: bool = True) -> ActivationResult | None:
@@ -775,6 +786,10 @@ class EngineApp:
         self._mxp_negotiated = False
         self._mxp = MxpParser()
         self._release_mxp_hold()
+        # And Pueblo from nothing: a new socket has to switch its output to HTML again.
+        self._pueblo = PuebloParser()
+        self._pueblo_links_noted = False
+        self._pueblo_image_noted = False
         self._media_facing = 0.0  # facing north again until this connection's MUD says otherwise
         if self.hub is not None and self.name:
             self.hub.register(self.name, self._dispatch_remote)
@@ -1285,6 +1300,13 @@ class EngineApp:
         Both reconnect paths reach this through :meth:`after_reconnect`; a first connection
         reaches it from the window, which is the only place that knows the transport opened.
         """
+        if self.pueblo_enabled:
+            # First, before any login or after-connect line: the world has to know what kind of
+            # client is on the other end before it writes its greeting. Its own answer -- the
+            # switch to HTML -- tells the parser when to start reading it.
+            if self._diag is not None:
+                self._diag.event("pueblo.announce", version=PUEBLO_CLIENT_LINE)
+            self._send(PUEBLO_CLIENT_LINE)
         for line in self._pending_login:
             self._send_for_login(line)
         self._pending_login = []
@@ -1550,7 +1572,18 @@ class EngineApp:
             pass  # a dead socket must not break the line that provoked the question
 
     def _emit_line(self, text: str) -> None:
-        # Strip MXP markup before anything reads it; links and images ride along with the text.
+        # Strip markup before anything reads it; links and images ride along with the text.
+        if self.pueblo_enabled:
+            # Pueblo's HTML replaces MXP rather than nesting inside it: a world that switches
+            # to HTML is not speaking MXP, and one line of it can be several lines of text.
+            was_active = self._pueblo.active
+            for piece in self._pueblo.feed(text):
+                self._note_pueblo_links(piece.links)
+                self._emit_parsed_line(piece.text, links=list(piece.links))
+            if was_active != self._pueblo.active and self._diag is not None:
+                self._diag.event("pueblo.mode", html=self._pueblo.active)
+            self._note_pueblo_image()
+            return
         text, mxp_cues, links, images = self._mxp_feed(text)
         self._emit_parsed_line(text, mxp_cues, links, images)
 
@@ -1680,6 +1713,31 @@ class EngineApp:
                     images=shown if line.substitute is None else [],
                 )
             )
+
+    def _note_pueblo_links(self, links: tuple[Link, ...]) -> None:
+        """Note the first command link a world offers, once per connection.
+
+        "My exits are not followable" has two very different answers -- the world writes them
+        as plain words, or it writes them as links this client dropped -- and one line in the
+        diagnostics tells them apart without a session of guessing.
+        """
+        if not links or self._pueblo_links_noted or self._diag is None:
+            return
+        self._pueblo_links_noted = True
+        self._diag.event("pueblo.links", first=links[0].command, count=len(links))
+
+    def _note_pueblo_image(self) -> None:
+        """Note the first picture or sound a world sends, once per connection.
+
+        Nothing here shows or plays one yet, and that is the point of noting it: "my MUD's
+        pictures are missing" and "my MUD sends no pictures" are different reports, and a reader
+        who hears neither cannot tell them apart. One line answers it.
+        """
+        source = self._pueblo.first_image
+        if not source or self._pueblo_image_noted or self._diag is None:
+            return
+        self._pueblo_image_noted = True
+        self._diag.event("pueblo.image", src=source)
 
     def _handle_subnegotiation(self, sub: T.Subnegotiation) -> None:
         result = from_subnegotiation(
@@ -2905,15 +2963,15 @@ class EngineApp:
         if not command.strip():
             return
         if self._diag is not None:
-            self._diag.event(
-                "mxp.link", text=text, command=command, insert=insert, hint=hint
-            )
+            # Not "mxp.link": a link can come from Pueblo's <a xch_cmd> too, and this is the one
+            # place every markup's links are followed from.
+            self._diag.event("link.follow", text=text, command=command, insert=insert, hint=hint)
         if insert:
             refusal = self._typed_link_refusal(command)
             if refusal is not None:
                 if self._diag is not None:
                     self._diag.event(
-                        "mxp.link_refused", text=text, command=command, reason=refusal
+                        "link.refused", text=text, command=command, reason=refusal
                     )
                 self._speak_system(f"Link not followed: {refusal}.")
                 return
@@ -3108,6 +3166,9 @@ class EngineApp:
         self._mxp_negotiated = False
         self._mxp = MxpParser()
         self._release_mxp_hold()
+        self._pueblo = PuebloParser()  # and Pueblo waits to be told again
+        self._pueblo_links_noted = False
+        self._pueblo_image_noted = False
         self._media_facing = 0.0  # and the player faces north until the MUD says otherwise
         # Echo state belongs to the dead socket: no WONT ECHO is coming for it. Through
         # forget_hidden_input, as on_connection_status does, so the window's history and

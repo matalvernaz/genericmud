@@ -71,6 +71,11 @@ class World:
     # sending MXP reads as ordinary text; off is the escape hatch for a server that sends
     # something this parser gets wrong.
     mxp: bool = True
+    # Understand Pueblo's HTML. Off by default, and unlike MXP that is the point: turning it on
+    # makes the client type a PUEBLOCLIENT line at the login screen, where a world that does
+    # not speak Pueblo reads it as a character name. So it is switched on for a world known to
+    # want it, never for the next world by accident.
+    pueblo: bool = False
     # Where an <IMAGE> looks for its file when the tag carries no URL of its own. Most MUDs
     # expect the client to have this configured, the same way MSP's U= expects a sounds
     # location -- without one an image can't be located, and is quietly dropped.
@@ -219,6 +224,7 @@ def load_worlds(path: Path | None = None) -> list[World]:
                     entry.get("post_connect_commands")
                 ),
                 mxp=entry.get("mxp") is not False,
+                pueblo=entry.get("pueblo") is True,
                 images_url=normalize_images_url(entry.get("images_url")),
             )
         )
@@ -268,6 +274,8 @@ def save_worlds(worlds: list[World], path: Path | None = None) -> None:
             lines.append(f"post_connect_commands = [{items}]")
         if not world.mxp:
             lines.append("mxp = false")
+        if world.pueblo:
+            lines.append("pueblo = true")
         if world.images_url:
             lines.append(f"images_url = {_quote(world.images_url)}")
         blocks.append("\n".join(lines))

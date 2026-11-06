@@ -493,6 +493,7 @@ class SessionPanel(wx.Panel):
             connect_method=self.world.connect_method,
             post_connect_commands=self.world.post_connect_commands,
             mxp=self.world.mxp,
+            pueblo=self.world.pueblo,
             other_worlds=lambda: [world.name for world in load_worlds()],
         )
         self.app.on_focus_changed(self._focused)  # what the window said before this existed
@@ -1501,6 +1502,7 @@ class SessionPanel(wx.Panel):
             connect_method=world.connect_method,
             post_connect_commands=world.post_connect_commands,
             mxp=world.mxp,
+            pueblo=world.pueblo,
             download_sounds=world.download_sounds,
         )
         if self.app is not None:
@@ -2195,6 +2197,11 @@ class WorldDialog(wx.Dialog):
         self._mxp.SetName("Understand MXP markup")
         self._mxp.SetValue(True)
         grid.Add(self._mxp, 1, wx.EXPAND)
+        # Off by default: turning it on makes the client announce itself as a Pueblo client at
+        # the login screen, and a world that does not speak Pueblo reads that as a name.
+        self._pueblo = wx.CheckBox(self, label="Understand Pue&blo HTML")
+        self._pueblo.SetName("Understand Pueblo HTML")
+        grid.Add(self._pueblo, 1, wx.EXPAND)
         # Where <IMAGE> looks for a file when the tag names no address of its own. Most MUDs
         # expect the client to be told this; without it an image can't be found, so it's
         # skipped -- which is also what MUSHclient does with an address-less image.
@@ -2375,6 +2382,7 @@ class WorldDialog(wx.Dialog):
                 self._password.SetValue(stored[1])
                 self._password_plain.SetValue(stored[1])
             self._mxp.SetValue(initial.mxp)
+            self._pueblo.SetValue(initial.pueblo)
             self._images_url.SetValue(initial.images_url)
         if lock_name:
             self._name.Enable(False)
@@ -2438,6 +2446,7 @@ class WorldDialog(wx.Dialog):
             connect_method=_CONNECT_LABELS[self._connect.GetSelection()][0],
             post_connect_commands=self._post_connect.GetValue(),
             mxp=self._mxp.GetValue(),
+            pueblo=self._pueblo.GetValue(),
             images_url=self._images_url.GetValue().strip(),
         )
         try:
