@@ -87,9 +87,10 @@ SCRIPTING = """\
 Automation and Lua scripting
 
 Start here:
-Connect to the saved world you want to change. Press Ctrl+B or open the
-Automation menu and choose Manage automation. In the Show box, choose Triggers,
-Aliases, Hotkeys, Channels, or Scripts. They are categories in one manager.
+Connect to the saved world you want to change, or delete it from the same dialog.
+Press Ctrl+B or open the Automation menu and choose Manage automation. In the Show
+box, choose Triggers, Aliases, Hotkeys, Channels, or Scripts. They are categories in
+one manager.
 
 Make an alias without code:
 Show Aliases and choose New. In When I type, enter combo *. In Commands to send,
