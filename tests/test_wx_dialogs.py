@@ -605,9 +605,9 @@ def test_a_packs_question_is_shown_on_the_ui_thread_and_answered_to_the_loop_thr
 
 
 def test_an_unanswered_question_gives_up_as_cancelled(frame, monkeypatch):
-    from genericmud.ui import session_panel
+    from genericmud.ui import pack_window
 
-    monkeypatch.setattr(session_panel, "_PACK_QUESTION_SHOW_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(pack_window, "_PACK_QUESTION_SHOW_TIMEOUT_S", 0.05)
     panel, loop = _question_panel(frame, monkeypatch)
     try:
         request = {"kind": "text", "title": "Name", "prompt": "Name?", "default": "",
@@ -657,9 +657,9 @@ def test_the_world_is_named_on_a_question_when_several_are_open(frame, monkeypat
 
 
 def test_the_asking_packs_timers_get_their_turns_while_it_waits(frame, monkeypatch):
-    from genericmud.ui import session_panel
+    from genericmud.ui import pack_window
 
-    monkeypatch.setattr(session_panel, "_PACK_QUESTION_SHOW_TIMEOUT_S", 0.3)
+    monkeypatch.setattr(pack_window, "_PACK_QUESTION_SHOW_TIMEOUT_S", 0.3)
     panel, loop = _question_panel(frame, monkeypatch)
     try:
         turns: list[int] = []
@@ -678,9 +678,9 @@ def test_a_question_on_screen_isnt_given_up_on_like_one_that_never_appeared(
 ):
     import time
 
-    from genericmud.ui import pack_dialogs, session_panel
+    from genericmud.ui import pack_dialogs, pack_window
 
-    monkeypatch.setattr(session_panel, "_PACK_QUESTION_SHOW_TIMEOUT_S", 0.2)
+    monkeypatch.setattr(pack_window, "_PACK_QUESTION_SHOW_TIMEOUT_S", 0.2)
 
     def slow_reader(dialog):
         time.sleep(0.6)  # reading Cosmic Rage's paragraphs
