@@ -4977,7 +4977,9 @@ class GenericMudFrame(wx.Frame):
         finally:
             dialog.Destroy()
         self._apply_to_open_tabs(world.name, edited)
-        if edited.name.casefold() != world.name.casefold():
+        # Exact, not folded: a change of case is a rename too, and on Linux the files under the
+        # old spelling would no longer be found under the new one.
+        if edited.name != world.name:
             moved, left = self._move_world_files(world.name, edited.name)
             self._rename_open_tabs(world.name, edited.name)
             if moved:
@@ -5012,7 +5014,7 @@ class GenericMudFrame(wx.Frame):
         """
         old = world_component(old_name)
         new = world_component(new_name)
-        if old.casefold() == new.casefold():
+        if old == new:
             return [], []
         root = config_dir()
         moved: list[str] = []
@@ -5022,7 +5024,9 @@ class GenericMudFrame(wx.Frame):
             if not source.exists():
                 continue
             target = root / folder / f"{new}{suffix}"
-            if target.exists():
+            # On Windows and macOS a change of case names the same file: that is this world's
+            # own file being respelled, not another world's in the way.
+            if target.exists() and not source.samefile(target):
                 left.append(_WORLD_FILE_WORDS.get(folder, folder))
                 continue
             try:
@@ -5036,6 +5040,7 @@ class GenericMudFrame(wx.Frame):
 
     def _rename_open_tabs(self, old_name: str, new_name: str) -> None:
         """Let a disconnected tab take the world's new name, label and all."""
+        followed = False
         for index in range(self.book.GetPageCount()):
             panel = self.book.GetPage(index)
             panel_world = getattr(panel, "world", None)
@@ -5043,10 +5048,14 @@ class GenericMudFrame(wx.Frame):
                 continue
             panel.take_world_name(new_name)
             self.book.SetPageText(index, new_name)
+            followed = True
         self._update_title()
-        self.announce(
-            f"Renamed {old_name} to {new_name}. Its tab follows on the next connection."
-        )
+        if followed:
+            self.announce(
+                f"Renamed {old_name} to {new_name}. Its tab follows on the next connection."
+            )
+        else:
+            self.announce(f"Renamed {old_name} to {new_name}.")
 
     def _apply_to_open_tabs(self, name: str, world: World) -> None:
         """An edited world's command stacking and logging take effect in its open tabs at
