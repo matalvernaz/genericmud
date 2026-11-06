@@ -41,7 +41,7 @@ class KeyActionsMixin:
 
     Part of EngineApp (engine_app.py). Every attribute below starts in its constructor.
 
-    Writes: none.
+    Writes: follow_mode, interrupt_mode, autoretype (by name in _toggle).
 
     Reads: _post, buffer, chan_review, engine, keymap, map, pref_sink, review, sound, voice (and
     follow_mode, interrupt_mode, autoretype by name in _toggle).
