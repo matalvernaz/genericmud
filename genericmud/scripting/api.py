@@ -557,11 +557,12 @@ class ScriptApi:
         self._engine.remove_trigger(name)
 
     def add_data_watch(
-        self, path: str, callback: Callable[[str, object], None], *, only_changes: bool = False
+        self, path: str, callback: Callable[[str, object], None], *, only_changes: bool = False,
+        group: str = "",
     ):
         """Hear when the MUD sends data at ``path``; see AutomationEngine.add_data_watch."""
         return self._engine.add_data_watch(
-            path, callback, only_changes=only_changes, source=self._source
+            path, callback, only_changes=only_changes, source=self._source, group=str(group)
         )
 
     def add_alias(self, pattern: str, callback: Callback, **opts: object):
@@ -573,8 +574,8 @@ class ScriptApi:
         """Drop a previously-registered alias by name."""
         self._engine.remove_alias(name)
 
-    def add_key(self, key: str, callback: Callback) -> None:
-        self._engine.add_key(key, callback, source=self._source)
+    def add_key(self, key: str, callback: Callback, *, group: str = "") -> None:
+        self._engine.add_key(key, callback, source=self._source, group=str(group))
 
     def remove_key(self, key: str) -> None:
         """Drop this source's binding of ``key``."""

@@ -150,14 +150,15 @@ line handling, or channel routing you need, then choose OK. Leave this line out 
 session log is separate from hiding it: the line still works as it did, it just never
 reaches the file, which is how a repeating notice stops filling the record.
 
-A rule can have a name, a group, and an order. The Label is the name a script turns
-that one rule off and on by, with mud.set_enabled. The Group switches every rule that
-shares it together, with mud.set_group_enabled, which is how all the combat rules go
-off in one call. Order decides which is tried first when several match: the lower
-number first, and equal numbers fall back to the pattern text. Keep checking the rules
-after this one is on by default -- every matching rule acts -- and clearing it makes
-that rule the last one heard about the line. A player rule that stops the search never
-silences a soundpack.
+A trigger or alias can have a name, a group, and an order. The Label is the name a
+script turns that one rule off and on by, with mud.set_enabled. The Group switches every
+rule that shares it together, with mud.set_group_enabled, which is how all the combat
+rules go off in one call; every kind of rule takes one, so a hotkey, a timer and a MUD
+data rule can be in the same group as the triggers. Order decides which is tried first
+when several match: the lower number first, and equal numbers fall back to the pattern
+text. Keep checking the rules after this one is on by default -- every matching rule acts
+-- and clearing it makes that rule the last one heard about the line. A player rule that
+stops the search never silences a soundpack.
 
 A timer (Timers in the Automation Manager) acts on a clock rather than on a line:
 every so often, or once a day at a time such as 03:00. What it does is the same

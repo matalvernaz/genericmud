@@ -133,6 +133,7 @@ class UserKey:
     send: str = ""
     speak: str = ""  # e.g. "${mud:Char.Vitals.hp} health": a key that reads a value
     sound: str = ""  # pack-relative one-shot cue
+    group: str = ""  # as for triggers: switched together with the rest of its group
     enabled: bool = True
 
 
@@ -185,6 +186,7 @@ class UserWatch:
     # read out two hundred times when it hasn't moved.
     only_changes: bool = True
     sound: str = ""  # pack-relative one-shot cue
+    group: str = ""  # as for triggers: switched together with the rest of its group
     volume: int = 100  # 0..100
     pan: int = 0  # -100 (left) .. 100 (right)
     speak: str = ""  # ${value} and ${name}, plus ${mud:x} and ${script:x}
@@ -828,7 +830,9 @@ def _register_watch(api: ScriptApi, w: UserWatch) -> None:
             api.speak(_speech(api, w.speak, ctx), interrupt=w.interrupt)
         send_commands(ctx)
 
-    api.add_data_watch(w.name.strip(), fire, only_changes=w.only_changes)
+    api.add_data_watch(
+        w.name.strip(), fire, only_changes=w.only_changes, group=w.group.strip()
+    )
 
 
 def _register_key(api: ScriptApi, k: UserKey) -> None:
@@ -841,4 +845,4 @@ def _register_key(api: ScriptApi, k: UserKey) -> None:
             api.speak(_speech(api, k.speak), channel=_KEY_REPLY_CHANNEL, interrupt=True)
         send_commands()
 
-    api.add_key(k.key, fire)
+    api.add_key(k.key, fire, group=k.group.strip())

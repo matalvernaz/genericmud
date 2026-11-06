@@ -310,6 +310,22 @@ class _NamedTimer:
 
 
 @dataclass
+class _KeyBinding:
+    """One source's binding of a key combo (see :meth:`AutomationEngine.add_key`).
+
+    ``_keys`` holds the effective binding per combo: the last *enabled* one, so switching a
+    group off lets the combo fall back to whatever owned it before -- as if that source had
+    never bound it, which is what MUDclient's EnableGroup does to an accelerator.
+    """
+
+    key: str
+    source: str
+    callback: Callback
+    group: str = ""
+    enabled: bool = True
+
+
+@dataclass
 class _PendingTimer:
     """One scheduled callback the engine holds a handle for, so it can be taken back.
 
@@ -350,6 +366,8 @@ class _DataWatch:
     only_changes: bool = False
     source: str = ""
     last: object = _UNSEEN
+    group: str = ""  # switched with the rest of its group (set_group_enabled)
+    enabled: bool = True  # a group can turn this watch off without unregistering it
 
 
 def _walk(value: object, parts: tuple[str, ...]) -> tuple[bool, object]:
@@ -393,9 +411,10 @@ class AutomationEngine:
         self._named_timers: list[_NamedTimer] = []  # named timers, findable by name and group
         self._triggers: list[_Rule] = []
         self._aliases: list[_Rule] = []
-        self._keys: dict[str, Callback] = {}  # effective binding (last writer wins)
-        # (key, source, callback) log: conflict reports + replay-rebuild on remove_source.
-        self._key_bindings: list[tuple[str, str, Callback]] = []
+        self._keys: dict[str, Callback] = {}  # effective binding (last enabled writer wins)
+        # Every binding, in registration order: conflict reports, replay on remove_source, and
+        # the enabled flag a group switches.
+        self._key_bindings: list[_KeyBinding] = []
         self._vars: dict[str, str] = {}
         self.vars_version = 0  # goes up whenever a variable changes; readers cache by it
         self._gvars: dict[str, str] = {}
@@ -569,6 +588,15 @@ class AutomationEngine:
             if timer.group == group:
                 timer.set_enabled(enabled)
                 changed += 1
+        for binding in self._key_bindings:
+            if binding.group == group:
+                binding.enabled = enabled
+                changed += 1
+        self._rebuild_keys()  # a combo whose binding went off falls back to an earlier owner
+        for watch in self._data_watches:
+            if watch.group == group:
+                watch.enabled = enabled
+                changed += 1
         return changed
 
     def set_enabled(self, name: str, enabled: bool) -> bool:
@@ -581,7 +609,9 @@ class AutomationEngine:
         if not name:
             return False
         found = False
-        for rule in [*self._triggers, *self._aliases, *self._keys]:
+        # Hotkeys are not in this sweep: a binding has no name to be switched by, and
+        # iterating the effective dict would hand ``rule.name`` a plain string.
+        for rule in [*self._triggers, *self._aliases]:
             if rule.name == name:
                 rule.enabled = enabled
                 found = True
@@ -595,21 +625,29 @@ class AutomationEngine:
     def remove_alias(self, name: str) -> None:
         self._aliases = [rule for rule in self._aliases if rule.name != name]
 
-    def add_key(self, key: str, callback: Callback, *, source: str = "") -> None:
-        self._keys[key.lower()] = callback
-        self._key_bindings.append((key.lower(), source, callback))
+    def add_key(
+        self, key: str, callback: Callback, *, source: str = "", group: str = ""
+    ) -> None:
+        """Bind a combo. ``group`` lets one EnableGroup switch it with the other rules."""
+        self._key_bindings.append(_KeyBinding(key.lower(), source, callback, group))
+        self._rebuild_keys()
+
+    def _rebuild_keys(self) -> None:
+        """The effective binding per combo: the last enabled one, in registration order."""
+        keys: dict[str, Callback] = {}
+        for binding in self._key_bindings:
+            if binding.enabled:
+                keys[binding.key] = binding.callback
+        self._keys = keys  # replaced, not mutated: has_key reads it from another thread
 
     def remove_key(self, key: str, *, source: str = "") -> None:
         """Drop one source's bindings of ``key``; an earlier owner's binding comes back."""
         key = key.lower()
         self._key_bindings = [
-            binding for binding in self._key_bindings if binding[:2] != (key, source)
+            binding for binding in self._key_bindings
+            if (binding.key, binding.source) != (key, source)
         ]
-        survivors = [callback for bound, _source, callback in self._key_bindings if bound == key]
-        if survivors:
-            self._keys[key] = survivors[-1]
-        else:
-            self._keys.pop(key, None)
+        self._rebuild_keys()
 
     def registrations_by_source(self) -> dict[str, dict[str, list[str]]]:
         """Every trigger/alias/key grouped by the pack that registered it.
@@ -626,8 +664,8 @@ class AutomationEngine:
             bucket(rule.source)["trigger"].append(rule.pattern.pattern)
         for rule in self._aliases:
             bucket(rule.source)["alias"].append(rule.pattern.pattern)
-        for key, source, _callback in self._key_bindings:
-            bucket(source)["key"].append(key)
+        for binding in self._key_bindings:
+            bucket(binding.source)["key"].append(binding.key)
         return reg
 
     # --- variables ---
@@ -647,11 +685,13 @@ class AutomationEngine:
         """
         self._triggers = [rule for rule in self._triggers if rule.source != source]
         self._aliases = [rule for rule in self._aliases if rule.source != source]
-        if any(bind_source == source for _key, bind_source, _cb in self._key_bindings):
-            self._key_bindings = [b for b in self._key_bindings if b[1] != source]
+        if any(binding.source == source for binding in self._key_bindings):
+            self._key_bindings = [
+                binding for binding in self._key_bindings if binding.source != source
+            ]
             # Replay the surviving bindings in order: last writer wins again, and a
             # combo the removed source had shadowed falls back to the earlier owner.
-            self._keys = {key: callback for key, _source, callback in self._key_bindings}
+            self._rebuild_keys()
         self._data_watches = [watch for watch in self._data_watches if watch.source != source]
         self.channels.remove_source(source)
         self.cancel_source_timers(source)
@@ -744,6 +784,7 @@ class AutomationEngine:
         *,
         only_changes: bool = False,
         source: str = "",
+        group: str = "",
     ) -> _DataWatch:
         """Call ``callback(name, value)`` whenever the MUD sends data at ``path``.
 
@@ -762,7 +803,7 @@ class AutomationEngine:
             raise ValueError("no MUD data name to watch")
         watch = _DataWatch(
             ".".join(parts), tuple(part.casefold() for part in parts), protocol, callback,
-            only_changes, source,
+            only_changes, source, group=str(group),
         )
         self._data_watches.append(watch)
         return watch
@@ -774,6 +815,8 @@ class AutomationEngine:
         message = tuple(part.casefold() for part in name.split("."))
         self._data_times[name.casefold()] = time.monotonic()
         for watch in list(self._data_watches):
+            if not watch.enabled:
+                continue  # its group is switched off for now
             if watch.protocol is not None and watch.protocol != protocol.casefold():
                 continue
             heard = _heard(watch, message, name, value)
