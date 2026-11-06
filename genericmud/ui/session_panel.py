@@ -1,3 +1,9 @@
+"""One world's tab: its output box and command box, wired to that world's engine.
+
+SessionPanel builds the tab and keeps its state. Its work is spread over four mixins, each in its
+own module: session_connection, command_box, output_box and pack_window.
+"""
+
 from __future__ import annotations
 
 import asyncio

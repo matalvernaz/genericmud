@@ -1,3 +1,5 @@
+"""Browse soundpacks on mudsoundpack.com, download one and set it up."""
+
 from __future__ import annotations
 
 import shutil

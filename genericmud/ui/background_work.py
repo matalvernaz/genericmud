@@ -1,3 +1,5 @@
+"""Run slow work off the window's thread and hand its result back, so the window never freezes."""
+
 from __future__ import annotations
 
 import threading

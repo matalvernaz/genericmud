@@ -1,3 +1,9 @@
+"""A tab's engine and connection, run on the loop thread.
+
+Starting the engine, sending, disconnecting and reconnecting, moving to an encrypted port the MUD
+offers, and closing the tab.
+"""
+
 from __future__ import annotations
 
 import asyncio

@@ -1,3 +1,8 @@
+"""The output box: adding the MUD's text without moving the reader, Find, and following links.
+
+Also the MXP menus and copying all or part of a line.
+"""
+
 from __future__ import annotations
 
 import wx

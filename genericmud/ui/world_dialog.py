@@ -1,3 +1,8 @@
+"""The world dialog: add or edit one world's connection, login, logging and sound settings.
+
+Its OK button saves, connects, or both, whichever the player chose.
+"""
+
 from __future__ import annotations
 
 from collections.abc import Callable

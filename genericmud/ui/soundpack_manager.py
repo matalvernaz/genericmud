@@ -1,3 +1,5 @@
+"""Installed soundpacks: install, enable, trust, uninstall, check and update them per world."""
+
 from __future__ import annotations
 
 import traceback

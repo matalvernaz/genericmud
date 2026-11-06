@@ -1,3 +1,9 @@
+"""The windows a soundpack can open: a notepad, a question, and a message box.
+
+Also the record of a question a pack's script is waiting on, which the loop thread asks and the
+window's thread answers.
+"""
+
 from __future__ import annotations
 
 import threading

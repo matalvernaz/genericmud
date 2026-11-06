@@ -1,3 +1,8 @@
+"""What soundpack scripts can ask of the window, as MUSHclient lets them.
+
+The clipboard, the command box, opening links, notepads, questions and message boxes.
+"""
+
 from __future__ import annotations
 
 import concurrent.futures

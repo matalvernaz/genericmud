@@ -1,3 +1,5 @@
+"""Read and write the system clipboard, from the window's thread."""
+
 from __future__ import annotations
 
 import wx

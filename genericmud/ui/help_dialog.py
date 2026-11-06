@@ -1,3 +1,5 @@
+"""The help window: one page of plain text, read line by line, and a Close button."""
+
 from __future__ import annotations
 
 import wx

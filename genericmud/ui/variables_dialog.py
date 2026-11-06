@@ -1,3 +1,5 @@
+"""The MUD variables window: every value a world knows, to read, copy or watch."""
+
 from __future__ import annotations
 
 from collections.abc import Callable

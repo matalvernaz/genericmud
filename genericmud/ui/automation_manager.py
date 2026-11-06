@@ -1,3 +1,8 @@
+"""The Automation Manager: a world's triggers, aliases, hotkeys, channels, scripts and MUD data.
+
+All six kinds in one dialog, with the script editor it opens.
+"""
+
 from __future__ import annotations
 
 from dataclasses import replace

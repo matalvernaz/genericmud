@@ -1,3 +1,5 @@
+"""The small dialogs the output box opens: Find, copy from a line, and an MXP menu."""
+
 from __future__ import annotations
 
 import wx

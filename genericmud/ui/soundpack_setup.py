@@ -1,3 +1,8 @@
+"""The main window's soundpack setup: from a folder or the online browser, then connecting.
+
+A set-up pack's world is confirmed in the world dialog before anything connects.
+"""
+
 from __future__ import annotations
 
 import wx
