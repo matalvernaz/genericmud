@@ -116,7 +116,9 @@ ports map through native range APIs to account for CRLF. On Windows, a partial
 CRLF and a complete CRLF can read as the same normalized prefix; conversion uses
 the last matching native position so insertion never splits that separator. A first-row Escape request
 inside a CRLF is normalized to a valid caret rather than deliberately splitting a
-native separator. Other native editing/undo details can vary by platform.
+native separator. Editable Output-to-Entry typing joins Windows UTF-16 surrogate pairs before moving
+focus, while ports delivering a complete Unicode scalar keep the one-event path.
+Other native editing/undo details can vary by platform.
 
 Automated genericMud checks on macOS use real wxPython 4.2.5 / wxWidgets 3.2.9 Cocoa
 controls and focus, with synthetic key/character/submission events and deterministic

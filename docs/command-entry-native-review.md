@@ -190,3 +190,14 @@ command_box, output_box, pack_window and main_window instead of retaining old
 classes in wx_app. Standard's control and dispatch path remain the upstream ones.
 Cross-platform automated results and the exact test-build source are recorded in
 PR #74 and BUILD-INFO.txt; screen-reader/IME validation remains outstanding.
+
+After the CRLF correction, Windows reached a previously unexecuted synthetic focus
+case. SetUnicodeKey(0x1F409) returned 0xF409 because wx.KeyEvent's Windows Unicode
+field is 16-bit. The fixture now sends high/low UTF-16 events, preserving the
+original expected full emoji and caret/focus assertions; other ports also test the
+complete-scalar path. This exposed early focus transfer after the high half.
+Editable input now joins the pair before transferring focus or inserting text.
+Standard forwarding is unchanged. The corrected fixture failed before this
+forwarding fix, and exercises the Windows representation on other ports too.
+This does not establish real IME or screen-reader behavior. The representation
+matches [Windows WM_CHAR semantics](https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-char).

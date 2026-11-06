@@ -359,10 +359,15 @@ def _probe():
         assert not any("abc;def" in text for text in spoken)
 
     errors = []
-    stages = iter((("north\nold\n", "", False),
-                   ("north\nold\nfinal draft", "", False),
-                   ("north\nold\n", "я", True),
-                   ("north\nold\nfinal draft", "🐉", True)))
+    focus_cases = [("north\nold\n", "", False, False),
+                   ("north\nold\nfinal draft", "", False, False),
+                   ("north\nold\n", "я", True, False),
+                   ("north\nold\nfinal draft", "🐉", True, True)]
+    if sys.platform != "win32":
+        # Windows wx.KeyEvent stores a 16-bit Unicode key. Keep the scalar
+        # path on ports that can represent it, and test Windows pairs on all.
+        focus_cases.append(("north\nold\nfinal draft", "🐉", True, False))
+    stages = iter(focus_cases)
     current, stage = None, "start"
     deadline, settle_at = time.monotonic() + 20, 0.0
     focus_events, worker_result = [], {}
@@ -402,23 +407,26 @@ def _probe():
                     worker.start()
                     stage = "worker"
                     return
-                text, _char, _typing = current
+                text, _char, _typing, _utf16 = current
                 entry.SetValue(text)
                 select(6, 9)
                 focus_events.clear()
                 stage = "output"
                 alpha.output.SetFocus()
             elif stage == "output" and alpha.output.HasFocus():
-                _text, char, typing = current
+                _text, char, typing, utf16 = current
                 if typing:
-                    event = wx.KeyEvent(wx.wxEVT_CHAR)
-                    event.SetUnicodeKey(ord(char))
-                    event.SetKeyCode(ord(char))
-                    assert event.GetUnicodeKey() == ord(char), (
-                        "Synthetic event cannot represent this character", char,
-                        event.GetUnicodeKey(), event.GetKeyCode(),
-                    )
-                    alpha.output.GetEventHandler().ProcessEvent(event)
+                    encoded = char.encode("utf-16-le")
+                    codes = ([int.from_bytes(encoded[i:i + 2], "little")
+                              for i in range(0, len(encoded), 2)] if utf16 else [ord(char)])
+                    for index, code in enumerate(codes):
+                        event = wx.KeyEvent(wx.wxEVT_CHAR)
+                        event.SetUnicodeKey(code)
+                        event.SetKeyCode(code)
+                        assert event.GetUnicodeKey() == code, (code, event.GetUnicodeKey())
+                        alpha.output.GetEventHandler().ProcessEvent(event)
+                        if index < len(codes) - 1:
+                            assert entry.GetValue() == _text and alpha.output.HasFocus()
                 elif sys.platform == "darwin":
                     key(alpha.output, wx.WXK_TAB, char=True)
                 else:
@@ -426,7 +434,7 @@ def _probe():
                 settle_at = time.monotonic() + 0.1
                 stage = "settle"
             elif stage == "settle" and entry.HasFocus() and time.monotonic() >= settle_at:
-                text, char, _typing = current
+                text, char, _typing, _utf16 = current
                 assert focus_events and entry.GetValue() == text + char, (
                     current, entry.GetValue(), entry.GetSelection(), focus_events,
                     alpha.output.HasFocus(), entry.HasFocus(),

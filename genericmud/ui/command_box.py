@@ -391,6 +391,7 @@ class CommandBoxMixin:
         selection = self._entry_input.GetSelection()
         self._completion.reset()
         self._entry_input.reset_recall()
+        self._entry_input.reset_output_character()
         sizer = self.GetSizer()
         if masked:
             self._entry_input.Hide()

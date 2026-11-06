@@ -25,6 +25,7 @@ class CommandEntryCtrl(wx.TextCtrl):
         self._recall_tail = ""
         self._recall_selection = (-1, -1)
         self._recalling = False
+        self._output_high_surrogate: int | None = None
         self.Bind(wx.EVT_TEXT, self._on_edit)
         self.Bind(wx.EVT_CHAR, self._on_char)
 
@@ -148,7 +149,26 @@ class CommandEntryCtrl(wx.TextCtrl):
         start, end = self.GetSelection()
         return start == end and self.text_range(0, start).endswith("\n")
 
+    def reset_output_character(self) -> None:
+        self._output_high_surrogate = None
+
+    def character_from_output(self, code: int) -> str | None:
+        """Join Windows UTF-16 character events before moving focus from Output.
+
+        Other ports can deliver a complete Unicode scalar in one event. A high
+        surrogate alone is not text yet; keep Output focused until its low half.
+        """
+        high = self._output_high_surrogate
+        self._output_high_surrogate = None
+        if 0xD800 <= code <= 0xDBFF:
+            self._output_high_surrogate = code
+            return None
+        if 0xDC00 <= code <= 0xDFFF:
+            return None if high is None else chr(0x10000 + ((high - 0xD800) << 10) + code - 0xDC00)
+        return chr(code)
+
     def move_to_tail(self) -> None:
+        self.reset_output_character()
         end = self.GetLastPosition()
         self.SetSelection(end, end)
         self.ShowPosition(end)

@@ -175,6 +175,8 @@ class OutputBoxMixin:
         is already at the end when the screen reader reads the newly focused control.
         """
         self._entry_from_output = True
+        if isinstance(self.input, CommandEntryCtrl):
+            self.input.reset_output_character()
         if self._keep_caret_on_focus:
             # Focus is coming back from the Find dialog, so the search must run from where
             # the reader actually was. Jumping to the bottom here would throw that away.
@@ -380,6 +382,9 @@ class OutputBoxMixin:
         modified = event.ControlDown() or event.AltDown()
         if unicode_key >= 32 and unicode_key != 127 and not modified:
             entry = isinstance(self.input, CommandEntryCtrl)
+            character = self.input.character_from_output(unicode_key) if entry else chr(unicode_key)
+            if character is None:
+                return  # wait for the low surrogate without moving focus
             selection = self.input.GetSelection()
             if entry:
                 self.input.move_to_tail()
@@ -389,6 +394,8 @@ class OutputBoxMixin:
             else:
                 # Focusing may select all text; Standard keeps the user's edit range.
                 self.input.SetSelection(*selection)
-            self.input.WriteText(chr(unicode_key))
+            self.input.WriteText(character)
             return
+        if isinstance(self.input, CommandEntryCtrl):
+            self.input.reset_output_character()
         event.Skip()  # arrows etc. -> native screen-reader review of the output
