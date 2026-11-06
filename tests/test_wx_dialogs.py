@@ -1430,7 +1430,7 @@ def test_the_window_tells_packs_the_mud_connected_only_once_it_has(frame, monkey
     import asyncio
 
     from genericmud.packs import PackStore
-    from genericmud.ui import session_panel
+    from genericmud.ui import session_connection, session_panel
     from tests.helpers import RecordingBackend
 
     store = PackStore(tmp_path / "store")
@@ -1486,9 +1486,9 @@ def test_the_window_tells_packs_the_mud_connected_only_once_it_has(frame, monkey
         return None
 
     monkeypatch.setattr(session_panel.SessionPanel, "_start", no_session)
-    monkeypatch.setattr(session_panel, "MudConnection", _Connection)
-    monkeypatch.setattr(session_panel, "make_voice_backend", lambda: backend)
-    monkeypatch.setattr(session_panel, "make_sound_backend", lambda **_kwargs: None)
+    monkeypatch.setattr(session_connection, "MudConnection", _Connection)
+    monkeypatch.setattr(session_connection, "make_voice_backend", lambda: backend)
+    monkeypatch.setattr(session_connection, "make_sound_backend", lambda **_kwargs: None)
     loop = asyncio.new_event_loop()
     panel = session_panel.SessionPanel(
         frame, loop, {}, World("Test", "mud.example", 4000), packs=store

@@ -132,7 +132,7 @@ def test_the_window_saves_the_new_port_and_reconnects(monkeypatch):
     import pytest
 
     wx = pytest.importorskip("wx")
-    from genericmud.ui import session_panel
+    from genericmud.ui import session_connection, session_panel
 
     saved: list[tuple] = []
 
@@ -155,7 +155,9 @@ def test_the_window_saves_the_new_port_and_reconnects(monkeypatch):
     panel._alive = True
     monkeypatch.setattr(wx, "GetTopLevelParent", lambda _window: frame)
     monkeypatch.setattr(wx, "CallAfter", lambda function, *args: function(*args))
-    monkeypatch.setattr(session_panel, "load_worlds", lambda: [World("GW", "gw.example", 9500)])
+    monkeypatch.setattr(
+        session_connection, "load_worlds", lambda: [World("GW", "gw.example", 9500)]
+    )
 
     assert panel.use_secure_port(9501) is True
     assert panel.world.port == 9501 and panel.world.tls is True
@@ -252,7 +254,7 @@ def test_the_window_tells_the_engine_what_it_switched_to(monkeypatch):
     import pytest
 
     wx = pytest.importorskip("wx")
-    from genericmud.ui import session_panel
+    from genericmud.ui import session_connection, session_panel
 
     told: list[World] = []
     scheduled: list = []
@@ -276,7 +278,9 @@ def test_the_window_tells_the_engine_what_it_switched_to(monkeypatch):
     panel._alive = True
     monkeypatch.setattr(wx, "GetTopLevelParent", lambda _window: Frame())
     monkeypatch.setattr(wx, "CallAfter", lambda function, *args: function(*args))
-    monkeypatch.setattr(session_panel, "load_worlds", lambda: [World("Pen", "pen.example", 9500)])
+    monkeypatch.setattr(
+        session_connection, "load_worlds", lambda: [World("Pen", "pen.example", 9500)]
+    )
 
     assert panel.use_secure_port(9501) is True
     assert scheduled and scheduled[0][0] == panel.app.apply_world_settings
@@ -331,7 +335,7 @@ def test_a_world_that_was_never_saved_is_not_saved_by_secure(monkeypatch):
     import pytest
 
     wx = pytest.importorskip("wx")
-    from genericmud.ui import session_panel
+    from genericmud.ui import session_connection, session_panel
 
     saved: list = []
     scheduled: list = []
@@ -353,7 +357,7 @@ def test_a_world_that_was_never_saved_is_not_saved_by_secure(monkeypatch):
     monkeypatch.setattr(wx, "GetTopLevelParent", lambda _window: Frame())
     monkeypatch.setattr(wx, "CallAfter", lambda function, *args: function(*args))
     monkeypatch.setattr(
-        session_panel, "load_worlds", lambda: [World("other", "other.example", 4000)]
+        session_connection, "load_worlds", lambda: [World("other", "other.example", 4000)]
     )
 
     assert panel.use_secure_port(9501) is True
