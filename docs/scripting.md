@@ -73,7 +73,10 @@ an alias for `sh *`, or one from a soundpack, still comes first. Lua's
    right match choice. Wildcards, exact whole lines, and regular expressions
    are also available.
 3. Fill in any actions you need: commands, spoken text, a sound, speech
-   interruption, hiding the line, or routing it to a channel.
+   interruption, hiding the line, **Leave this line out of the session log**, or
+   routing it to a channel. Hiding the line decides what you hear; leaving it out
+   of the log decides what is kept, and either can be set without the other, so a
+   repeating notice can be read once and never written down.
 4. Choose **OK**. The trigger works on the next matching line.
 
 Hotkeys use the same command field. Focus **Press the key combination**, press

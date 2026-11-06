@@ -60,6 +60,7 @@ class UserTrigger:
     speak: str = ""  # spoken text; %1 or ${1}, ${script:x}, ${mud:x}
     send: str = ""  # commands, one per line; %1 or ${1}, ${script:x}, ${mud:x}
     gag: str = "none"  # "none" | "speech" (silent but shown) | "line" (removed)
+    omit_log: bool = False  # leave the line out of the session log, whatever gag does
     channel: str = ""  # route the line to this channel ("" = leave on main)
     stop_channel: str = ""  # stop this user cue channel when fired ("" = none)
     match: str = ""  # one of MATCH_CHOICES; "" = legacy file (the regex flag decides)
@@ -364,6 +365,7 @@ def _register_trigger(api: ScriptApi, t: UserTrigger) -> None:
         regex=regex,
         gag=(gag == "line"),
         gag_but_display=(gag == "speech"),
+        omit_from_log=t.omit_log,
         channel=t.channel or None,
         source=SOURCE,
     )
