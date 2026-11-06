@@ -61,6 +61,12 @@ class _WorldDialogDone:
 
 
 class SavedWorldsMixin:
+    """The main window's saved-world actions, for GenericMudFrame (main_window.py).
+
+    Uses _credentials and book from GenericMudFrame.__init__, and the window's announce,
+    open_session and _update_title.
+    """
+
     def _on_new_world(self, _event: wx.CommandEvent) -> None:
         self._show_world_dialog(show_connect=True)
 

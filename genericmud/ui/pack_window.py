@@ -34,7 +34,13 @@ _PACK_WINDOW_TIMEOUT_S = 2.0
 
 
 class PackWindowMixin:
-    # --- packs' MUSHclient window calls (PackWindow); called on the loop thread ---
+    """What soundpack scripts ask of the window, for SessionPanel (session_panel.py).
+
+    These are the PackWindow calls (automation/engine.py), MUSHclient's window calls. They arrive
+    on the loop thread and are done on the window's thread. Uses these attributes from
+    SessionPanel.__init__: _alive, _diag, _notepad_windows, _questions, input and world, and
+    session_connection's _post.
+    """
 
     def _on_ui_thread(self, action: Callable[[], object], fallback: object) -> object:
         """Do ``action`` on the window's thread and wait for its answer; ``fallback`` when the

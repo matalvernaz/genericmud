@@ -30,6 +30,15 @@ _HISTORY_LIMIT = 2000
 
 
 class CommandBoxMixin:
+    """The command box, for SessionPanel (session_panel.py).
+
+    Sends what was typed, walks the history, completes words and runs bound keys. Uses these
+    attributes from SessionPanel.__init__: _completion, _completion_start, _completion_tail,
+    _connect_finished, _hist_index, _history, _history_limit, _input_masked, _keymap, _loop,
+    _prefs, _voice, app and input. Asks session_connection whether the tab is connected, and to
+    reconnect.
+    """
+
     def _remember(self, lines: list[str]) -> None:
         """Add sent commands to the history, keeping the newest few thousand at most.
 

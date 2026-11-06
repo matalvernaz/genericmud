@@ -18,6 +18,15 @@ _FLUSH_INTERVAL_MS = 50  # batch output appends during floods
 
 
 class OutputBoxMixin:
+    """The output box, for SessionPanel (session_panel.py).
+
+    Adds the MUD's text in batches without moving a reader's caret, handles Find, F3 and Enter on
+    a link, and opens MXP menus and the copy box. Uses these attributes from
+    SessionPanel.__init__: _alive, _find, _find_anchored, _find_direction, _find_restart,
+    _flush_scheduled, _input_masked, _keep_caret_on_focus, _loop, _pending, _prefs, app, input and
+    output. Hands keys to command_box's _dispatch_bound_combo.
+    """
+
     def _fill_command(self, text: str) -> None:
         """Put a link's half-written command in the box, ready to finish or abandon.
 
