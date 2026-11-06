@@ -1855,7 +1855,7 @@ def test_the_copy_box_fills_the_clipboard_and_says_so(
     import asyncio
 
     from genericmud.bridge import protocol
-    from genericmud.ui import output_dialogs, session_panel
+    from genericmud.ui import output_box, output_dialogs, session_panel
 
     async def no_session(_panel):
         return None
@@ -1868,7 +1868,7 @@ def test_the_copy_box_fills_the_clipboard_and_says_so(
         clipboard.append(text)
         return clipboard_free
 
-    monkeypatch.setattr(session_panel, "_set_clipboard_text", set_clipboard)
+    monkeypatch.setattr(output_box, "_set_clipboard_text", set_clipboard)
     spoken: list[str] = []
     frame.announce = spoken.append  # the real window speaks through its announcer
     loop = asyncio.new_event_loop()
