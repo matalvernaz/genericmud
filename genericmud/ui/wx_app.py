@@ -5079,8 +5079,10 @@ class GenericMudFrame(wx.Frame):
                 names.add(open_world.name.casefold())
         return names
 
-    def _edit_saved_world(self, world: World) -> None:
+    def _edit_saved_world(self, world: World) -> World | None:
         """Edit a saved world, letting its name change while no tab is connected to it.
+
+        Returns the world as saved, or None when nothing was, so the list can keep it picked.
 
         The name is the log file, the /to address and the tab's label, so a tab that is using
         it keeps it: the box is locked and the dialog says why. A disconnected tab is using
@@ -5106,10 +5108,10 @@ class GenericMudFrame(wx.Frame):
         )
         try:
             if dialog.ShowModal() != wx.ID_OK:
-                return
+                return None
             edited = dialog.get_world()
             if not self._save_world(edited, replacing=world.name):
-                return
+                return None
         finally:
             dialog.Destroy()
         self._apply_to_open_tabs(world.name, edited)
@@ -5122,6 +5124,7 @@ class GenericMudFrame(wx.Frame):
                 self.announce(f"Its {_and_list(moved)} moved with it.")
             if left:
                 self.announce(f"Its {_and_list(left)} stayed under the old name.")
+        return edited
 
     def _rename_problem(self, old_name: str, new_name: str) -> str:
         """Why this rename may not take that name, or "" when it may.
@@ -5318,7 +5321,10 @@ class GenericMudFrame(wx.Frame):
                 self._delete_saved_world(world)
                 continue
             if action == _ID_EDIT_WORLD and world is not None:
-                self._edit_saved_world(world)
+                edited = self._edit_saved_world(world)
+                # Back to the list with the world still picked, under its new name if it has
+                # one, rather than at the top of the list.
+                preselect = (edited or world).name
                 continue
             return
 
