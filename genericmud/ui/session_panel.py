@@ -74,6 +74,7 @@ class SessionPanel(
         # No parked draft: history moves only from an empty box or from a message that is
         # itself in history, so nothing unsent is ever replaced.
         self._input_masked = False  # the server hides typed input: keep it out of history
+        self._output_high_surrogate = 0  # one pending UTF-16 half while Output owns focus
         self._alive = True
         self._connect_finished = False  # the first connect attempt has returned (either way)
         self._reconnecting = False  # a manual reconnect is in flight; ignore repeat presses
