@@ -29,7 +29,27 @@ Playing:
 Type commands in the command box and press Enter. Try: look, north (or just
 n), say hello, and help. From an empty box, Up and Down step through what
 you've typed; a command you're still writing is left alone. Shift+Enter starts
-another line, and Enter sends every line as its own command.
+another line, and Enter sends every line as its own command in Standard mode.
+View, Command input mode, Editable command buffer (VIPMud-style) selects another
+native input mode for new sessions. Standard is the default; open sessions keep
+their current mode and drafts. The web window keeps its existing input.
+In the editable buffer, Up and Down move through old commands and unsent drafts.
+Down at an unfinished tail adds a blank line without sending the draft.
+Enter executes one logical line; older lines are copied to the tail.
+Shift+Enter executes the line or selected text in place, preserving the selection.
+A multi-line selection sends its nonblank lines as separate commands.
+Adjacent completed duplicates are removed, including manual repetitions, once
+three line separators exist; very short buffers keep duplicates.
+Escape inserts a blank row; in the first row it splits at the caret.
+Ordinary Backspace at the start preserves the row boundary; Delete and selected
+text deletion remain native. There is no Line Entry Mode Off setting yet.
+Returning from Output or pressing Ctrl+Enter goes to the existing tail.
+Ctrl+R recalls earlier rows by prefix, including drafts. Pack/user keys still win.
+Ctrl+Enter does not toggle autoretype in editable mode; it keeps its saved value.
+Passwords use a separate field. Unhiding clears any unsent password and says so.
+The buffer is in memory until the session closes and is not automatically trimmed.
+Windows/NVDA, GTK/Orca, VoiceOver, mouse focus and IME still need validation for
+this mode. VIPMud script-brace assembly is not implemented.
 A semicolon sends several commands at once, as in n;n;look; type it twice to
 send a real one. Each world can change the separator or turn it off in its
 details (Ctrl+O, then Edit), which also has its logging settings.
@@ -247,7 +267,7 @@ Ctrl+Shift+Tab    Previous session
 Alt+1 to Alt+0    Switch to that world, in the order the tabs were opened
 Ctrl+Q            Exit
 
-Typing:
+Typing (Standard, unless noted):
 Enter             Send the command line
 Up / Down         Command history (only from an empty box or a sent command)
 Enter             Send what is in the box: one command per line, then clear it
@@ -257,6 +277,18 @@ Ctrl+Space        Complete the current word from recent output
 Ctrl+Shift+Space  Complete, cycling backwards
 Numpad            Compass walking: 8 2 4 6 and corners, 5 or 0 look,
                   period scan, minus up, plus down (View menu toggle)
+
+Editable command buffer (native window; choose in View, Command input mode):
+Enter             Execute the logical line at the start of the selection
+Shift+Enter       Execute the current line or selected text without moving it
+Up / Down         Move through the document; Down can create a new empty tail
+Escape            Insert a blank row; split at the caret in the first row
+Backspace         Preserve a row boundary unless text is selected
+Delete            Native deletion, including selected row separators
+Ctrl+R            Complete the prefix from earlier editable rows, including drafts
+Ctrl+Enter        Focus the existing tail; does not toggle autoretype in this mode
+Pack/user keys on Ctrl+R, Ctrl+Enter or Escape override these mode defaults.
+While input is hidden, Escape keeps its unhide action instead.
 
 Speech:
 Ctrl+M            Self-voice on or off

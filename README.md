@@ -204,6 +204,44 @@ on almost any MUD. A few conveniences in the command box:
   out of the MUD — useful for long names you'd rather not spell. **Ctrl+Shift+Space**
   cycles backwards through the matches.
 
+### Editable command buffer (native window)
+
+**View → Command input mode → Editable command buffer (VIPMud-style)** selects
+an optional editor for newly opened sessions. **Standard** remains the default
+with the behavior described above. The choice is saved globally; already open
+sessions keep their mode, text, and selection until closed. The web UI keeps its
+existing input behavior.
+
+The editable buffer holds old commands and several unsent drafts in their original
+places. Up and Down move through those lines. Down on the final unfinished line
+adds an empty tail without sending the draft. Tab back from Output, or Ctrl+Enter,
+returns to the existing tail; a final draft remains there. Typing from Output
+also goes to that tail.
+
+Enter executes the logical line at the start of the selection and leaves an empty
+tail, copying an older line to the bottom. Shift+Enter executes the current line,
+or only the selected text, without changing the document or selection. An explicit
+selection spanning several lines sends its nonblank lines as separate commands.
+Adjacent identical completed lines are reduced to one, including manually typed
+repetitions, once there are three line separators; very short buffers keep duplicates.
+
+Escape inserts a blank line above the current row; in the first row it splits at
+the caret. Ordinary Backspace at the start of a row preserves its separator, while
+selected text and Delete remain ordinary native editing. Ctrl+R completes the
+current prefix from earlier editable rows, including unsent drafts; repeated
+presses cycle backwards. Explicit soundpack/user bindings on Ctrl+R, Ctrl+Enter,
+or Escape still win. Ctrl+Enter does not toggle autoretype in this mode; autoretype
+keeps its saved setting and can be toggled in Standard or by a custom key binding.
+
+Passwords use a separate temporary field and never enter the document. Closing a
+session discards its in-memory buffer. There is no automatic pruning of old drafts;
+long sessions may need manual deletion. Lines scroll horizontally instead of wrapping.
+This first version supports the default Line Entry Mode; its Off setting, VIPMud
+script-brace assembly, and exact mouse/IME behavior remain outside the compatibility
+claim. The original VIPMud behavior was corroborated by a user's keyboard/NVDA
+observations; genericMud's new mode still needs Windows/NVDA, GTK/Orca, VoiceOver,
+and physical keyboard/IME validation. See [command input details](docs/command-entry.md).
+
 ## More than one MUD at once
 
 **Ctrl+N** opens another new world and **Ctrl+O** another saved one, each in its
@@ -661,15 +699,18 @@ View, **Alt+H** Help.
 | Ctrl+Tab / Ctrl+Shift+Tab | Next / previous session (says which one) |
 | Alt+1..9 / Alt+0 | Switch to that world, in the order the tabs were opened |
 | Ctrl+Q | Exit |
-| Enter | Send the command line |
-| Up / Down | Command history, from an empty box or from a command you've already sent |
-| Ctrl+Enter | Toggle autoretype (empty Enter resends your last command) |
+| Enter | Standard: send the box; editable mode: execute the current logical line |
+| Shift+Enter | Standard native window: add a line; editable mode: execute line/selection in place |
+| Up / Down | Standard: command history at a sent message's edges; editable mode: move through document rows |
+| Ctrl+Enter | Standard: toggle autoretype; editable mode: focus the existing buffer tail |
+| Ctrl+R | Editable mode: complete a prefix from earlier document rows |
 | Ctrl+Space / Ctrl+Shift+Space | Complete the word you're typing from recent output |
 | Numpad | Compass walking (View menu toggle) |
 | Ctrl+M | Self-voice on/off |
 | Ctrl+Shift+F | Follow mode (speech interrupts on room movement) |
 | Ctrl+I | Interrupt mode (every line barges in) |
-| Esc / F11 | Stop speech now |
+| F11 | Stop speech now |
+| Esc | Stop hiding password input; in editable entry, insert a blank line |
 | Shift+F11 | Stop all sounds (panic) |
 | Ctrl+1..9 | Recall the last nine lines |
 | Ctrl+0 | Recall the tenth line back |

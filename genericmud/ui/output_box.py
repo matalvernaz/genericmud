@@ -9,6 +9,7 @@ import wx
 
 from genericmud.bridge import protocol
 from genericmud.ui.clipboard import _set_clipboard_text
+from genericmud.ui.command_entry import CommandEntryCtrl
 from genericmud.ui.keyboard import _key_combo
 from genericmud.ui.output_dialogs import ChooseDialog, CopyLineDialog, FindDialog
 from genericmud.ui.scrollback import anchor_after_append, find_line
@@ -34,8 +35,13 @@ class OutputBoxMixin:
         following the link, and an unfinished command nobody is looking at is the state that
         sends half a sentence by accident.
         """
-        self.input.SetValue(text)
-        self.input.SetInsertionPointEnd()
+        if isinstance(self.input, CommandEntryCtrl):
+            if self.output.HasFocus():
+                self.input.move_to_tail()
+            self.input.replace_command(text)
+        else:
+            self.input.SetValue(text)
+            self.input.SetInsertionPointEnd()
         self.input.SetFocus()
 
     def _choose_from_menu(self, message: dict) -> None:
@@ -87,7 +93,7 @@ class OutputBoxMixin:
         elif kind == protocol.FIND_RESULT:
             self._sync_find_caret(message)
         elif kind == protocol.INPUT_MASKED:
-            self._input_masked = bool(message.get("masked"))
+            self._set_input_masked(bool(message.get("masked")))
         elif kind == protocol.INPUT_TEXT:
             self._fill_command(str(message.get("text", "")))
         elif kind == protocol.MENU:
@@ -165,6 +171,7 @@ class OutputBoxMixin:
         deliberately does not. Done synchronously rather than via CallAfter so the caret
         is already at the end when the screen reader reads the newly focused control.
         """
+        self._entry_from_output = True
         if self._keep_caret_on_focus:
             # Focus is coming back from the Find dialog, so the search must run from where
             # the reader actually was. Jumping to the bottom here would throw that away.
@@ -181,6 +188,14 @@ class OutputBoxMixin:
     def _on_output_key(self, event: wx.KeyEvent) -> None:
         """Find keys and link following, live only while the output has focus."""
         code = event.GetKeyCode()
+        if (getattr(self, "_entry_input", None) is not None and code in
+                (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER) and event.ControlDown()
+                and not event.AltDown() and not event.ShiftDown()):
+            if not self._dispatch_entry_shortcut("ctrl+enter"):
+                if isinstance(self.input, CommandEntryCtrl):
+                    self.input.move_to_tail()
+                self.input.SetFocus()
+            return
         if (
             code == ord("F")
             and event.ControlDown()
@@ -359,10 +374,16 @@ class OutputBoxMixin:
         unicode_key = event.GetUnicodeKey()
         modified = event.ControlDown() or event.AltDown()
         if unicode_key >= 32 and unicode_key != 127 and not modified:
+            entry = isinstance(self.input, CommandEntryCtrl)
             selection = self.input.GetSelection()
+            if entry:
+                self.input.move_to_tail()
             self.input.SetFocus()
-            # Focusing may select all text; WriteText must use the user's edit range.
-            self.input.SetSelection(*selection)
+            if entry:
+                self.input.move_to_tail()
+            else:
+                # Focusing may select all text; Standard keeps the user's edit range.
+                self.input.SetSelection(*selection)
             self.input.WriteText(chr(unicode_key))
             return
         event.Skip()  # arrows etc. -> native screen-reader review of the output
