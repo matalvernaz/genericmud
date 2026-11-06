@@ -3024,16 +3024,24 @@ class EngineApp:
         if name == self.name:
             return
         if self.logger is not None:
+            # Closed for the rename, not because the player asked: the next connection opens
+            # the world's new log. A log stopped by hand (or by a failed write) is already
+            # inactive, and stays stopped, as it always did.
+            self._reopen_log_after_rename = self.logger.active
             self.logger.stop()
             self.logger = None
-            # Closed for the rename, not because the player asked: the next connection opens
-            # the world's new log. A log stopped by hand stays stopped, as it always did.
-            self._reopen_log_after_rename = True
         if self.hub is not None and self.name:
-            self.hub.unregister(self.name)
+            self.hub.unregister(self.name, self._dispatch_remote)
         self.name = name
         if self.hub is not None:
             self.hub.register(self.name, self._dispatch_remote)
+        # The window has moved the world's map, rules and saved variables to the new name.
+        # Paths this session resolved under the old one would write them back there, so any
+        # whose file has gone are looked up again; a file that stayed (the new name already
+        # had its own) keeps being this session's.
+        for key, path in list(self._world_paths.items()):
+            if not path.exists():
+                del self._world_paths[key]
 
     def after_reconnect(self) -> None:
         """Reattach this session to a socket that is live again.
@@ -3049,7 +3057,7 @@ class EngineApp:
         self._secure_port = None
         # Logging survives a reconnect because its logger is still open. Only a rename closes
         # it, so only a rename reopens it -- under the name the world has now.
-        if self._reopen_log_after_rename and self.log_automatically:
+        if self._reopen_log_after_rename:
             self.start_logging(announce=False)
         self._reopen_log_after_rename = False
         # A fresh socket is a fresh byte stream: drop any half-decoded multibyte tail and

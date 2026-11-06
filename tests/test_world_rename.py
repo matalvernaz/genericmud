@@ -368,3 +368,115 @@ def test_its_own_name_is_no_clash_and_a_free_one_is_fine(monkeypatch):
     assert frame._rename_problem("Penultimate", "Penultimate") == ""
     assert frame._rename_problem("Penultimate", "penultimate") == ""  # case, as everywhere
     assert frame._rename_problem("Penultimate", "Penultimate Destination") == ""
+
+
+# --- after the rename: the session's files and log follow the name --------------------------
+
+
+def _engine(tmp_path, name="Penultimate"):
+    from genericmud.app import EngineApp
+    from genericmud.config.keymap import load_keymap
+    from genericmud.voice.router import VoiceRouter
+    from tests.helpers import RecordingBackend
+
+    return EngineApp(
+        VoiceRouter(RecordingBackend(), clock=lambda: 0.0),
+        send=[].append,
+        post=[].append,
+        keymap=load_keymap("vipmud"),
+        name=name,
+        map_dir=tmp_path / "maps",
+        log_dir=tmp_path / "logs",
+    )
+
+
+def test_the_session_saves_its_map_under_the_new_name_after_the_files_moved(tmp_path):
+    # The session looked its map up under the old name when it connected. The window then moved
+    # the file to the new name; saving back to the old path would leave the renamed world with
+    # a stale map and the newer one under a name nothing reads.
+    app = _engine(tmp_path)
+    (tmp_path / "maps").mkdir()
+    (tmp_path / "maps" / "Penultimate.json").write_text("{}", encoding="utf-8")
+    assert app._map_path().name == "Penultimate.json"
+    (tmp_path / "maps" / "Penultimate.json").rename(tmp_path / "maps" / "Pen.json")
+
+    app.rename_world("Pen")
+
+    assert app._map_path().name == "Pen.json"
+
+
+def test_a_file_that_stayed_under_the_old_name_stays_the_sessions(tmp_path):
+    # The new name already had a map of its own, so the window left this one where it was
+    # ("stayed under the old name"). The session keeps writing the one it read.
+    app = _engine(tmp_path)
+    (tmp_path / "maps").mkdir()
+    (tmp_path / "maps" / "Penultimate.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "maps" / "Pen.json").write_text("{}", encoding="utf-8")
+    assert app._map_path().name == "Penultimate.json"
+
+    app.rename_world("Pen")
+
+    assert app._map_path().name == "Penultimate.json"
+
+
+def test_a_log_the_rename_closed_opens_again_under_the_new_name(tmp_path):
+    # Started by hand with Alt+Shift+L, not by the world's automatic logging: the rename closed
+    # it, so the next connection carries it on under the new name instead of silently ending it.
+    app = _engine(tmp_path)
+    app.start_logging(announce=False)
+    app.rename_world("Pen")
+    assert app.logger is None
+
+    app.after_reconnect()
+
+    assert app.logger is not None and app.logger.active
+    assert app.logger.path.name.startswith("Pen-")
+
+
+def test_a_log_stopped_by_hand_stays_stopped_through_a_rename(tmp_path):
+    app = _engine(tmp_path)
+    app.start_logging(announce=False)
+    app._toggle_log()  # Alt+Shift+L again: stopped by hand
+    app.rename_world("Pen")
+
+    app.after_reconnect()
+
+    assert app.logger is None
+
+
+def test_a_rename_with_no_tab_open_says_nothing_about_a_tab(dialog, monkeypatch, tmp_path):
+    pytest.importorskip("wx")
+    from genericmud.ui import wx_app
+
+    monkeypatch.setattr(wx_app, "config_dir", lambda: tmp_path)
+    old = World("Penultimate", "pen.example", 9500)
+    frame = _frame([], [old])
+    dialog.edited = World("Penultimate Destination", "pen.example", 9500)
+
+    frame._edit_saved_world(old)
+
+    assert frame.said == ["Renamed Penultimate to Penultimate Destination."]
+
+
+def test_a_change_of_case_carries_the_files_too(dialog, monkeypatch, tmp_path):
+    # On Linux "penultimate" and "Penultimate" are two names, so the files must follow; on
+    # Windows and macOS they are one file, which is respelled rather than seen as a clash.
+    import os
+
+    pytest.importorskip("wx")
+    from genericmud.ui import wx_app
+
+    monkeypatch.setattr(wx_app, "config_dir", lambda: tmp_path)
+    old = World("penultimate", "pen.example", 9500)
+    panel = _Panel(old, _Connection(connected=False))
+    frame = _frame([panel], [old])
+    dialog.edited = World("Penultimate", "pen.example", 9500)
+    _world_files(tmp_path, "penultimate")
+
+    frame._edit_saved_world(old)
+
+    assert os.listdir(tmp_path / "maps") == ["Penultimate.json"]
+    assert os.listdir(tmp_path / "state") == ["Penultimate-vars.json"]
+    assert os.listdir(tmp_path / "userpacks") == ["Penultimate"]
+    assert panel.renamed == ["Penultimate"]
+    assert not any("stayed under the old name" in said for said in frame.said)
