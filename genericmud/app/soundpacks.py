@@ -21,6 +21,20 @@ _STATE_SAVE_DELAY_SECONDS = 2.0  # a pack's SaveState is written this soon after
 
 
 class SoundpacksMixin:
+    """Soundpack loading, connection and focus hooks, ticks, saved state and updates.
+
+    Part of EngineApp (engine_app.py). Every attribute below starts in its constructor.
+
+    Writes: _focused, _last_activation, _mush_connected, _mush_packs, _pack_timers_cancelled,
+    _save_scheduled, _simulate_depth, _ticks_armed, _vip_connected, _vip_packs, _world_packs,
+    pack_updates.
+
+    Reads: _closed, _diag, _msdp_offered, _post, _schedule, asker, engine, packs, voice.
+
+    Calls: _speak_system, incoming_text (_emit_line), mud_data (_dispatch_msdp_start), world_files
+    (_persist_pack_vars).
+    """
+
     def pack_notepads(self) -> dict[str, str]:
         """The MUSHclient notepads this session's packs have written, by title (a copy).
         Mush-Z keeps its channel log in one and never opens it itself. Loop thread."""
@@ -47,7 +61,6 @@ class SoundpacksMixin:
                 )
             return None
 
-    # --- soundpacks ---
 
     def activate_packs(self, world: str) -> ActivationResult | None:
         """Load the packs enabled for ``world`` and announce the outcome aloud.

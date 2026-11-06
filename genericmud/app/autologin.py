@@ -20,6 +20,21 @@ _POST_CONNECT_FALLBACK_SECONDS = 30.0
 
 
 class AutologinMixin:
+    """Automatic login, post-connect commands and hidden typing kept out of history.
+
+    Part of EngineApp (engine_app.py). Every attribute below starts in its constructor.
+
+    Writes: _hidden_answers, _hidden_timeout_token, _input_masked, _login, _login_phase_started,
+    _mxp_login_armed, _mxp_login_sent, _password_guard, _pending_login, _post_connect_sent.
+
+    Reads: _clock, _diag, _post, _schedule, _send, _withdraw_option, connect_method, credentials,
+    log_commands, name, post_connect_commands, pueblo_enabled.
+
+    Calls: _speak_system, session_log (_log).
+
+    _mxp_login_armed is shared: autologin arms it; typed input disarms it.
+    """
+
     def begin_login(self, world: str) -> None:
         """Decide how this connection logs in. Sends nothing: the socket may not exist yet.
 

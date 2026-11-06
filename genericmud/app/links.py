@@ -23,6 +23,17 @@ def _menu_note(link: Link) -> str:
 
 
 class LinksMixin:
+    """Reviewing and following MUD links, and checking commands they offer to type.
+
+    Part of EngineApp (engine_app.py). Every attribute below starts in its constructor.
+
+    Writes: _link_announced.
+
+    Reads: _diag, _post, buffer, command_separator, pack_window, review, voice.
+
+    Calls: _speak_system, key_actions (_speak_review), typed_commands (_dispatch_command).
+    """
+
     def _announce_link_under_cursor(self) -> None:
         """Say what the link the follow key would act on does: the keyboard's version of hovering.
 

@@ -20,7 +20,23 @@ INTERACTIVE_SOURCE = "user-interactive"
 
 
 class TypedCommandsMixin:
-    # --- inbound from the renderer (WS messages) ---
+    """Typed input, command stacking, aliases and genericMud client commands.
+
+    Part of EngineApp (engine_app.py). Every attribute below starts in its constructor.
+
+    Writes: _client_error_spoken, _dispatch_depth, _last_input, _mxp_login_armed.
+
+    Reads: _diag, _input_masked, _login, _post, _send, _user_aliases, _user_triggers, autoretype,
+    buffer, command_separator, echo_input, engine, hub, log_commands, map, nav, voice.
+
+    Calls: _speak_system, links (_activate_link_at, _follow_link), autologin (_dispatch_secret),
+    mud_data (_use_secure_port), key_actions (_handle_find, _handle_key), session_log (_log,
+    _speak_logs), soundpacks (update_packs), walking (_goto, _label_room, _on_player_moved,
+    _safe_speedwalk, _speedwalk).
+
+    _mxp_login_armed is shared: autologin arms it; typed input disarms it.
+    """
+
 
     def on_ws_message(self, message: dict) -> None:
         kind = message.get("type")
@@ -153,7 +169,6 @@ class TypedCommandsMixin:
         """
         self._dispatch_command(text, allow_client=False)
 
-    # --- interactive alias/trigger commands (the no-scripting "easy method") ---
 
     def _client_command(self, text: str) -> bool:
         """Handle "/alias", "/trigger", "/to", ...; False = not one (send to the MUD)."""
