@@ -1,49 +1,47 @@
-"""Submission policy for an editable command document, independent of wx positions.
+"""Text rules for optional editable entry, independent of native caret units.
 
-The native editor owns editing/undo/selection. Known-submitted lines are only a
-hint for avoiding recalled copies. Any native edit forgets all hints, including
-identical-text replacements: native notifications do not expose a reliable edit
-range/identity for every paste, undo, drag/drop and context-menu action.
+Text uses LF internally. Each LF represents one logical CRLF delimiter for the
+VIPMud-style three-delimiter duplicate rule. No sent/recalled identity is kept.
 """
 
 from __future__ import annotations
 
 
-class CommandDocument:
-    def __init__(self) -> None:
-        self.text = ""
-        self._submitted: set[int] = set()
+def line_bounds(text: str, position: int) -> tuple[int, int]:
+    start = text.rfind("\n", 0, position) + 1
+    end = text.find("\n", position)
+    return start, len(text) if end < 0 else end
 
-    def sync(self, text: str, *, edited: bool = False) -> None:
-        if edited or text != self.text:
-            self._submitted.clear()
-            self.text = text
 
-    def complete(self, line: int) -> str:
-        """Record Enter, returning only the text to append to the native editor.
+def submit_command(text: str, position: int) -> str:
+    """Return the document after ordinary Enter; dispatch is the caller's job."""
+    start, end = line_bounds(text, position)
+    command = text[start:end]
+    if position < len(text):
+        separator = "" if ord(text[-1]) < 32 else "\n"
+        result = text + separator + command + "\n"
+    else:
+        result = text + "\n"
+    # Compare only the last two completed rows, and only with three delimiters.
+    last = result.rfind("\n")
+    previous = result.rfind("\n", 0, last)
+    earlier = result.rfind("\n", 0, previous) if previous >= 0 else -1
+    if earlier >= 0 and result[earlier + 1:previous] == result[previous + 1:last]:
+        result = result[:previous] + result[last:]
+    return result
 
-        Always execute separately, even when the returned suffix is empty. An empty
-        command remains empty so the engine's existing paging/autoretype path owns it.
-        """
-        lines = self.text.split("\n")
-        command = lines[line]
-        if not command:
-            return ""
-        newest = len(lines) - 2
-        recalled_duplicate = (
-            lines[-1] == ""
-            and line in self._submitted
-            and newest in self._submitted
-            and lines[newest] == command
-        )
-        self._submitted.add(line)
-        if line == len(lines) - 1:
-            suffix = "\n"
-        elif recalled_duplicate:
-            suffix = ""
-        else:
-            appended = len(lines) - 1 if lines[-1] == "" else len(lines)
-            suffix = ("" if lines[-1] == "" else "\n") + command + "\n"
-            self._submitted.add(appended)
-        self.text += suffix
-        return suffix
+
+def down_creates_tail(text: str, position: int) -> bool:
+    return not text.endswith("\n") and "\n" not in text[position:]
+
+
+def insert_blank_line(text: str, position: int) -> tuple[str, int]:
+    """Escape: preserve selected characters; caller passes the range's start.
+
+    The first-line branch splits at the caret and requests position one. At
+    position zero choose a valid empty-line caret rather than half of a CRLF.
+    """
+    previous = text.rfind("\n", 0, position)
+    at = previous + 1 if previous >= 0 else position
+    caret = at if previous >= 0 else min(1, position)
+    return text[:at] + "\n" + text[at:], caret

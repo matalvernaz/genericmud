@@ -1,7 +1,7 @@
 """Persisted UI/speech toggles, one small TOML beside worlds and update prefs.
 
 Mirrors :mod:`genericmud.config.update_prefs`: ``tomllib`` reads, saving
-hand-writes the small boolean/integer schema. These are the settings a user sets
+hand-writes the small boolean/integer/string schema. These are the settings a user sets
 once and expects to survive a restart:
 
 * ``background_silence`` -- stay quiet while another window has focus
@@ -12,7 +12,7 @@ once and expects to survive a restart:
 * ``numpad_compass`` -- numpad walks (8/2/4/6 + diagonals, 5/0 look, . scan,
   minus up, plus down). Off for NVDA desktop-layout users who keep the numpad
   for object review.
-* ``editable_command_buffer`` -- experimental native multiline entry for new sessions.
+* ``command_input_mode`` -- standard or editable command input for new native sessions.
 * ``autoretype`` -- Enter on an empty input resends the last command.
 * ``follow_mode`` -- speech interrupts on room movement, not on every line.
 * ``interrupt_mode`` -- every incoming line interrupts instead of queueing.
@@ -25,6 +25,7 @@ once and expects to survive a restart:
 
 from __future__ import annotations
 
+import json
 import tomllib
 from dataclasses import dataclass, fields
 from pathlib import Path
@@ -38,7 +39,7 @@ class UiPrefs:
     background_silence: bool = False
     silence_other_worlds: bool = True
     numpad_compass: bool = True
-    editable_command_buffer: bool = False
+    command_input_mode: str = "standard"
     autoretype: bool = False
     follow_mode: bool = False
     interrupt_mode: bool = False
@@ -59,6 +60,9 @@ def load_ui_prefs(path: Path | None = None) -> UiPrefs:
         return UiPrefs()  # missing or corrupt file: defaults, never a crash
     if not isinstance(data, dict):
         return UiPrefs()
+    # Migrate the unpublished prototype preference without adding another setting.
+    if "command_input_mode" not in data and data.get("editable_command_buffer") is True:
+        data["command_input_mode"] = "editable"
     defaults = UiPrefs()
     return UiPrefs(
         **{
@@ -66,6 +70,7 @@ def load_ui_prefs(path: Path | None = None) -> UiPrefs:
                 data[f.name]
                 if type(data.get(f.name)) is type(getattr(defaults, f.name))
                 and (f.name != "reconnect_interval" or 1 <= data[f.name] <= 300)
+                and (f.name != "command_input_mode" or data[f.name] in ("standard", "editable"))
                 else getattr(defaults, f.name)
             )
             for f in fields(UiPrefs)
@@ -76,7 +81,9 @@ def load_ui_prefs(path: Path | None = None) -> UiPrefs:
 def save_ui_prefs(prefs: UiPrefs, path: Path | None = None) -> None:
     target = path or prefs_path()
     lines = ["[ui]"] + [
-        f"{f.name} = {str(getattr(prefs, f.name)).lower()}"
+        f"{f.name} = " + (json.dumps(getattr(prefs, f.name))
+                         if isinstance(getattr(prefs, f.name), str)
+                         else str(getattr(prefs, f.name)).lower())
         for f in fields(UiPrefs)
     ]
     atomic_write_text(target, "\n".join(lines) + "\n")

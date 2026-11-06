@@ -97,3 +97,29 @@ def test_invalid_auto_reconnect_uses_default(tmp_path, value):
                     encoding="utf-8")
     prefs = load_ui_prefs(path)
     assert prefs.auto_reconnect is True and prefs.reconnect_interval == 300
+
+
+@pytest.mark.parametrize("mode", ["standard", "editable"])
+def test_command_input_mode_is_persisted_with_other_preferences(tmp_path, mode):
+    path = tmp_path / "ui-prefs.toml"
+    prefs = UiPrefs(command_input_mode=mode, numpad_compass=False, reconnect_interval=12)
+    save_ui_prefs(prefs, path)
+    assert load_ui_prefs(path) == prefs
+    assert f'command_input_mode = "{mode}"' in path.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("value", ['"unknown"', 'true', '1', '[]'])
+def test_invalid_command_mode_defaults_to_standard(tmp_path, value):
+    path = tmp_path / "ui-prefs.toml"
+    path.write_text(f'[ui]\ncommand_input_mode = {value}\n', encoding="utf-8")
+    assert load_ui_prefs(path).command_input_mode == "standard"
+
+
+def test_mode_defaults_and_prototype_migration(tmp_path):
+    path = tmp_path / "ui-prefs.toml"
+    assert load_ui_prefs(path).command_input_mode == "standard"
+    path.write_text('[ui]\neditable_command_buffer = true\n', encoding="utf-8")
+    assert load_ui_prefs(path).command_input_mode == "editable"
+    path.write_text('[ui]\neditable_command_buffer = true\ncommand_input_mode = "standard"\n',
+                    encoding="utf-8")
+    assert load_ui_prefs(path).command_input_mode == "standard"
