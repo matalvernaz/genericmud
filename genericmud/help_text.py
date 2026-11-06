@@ -190,6 +190,17 @@ Choose Duplicate to start from a copy. Disable keeps an item saved without
 letting it run. Ctrl+1 through Ctrl+7 change categories, Ctrl+N creates an item,
 Enter edits, and Delete deletes after confirmation. F2 renames a script.
 
+MUSHclient's own names work too:
+Your world's scripts, and the code a rule sends to a script, run in Lua 5.1 with
+MUSHclient's function names beside mud.*: Send, Note, print, GetVariable and
+SetVariable (the same values mud.get_var and mud.set_var use), DoAfter, AddTrigger,
+AddAlias, AddTimer, EnableTrigger, PlaySound, the world table, and the constants such
+code tests. That is so something written for MUSHclient works here as it stands, and
+so its documentation is a usable reference. mud.* is still the shorter way, and the
+only one that speaks, follows the data the MUD sends, and reaches your other sessions.
+A soundpack keeps its own space: it never sees mud.*, and your scripts never see a
+pack's variables.
+
 Open the Lua editor:
 Show Scripts and choose New. Enter a name such as 10-combat.lua. Choose Save
 and reload when you finish. Scripts belong to one world and load in alphabetical
