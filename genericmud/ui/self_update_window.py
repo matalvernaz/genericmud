@@ -145,7 +145,11 @@ class UpdateProgressDialog(wx.Dialog):
 
 
 class SelfUpdateMixin:
-    # --- self-update ---
+    """Updating genericMud, for GenericMudFrame (main_window.py).
+
+    Uses _alive, _diag, _update_cancelled, _update_progress_dialog and book from
+    GenericMudFrame.__init__, and the window's announce.
+    """
 
     def check_for_updates(self, *, manual: bool) -> None:
         """Kick off a background release check.

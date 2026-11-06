@@ -27,6 +27,12 @@ def _saved_on_same_server(world: World) -> bool:
 
 
 class SoundpackSetupMixin:
+    """The main window's soundpack setup, for GenericMudFrame (main_window.py).
+
+    Uses _credentials, _diag and _packs from GenericMudFrame.__init__, the window's announce and
+    open_session, and saved_worlds' _save_world.
+    """
+
     def _on_setup_pack(self, _event: wx.CommandEvent) -> None:
         """Wizard: pick an extracted pack folder, derive its world, confirm, connect."""
         with wx.DirDialog(self, "Choose an already-unzipped soundpack folder") as dialog:

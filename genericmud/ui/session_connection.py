@@ -22,7 +22,15 @@ from genericmud.voice.router import VoiceRouter
 
 
 class SessionConnectionMixin:
-    # --- engine lifecycle (loop thread) ---
+    """A tab's engine and connection, for SessionPanel (session_panel.py).
+
+    Starts the engine on the loop thread and wires its callbacks, then disconnects, reconnects,
+    moves to an encrypted port and closes the tab. Uses these attributes from
+    SessionPanel.__init__: _alive, _connect_finished, _connection, _credentials, _diag, _focused,
+    _hub, _keymap, _loop, _on_pref, _packs, _prefs, _questions, _reconnecting, _sound_warned,
+    _voice, app and world. Calls into output_box (_handle_message) and pack_window (notepads and
+    pack questions).
+    """
 
     async def _start(self) -> None:
         # run_coroutine_threadsafe's future is discarded, so an exception below would
