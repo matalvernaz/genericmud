@@ -668,6 +668,58 @@ mud.alias("heal *", function(line, captures)
 end, {priority=100})
 ```
 
+That one state is also the one a rule's **send to script** uses, so a rule can call a
+function one of your files defines, and a value a rule leaves behind is there for the
+next rule.
+
+## MUSHclient's names also work here
+
+Your world's scripting space carries MUSHclient's own function names beside `mud.*`, in the
+same space rather than a second one: the same scripts, the same variables, the same rules.
+That is for two people in particular. One learned from MUSHclient's documentation and knows
+`Send` and `GetVariable` better than anything else. The other has automation they made in
+MUSHclient, which until now only worked there. Both can write it here without translating it
+first.
+
+**Which to use.** Write `mud.*`. It is this client's own vocabulary, a rule built with it
+takes a function instead of a block of flags, and it is the only one that speaks, follows the
+data the MUD sends, and reaches your other sessions. MUSHclient's names are for the other
+direction: pasting something, following a MUSHclient guide, or reading a soundpack. Where
+both exist they mean the same thing -- `Send` and `mud.send`, `GetVariable` and `mud.get_var`
+-- so mixing them is never wrong, only repetitive.
+
+The ones worth knowing:
+
+| MUSHclient | What it does here |
+| --- | --- |
+| `Send("look")` | sends one command, as `mud.command` does |
+| `Note("text")`, `Tell("text")`, `ColourNote(...)` | shows a line in the output window and speaks it |
+| `print("text")` | the same as `Note`; Lua's `print` goes to the output window, not to a console nobody can see |
+| `GetVariable`, `SetVariable`, `DeleteVariable` | the same values `mud.get_var`, `mud.set_var`, and `mud.delete_var` use |
+| `DoAfter(seconds, "command")` | runs a command later |
+| `AddTrigger`, `AddAlias`, `AddTimer`, and their `Enable…` and `Delete…` | rules registered while the script runs |
+| `PlaySound`, `StopSound`, `Sound` | the same sound bus `mud.play` uses |
+| `world.Send(...)`, `world.Note(...)` | the same functions through the `world` table, the way a soundpack calls them |
+
+The constants such code tests are there too: `trigger_flag`, `sendto`, and
+`error_code`, along with `bit`.
+
+Three things to know about it:
+
+- It is Lua 5.1, the dialect MUSHclient embeds, so pasted MUSHclient code behaves
+  as its author wrote it. Both `unpack` and `table.unpack` work.
+- Nothing about the safety limits changes. No files, no network, no programs:
+  MUSHclient's names are a vocabulary, not more power.
+- A name you misspell is an error, spoken the first time it happens and written to the
+  diagnostic log. A soundpack gets a quiet do-nothing stand-in instead, because it has
+  to load; your own script would rather be told.
+
+Two things it does not include. MushReader's commands, such as `tts_interrupt`, are
+aliases a soundpack assumes are installed in MUSHclient; your world does not, so a
+command of that name still goes to the MUD. Use `mud.speak` for speech. And a loaded
+soundpack is a scripting space of its own: both answer the MUD's lines, but a pack's
+variables, triggers, and plugins belong to the pack, and a pack never sees `mud.*`.
+
 ## A complete starter script
 
 This example remembers an attack command, provides two aliases, warns about low

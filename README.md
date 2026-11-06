@@ -568,6 +568,15 @@ are spoken once and written to the diagnostics rather than swallowed. Every rule
 world shares one Lua space for this, and a rule can call any function of any of that
 world's scripts.
 
+That space carries MUSHclient's own names as well -- `Send`, `Note`, `GetVariable`,
+`DoAfter`, `AddTrigger` and the rest, along with the `world` table and its constants --
+so code written for MUSHclient works as it stands, whether you learned from its
+documentation or brought something you made in it. It is the same space, not a second
+one: the same scripts, the same rules, the same values. The [automation and Lua
+guide](docs/scripting.md) lists what is there and what is deliberately not. A soundpack
+is a space of its own: a pack never sees `mud.*`, and your scripts never see a pack's
+variables or triggers.
+
 **Order** decides which rule is tried first when several match: lower numbers first, and
 rules sharing a number fall back to their pattern text, so the order never depends on which
 file they came from. A rule you have not ordered sits above every soundpack's rules, as your

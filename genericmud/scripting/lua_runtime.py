@@ -6,6 +6,10 @@ standard libraries (``os``/``io``/``package``/``debug``) and lupa's Python
 bridge are removed, so a soundpack cannot touch the filesystem or host process.
 One runtime (one Lua state) per loaded pack.
 
+:class:`MudTable` is that table on its own, so it can also be laid beside MUSHclient's own
+vocabulary in the world's one scripting space (``genericmud.scripting.world_runtime``), which is
+where a player's own scripts run.
+
 Native callback signature mirrors MUSHclient minus the name:
 ``mud.trigger(pattern, function(line, wildcards) ... end, {regex=true, priority=50})``
 where ``wildcards[1]`` is the first capture.
@@ -290,35 +294,26 @@ def install_pack_require(
     return lambda scope_key: scoped.pop(scope_key, None)
 
 
-class LuaPackRuntime:
-    def __init__(self, api: ScriptApi) -> None:
+class MudTable:
+    """The ``mud`` table: genericMud's own scripting vocabulary, built for one Lua state.
+
+    Two kinds of runtime install it. A native Lua pack gets it *instead* of MUSHclient's
+    vocabulary (see :class:`LuaPackRuntime`), because that is the dialect its author wrote for;
+    the player's own scripting space gets it *beside* MUSHclient's, so a script there can call
+    either (see ``genericmud.scripting.world_runtime``).
+
+    It is bound to the state and the loop guard of whichever runtime hosts it, so a callback is
+    timed and reported by that runtime, however the table got there.
+    """
+
+    def __init__(self, lua: LuaRuntime, api: ScriptApi, guard: ScriptGuard) -> None:
+        self._lua = lua
         self._api = api
-        self._script_error_spoken = False  # speak the first fire-time script fault, trace the rest
-        self._match_context: MatchContext | None = None
-        self._lua, install_hook = make_sandboxed_runtime()
-        # native packs are sandboxed; report contained faults so a broken trigger isn't silent
-        self._guard = ScriptGuard(
-            install_hook, require_hook=True, report=self._report_error,
-            clock=lambda: time.monotonic() - api.player_time,  # a dialog's wait isn't the script's
-        )
-        self._install_mud()
-        install_pack_require(self._lua, api.base_dir)
+        self._guard = guard
+        self._match_context: MatchContext | None = None  # the match the running callback is for
 
-    def _report_error(self, error: Exception) -> None:
-        """A fire-time trigger/timer fault is contained by the guard; trace every one and speak
-        the first, so a silently-dropped callback (a missing accessibility cue) isn't invisible."""
-        if self._api.diag is not None:
-            self._api.diag.event(
-                "script.error", source=self._api.source or "?",
-                error=f"{type(error).__name__}: {error}",
-            )
-        if not self._script_error_spoken:
-            self._script_error_spoken = True
-            self._api.speak(
-                f"A Lua script error occurred: {type(error).__name__}", channel="system"
-            )
-
-    def _install_mud(self) -> None:
+    def install(self) -> object:
+        """Build the table, put it in the state's globals as ``mud``, and return it."""
         api = self._api
         mud = self._lua.table()
         # ScriptApi methods already carry the right defaults, so bind directly.
@@ -354,6 +349,7 @@ class LuaPackRuntime:
         mud.delete_timer = api.remove_named_timer  # DeleteTimer
         mud.enable_timer = api.set_timer_enabled  # EnableTimer
         self._lua.globals().mud = mud
+        return mud
 
     def _run_callback(self, callback, ctx: MatchContext | None, *args: object):
         previous = self._match_context
@@ -557,14 +553,6 @@ class LuaPackRuntime:
 
         return factory
 
-    def function(self, name: str):
-        """A Lua function this script's source defined, or None (MUSHclient's named routine)."""
-        try:
-            value = self._lua.globals()[name]
-        except Exception:  # noqa: BLE001 - a name that is not there is simply not there
-            return None
-        return value if value is not None and callable(value) else None
-
     def set_match(self, line: str, wildcards) -> None:
         """Offer the match to code that runs next: globals ``line`` and ``wildcards``.
 
@@ -585,6 +573,57 @@ class LuaPackRuntime:
         for position, value in enumerate(values, start=1):
             table[position] = value
         return table
+
+
+class LuaPackRuntime:
+    """A native pack's own Lua state, with the ``mud`` table in it.
+
+    The player's own scripts do not use this: they run in the world's one scripting space, where
+    MUSHclient's names sit beside ``mud`` (``genericmud.scripting.world_runtime``).
+    """
+
+    def __init__(self, api: ScriptApi) -> None:
+        self._api = api
+        self._script_error_spoken = False  # speak the first fire-time script fault, trace the rest
+        self._lua, install_hook = make_sandboxed_runtime()
+        # native packs are sandboxed; report contained faults so a broken trigger isn't silent
+        self._guard = ScriptGuard(
+            install_hook, require_hook=True, report=self._report_error,
+            clock=lambda: time.monotonic() - api.player_time,  # a dialog's wait isn't the script's
+        )
+        self._mud = MudTable(self._lua, api, self._guard)
+        self._mud.install()
+        install_pack_require(self._lua, api.base_dir)
+
+    def _report_error(self, error: Exception) -> None:
+        """A fire-time trigger/timer fault is contained by the guard; trace every one and speak
+        the first, so a silently-dropped callback (a missing accessibility cue) isn't invisible."""
+        if self._api.diag is not None:
+            self._api.diag.event(
+                "script.error", source=self._api.source or "?",
+                error=f"{type(error).__name__}: {error}",
+            )
+        if not self._script_error_spoken:
+            self._script_error_spoken = True
+            self._api.speak(
+                f"A Lua script error occurred: {type(error).__name__}", channel="system"
+            )
+
+    def function(self, name: str):
+        """A Lua function this script's source defined, or None (MUSHclient's named routine)."""
+        try:
+            value = self._lua.globals()[name]
+        except Exception:  # noqa: BLE001 - a name that is not there is simply not there
+            return None
+        return value if value is not None and callable(value) else None
+
+    def set_match(self, line: str, wildcards) -> None:
+        """Offer the match to code that runs next: globals ``line`` and ``wildcards``."""
+        self._mud.set_match(line, wildcards)
+
+    def table_of(self, values):
+        """Values as a 1-based Lua table, the shape a ``mud`` callback's captures take."""
+        return self._mud.table_of(values)
 
     def run_source(self, code: str):
         return self._guard.run_strict(self._lua.execute, code)

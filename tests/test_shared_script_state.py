@@ -16,6 +16,7 @@ from genericmud.scripting import user_scripts
 from tests.helpers import RecordingSink
 
 lupa = pytest.importorskip("lupa")
+lua51 = pytest.importorskip("lupa.lua51")  # a world's own scripts run in Lua 5.1
 
 
 def _load(tmp_path, files: dict[str, str]) -> tuple[RecordingSink, list]:
@@ -78,7 +79,7 @@ def test_a_broken_file_discards_the_whole_set_and_leaves_the_old_one(tmp_path):
     assert sink.sent == ["say yes"]
 
     user_scripts.save_script(tmp_path, "20-broken.lua", "this is not lua ((")
-    with pytest.raises(lupa.LuaSyntaxError):  # the file is not Lua at all
+    with pytest.raises(lua51.LuaSyntaxError):  # the file is not Lua at all
         user_scripts.load_scripts(engine, tmp_path, source_prefix="user-script:2")
     # Only the old set is registered: nothing from the half-loaded one survived.
     assert [rule.source for rule in engine._triggers] == ["user-script:1"]
