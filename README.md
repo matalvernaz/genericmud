@@ -99,6 +99,18 @@ offers an encrypted connection on port 9501; /secure switches this world to it".
 reconnects. Nothing is switched on a game's say-so alone; the offer is only made once, and only when the connection
 you are on isn't already encrypted.
 
+**Understand Pueblo HTML** is off unless you switch it on, and unlike the other
+settings that is deliberate: turning it on makes genericMud introduce itself as a
+Pueblo client when it connects, and a MUD that does not speak Pueblo reads that
+line as a character name at its login screen. Switch it on for a world you know
+wants it. genericMud then reads that world's HTML as the words it contains --
+tags are dropped rather than spoken, `&lt;` and `&quot;` become the characters
+they stand for, and a line break is where the MUD put one -- so a Pueblo MUD
+reads as prose instead of a wall of markup. Commands the world offers as links
+(`<a xch_cmd="north">north</a>`) become the same followable links an MXP world's
+are, so the link keys work there too. Colour and pictures carry nothing a voice
+can use and are left out.
+
 ## Logging in automatically
 
 A world's details (Ctrl+O, choose the world, Edit) take a **username** and a
