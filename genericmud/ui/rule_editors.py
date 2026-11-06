@@ -658,11 +658,6 @@ class TimerEditorDialog(_RuleEditorBase):
         self._send = self._command_text(grid, timer.send, captures=False)
         self._send_to = self._send_to_choice(grid, timer.send_to)
         self._variable = self._variable_name(grid, timer.variable)
-        self._omit_log = wx.CheckBox(self, label="Leave what it writes out of the session log")
-        self._omit_log.SetName("Leave what it writes out of the session log")
-        self._omit_log.SetValue(timer.omit_log)
-        grid.Add(wx.StaticText(self, label=""))
-        grid.Add(self._omit_log)
         self._finish(outer, grid)
 
     def result(self) -> UserTimer:
@@ -678,7 +673,6 @@ class TimerEditorDialog(_RuleEditorBase):
             send=self._send.GetValue().strip(),
             send_to=SEND_TO_CHOICES[self._send_to.GetSelection()],
             variable=self._variable.GetValue().strip(),
-            omit_log=self._omit_log.GetValue(),
         )
 
     @staticmethod

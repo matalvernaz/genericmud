@@ -175,7 +175,6 @@ class EngineApp(
             window=lambda: self.pack_window,
             update_packs=self.update_packs,
             check_pack_updates=self.check_pack_updates,
-            log_note=self._log_note_asked_for,
             log_line=self._log,
         )
         # Set by a front end that can show dialogs (the wx window): called with the question
@@ -223,7 +222,6 @@ class EngineApp(
         self.log_automatically = False
         self.log_files = "session"
         self.log_commands = True
-        self.log_notes = True  # a world's own setting replaces this when one is opened
         # Echo what you type into the output (MUSHclient's "echo input"). Off unless the world
         # asks for it, and separate from logging it: either one can be wanted without the other.
         self.echo_input = False
@@ -330,7 +328,6 @@ class EngineApp(
         self.log_automatically = world.log_automatically
         self.log_files = world.log_files
         self.log_commands = world.log_commands
-        self.log_notes = world.log_notes
         self.echo_input = world.echo_input
         # How this session reached the world: an offer of an encrypted port has to know whether
         # this link is already encrypted, and whether the offered port is even a change.

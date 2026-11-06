@@ -708,7 +708,7 @@ The ones worth knowing:
 | --- | --- |
 | `Send("look")` | sends one command, as `mud.command` does |
 | `Note("text")`, `Tell("text")`, `ColourNote(...)` | shows a line in the output window and speaks it |
-| `print("text")` | the same as `Note`; Lua's `print` goes to the output window, not to a console nobody can see |
+| `print("text")` | shows the line and never keeps it in the session log, where `Note` does; Lua's `print` goes to the output window, not to a console nobody can see |
 | `GetVariable`, `SetVariable`, `DeleteVariable` | the same values `mud.get_var`, `mud.set_var`, and `mud.delete_var` use |
 | `DoAfter(seconds, "command")` | runs a command later |
 | `AddTrigger`, `AddAlias`, `AddTimer`, and their `Enable…` and `Delete…` | rules registered while the script runs |

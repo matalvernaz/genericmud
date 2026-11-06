@@ -48,7 +48,7 @@ def _alias(tmp_path, alias: UserAlias) -> tuple[RecordingSink, AutomationEngine]
 
 def test_the_targets_are_the_ones_this_client_can_do():
     assert SEND_TO_CHOICES == (
-        "world", "command", "output", "log", "execute", "script", "variable",
+        "world", "command", "output", "print", "log", "execute", "script", "variable",
     )
     assert len(SEND_TO_LABELS) == len(SEND_TO_CHOICES)
 
@@ -424,41 +424,63 @@ def test_an_alias_and_a_timer_can_cut_current_speech(tmp_path):
     assert sink.speech_stops == 2
 
 
-def test_a_timer_can_leave_what_it_writes_out_of_the_log(tmp_path):
-    # The box used to save and do nothing at all: the note showed *and* went into the file.
+def test_a_note_is_always_logged_and_a_print_never_is(tmp_path):
+    # The destination decides, not a world-wide setting: MUSHclient's Note goes in the record and
+    # its Print does not, and that is the whole difference between them.
     sink = RecordingSink()
     engine = AutomationEngine(sink)
     user_rules.register_rules(
         ScriptApi(engine, source=user_rules.SOURCE, base_dir=str(tmp_path)),
         UserRules(
             timers=[
-                UserTimer(
-                    label="quiet", every=5, send="still down", send_to="output", omit_log=True
-                ),
+                UserTimer(label="quiet", every=5, send="still down", send_to="print"),
                 UserTimer(label="loud", every=5, send="starting", send_to="output"),
             ]
         ),
     )
     for _delay, callback in list(sink.scheduled):
         callback()
-    # Both are shown; only the one that did not ask to be left out is part of the record.
     assert ("still down", "main") in sink.echoed
     assert ("starting", "main") in sink.echoed
+    # Both are shown; only the note is part of the record.
     assert sink.echo_flags == [False, True]
 
 
-def test_a_log_target_is_dropped_when_the_timer_asks_to_be_left_out(tmp_path):
+def test_every_kind_of_rule_can_print_instead_of_noting(tmp_path):
+    # A trigger, a hotkey and a MUD data rule reach the same two destinations as a timer.
     sink = RecordingSink()
     engine = AutomationEngine(sink)
+    api = ScriptApi(engine, source=user_rules.SOURCE, base_dir=str(tmp_path))
     user_rules.register_rules(
-        ScriptApi(engine, source=user_rules.SOURCE, base_dir=str(tmp_path)),
+        api,
         UserRules(
-            timers=[
-                UserTimer(
-                    label="quiet", every=5, send="hidden", send_to="log", omit_log=True
-                )
-            ]
+            triggers=[UserTrigger(pattern="backup", send="running", send_to="print")],
+            keys=[UserKey(key="f2", send="pressed", send_to="print")],
+            watches=[UserWatch(name="Char.Vitals.hp", send="health ${value}", send_to="print")],
         ),
     )
-    sink.scheduled[0][1]()
-    assert sink.logged == []
+    engine.process_line(Line("Starting database backup."))
+    engine.press_key("f2")
+    engine.data_arrived("gmcp", "Char.Vitals.hp", 90)
+    assert sink.echoed == [
+        ("running", "main"), ("pressed", "main"), ("health 90", "main"),
+    ]
+    assert sink.echo_flags == [False, False, False]  # a print never reaches the log
+
+
+# --- pack and script notes follow the same rule ---------------------------------------------
+
+
+def test_a_packs_note_is_logged_and_its_print_is_not():
+    # MUSHclient's Note goes in the record; its print does not. The pack layer used to treat
+    # both as prints, so a pack that logged by noting silently did not log.
+    pytest.importorskip("lupa")
+    from genericmud.scripting.mushclient_compat import MushclientPack
+
+    sink = RecordingSink()
+    engine = AutomationEngine(sink)
+    pack = MushclientPack(ScriptApi(engine, source="p"))
+    pack.run_source('Note("a note")')
+    pack.run_source('print("a print")')
+    assert [text for text, _channel in sink.echoed] == ["a note", "a print"]
+    assert sink.echo_flags == [True, False]  # the note is part of the record, the print is not

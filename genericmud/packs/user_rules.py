@@ -37,11 +37,14 @@ _CAPTURE_RE = re.compile(r"%(\d)")
 _GAG_CHOICES = ("none", "speech", "line")
 # Where a rule's response text goes -- MUSHclient's "send to" box (its eSendTo* enum). The
 # order is the order they are offered in, and matches SEND_TO_LABELS.
-SEND_TO_CHOICES = ("world", "command", "output", "log", "execute", "script", "variable")
+SEND_TO_CHOICES = (
+    "world", "command", "output", "print", "log", "execute", "script", "variable",
+)
 SEND_TO_LABELS = (
     "The MUD (send these commands)",
     "My command box, unsent (finish it myself)",
-    "The output, as a note (kept in the log)",
+    "The output, as a note (always kept in the log)",
+    "The output, as a print (never kept in the log)",
     "The session log only (never shown)",
     "This client again (run it as if I typed it)",
     "A script (a function name, or Lua code)",
@@ -170,7 +173,6 @@ class UserTimer:
     # the local half of a rule -- speak, note, log, store a value, run a script -- since there is
     # no MUD to send to. Everything else pauses, and comes back when the world does.
     run_disconnected: bool = False
-    omit_log: bool = False  # leave whatever it writes out of the session log
     group: str = ""  # as for triggers: switched together with the rest of its group
 
 
@@ -414,7 +416,6 @@ def deliver(
     ctx: MatchContext | None = None,
     *,
     variable: str = "",
-    log: bool = True,
 ) -> None:
     """Put the expanded text where the rule says (MUSHclient's "send to" targets).
 
@@ -427,14 +428,17 @@ def deliver(
         # which is the point of putting it there rather than sending it.
         api.type_text("\n".join(lines))
     elif kind == "output":
+        # A note is part of the record; a print (below) never is. That is the whole difference,
+        # and it is a destination rather than a setting, so it is decided where the text is
+        # written. MUSHclient draws the same line: Note logs, Print does not.
         for line in lines:
-            # A note is part of the record; a print is not. That is the whole difference, and
-            # a rule can ask for either.
-            api.note(line) if log else api.print(line)
+            api.note(line)
+    elif kind == "print":
+        for line in lines:
+            api.print(line)
     elif kind == "log":
         for line in lines:
-            if log:
-                api.log_line(line)
+            api.log_line(line)
     elif kind == "variable":
         name = variable.strip()
         if not name:
@@ -777,9 +781,7 @@ def _register_timer(api: ScriptApi, t: UserTimer, *, clock=clock_seconds) -> Non
             # speak, note, log, store a value or run a script; commands have nowhere to go, and
             # saying so every few seconds would be worse than the silence.
             return
-        # "Leave what it writes out of the session log": the note still shows, the file
-        # stays untouched, which is the same distinction print and note have everywhere else.
-        deliver(api, list(parts), t.send_to, variable=t.variable, log=not t.omit_log)
+        deliver(api, list(parts), t.send_to, variable=t.variable)
 
     # A timer that names a time of day has no fixed period -- its wait is "until the next
     # 03:00" -- so it asks the clock each time; an interval timer just repeats.

@@ -1925,8 +1925,9 @@ class MushclientPack:
             g[name] = fn
         # MUSHclient points Lua's print at the output window, joining its arguments with
         # spaces. Packs rely on it: Empire's "omit and reprint" triggers hide a line and
-        # print a reworded copy, which would otherwise go to a console nobody can see.
-        g["print"] = joined(self._note, " ")
+        # print a reworded copy, which would otherwise go to a console nobody can see. A print
+        # is not a note: it is shown and never written to the log.
+        g["print"] = joined(self._print, " ")
         # Packs call both bare (Sound(...)) and through the world object
         # (world.Sound(...), world.getvariable(...)). Mirror funcs onto a world
         # table, with lowercase aliases for the world.lowercase() callers.
@@ -2191,16 +2192,27 @@ class MushclientPack:
         return _SCRIPT_ERROR_OK  # MUSHclient's Send answers eOK, and some packs Note() it
 
     def _note(self, text: object = "") -> None:
-        """A finished output line: whatever Tell/ColourTell started, then ``text``.
+        """MUSHclient's Note: a finished output line, and part of the session log.
 
         Spoken as well as shown. genericMud stands in for MushReader, the screen-reader plugin
         these packs are written for, and its OnPluginScreendraw reads a note (type 1) just as
         it reads the MUD's own lines (type 0), blank ones excepted. Without that, a pack that
         hides a line and prints a reworded copy (Empire's death message) would go silent.
+
+        A note is always logged and a print never is -- the same pair this client's own rules
+        offer as destinations, and what MUSHclient means by the two names.
         """
         line = self._pending_tell + str(text)
         self._pending_tell = ""
-        self._api.echo(line)
+        self._api.note(line)
+        if line.strip() and self._api.line_speech():
+            self._api.speak(line)
+
+    def _print(self, text: object = "") -> None:
+        """MUSHclient's print: the same line, shown and spoken, never in the log."""
+        line = self._pending_tell + str(text)
+        self._pending_tell = ""
+        self._api.print(line)
         if line.strip() and self._api.line_speech():
             self._api.speak(line)
 

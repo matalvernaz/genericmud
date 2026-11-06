@@ -143,8 +143,9 @@ in it to say where they belong.
 Make a trigger without code:
 Show Triggers and choose New. Enter the text to watch for. The line contains
 this text is usually the right match choice. "Send it to" says where the response
-goes: the MUD, your command box (unsent, to finish yourself), the output as a note,
-the log alone, this client again, a script -- a function name, or Lua code such as
+goes: the MUD, your command box (unsent, to finish yourself), the output as a note
+(always kept in the log), the output as a print (never kept in the log), the log alone,
+this client again, a script -- a function name, or Lua code such as
 mud.set_enabled("combat", false) -- or a script variable, which stores the text under
 a name you give it so ${script:name} can read it later. Add any spoken text, sound,
 line handling, or channel routing you need, then choose OK. Leave this line out of the

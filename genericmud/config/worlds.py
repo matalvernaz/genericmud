@@ -78,7 +78,6 @@ class World:
     pueblo: bool = False
     # Write the client's own notes to the session log. Print lines are never written either
     # way: that is the difference between the two, and why a rule offers both.
-    log_notes: bool = True
     # Where an <IMAGE> looks for its file when the tag carries no URL of its own. Most MUDs
     # expect the client to have this configured, the same way MSP's U= expects a sounds
     # location -- without one an image can't be located, and is quietly dropped.
@@ -228,7 +227,6 @@ def load_worlds(path: Path | None = None) -> list[World]:
                 ),
                 mxp=entry.get("mxp") is not False,
                 pueblo=entry.get("pueblo") is True,
-                log_notes=entry.get("log_notes") is not False,
                 images_url=normalize_images_url(entry.get("images_url")),
             )
         )
@@ -280,8 +278,6 @@ def save_worlds(worlds: list[World], path: Path | None = None) -> None:
             lines.append("mxp = false")
         if world.pueblo:
             lines.append("pueblo = true")
-        if not world.log_notes:
-            lines.append("log_notes = false")
         if world.images_url:
             lines.append(f"images_url = {_quote(world.images_url)}")
         blocks.append("\n".join(lines))
