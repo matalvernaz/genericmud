@@ -304,7 +304,7 @@ def window():
 
 
 def test_the_name_box_is_editable_for_a_world_nobody_is_connected_to(window):
-    from genericmud.ui.wx_app import WorldDialog
+    from genericmud.ui.world_dialog import WorldDialog
 
     dialog = WorldDialog(window, World("Penultimate", "pen.example", 9500), lock_name=False)
     try:
@@ -314,7 +314,7 @@ def test_the_name_box_is_editable_for_a_world_nobody_is_connected_to(window):
 
 
 def test_the_name_box_is_locked_while_the_world_is_connected(window):
-    from genericmud.ui.wx_app import WorldDialog
+    from genericmud.ui.world_dialog import WorldDialog
 
     dialog = WorldDialog(window, World("Penultimate", "pen.example", 9500), lock_name=True)
     try:
@@ -326,10 +326,10 @@ def test_the_name_box_is_locked_while_the_world_is_connected(window):
 def test_the_dialog_keeps_the_name_it_has_when_the_rule_refuses_it(window, monkeypatch):
     # The refusal happens before anything is written, so no world and no login are touched.
     wx = pytest.importorskip("wx")
-    from genericmud.ui import wx_app
+    from genericmud.ui import world_dialog
 
     told: list[str] = []
-    dialog = wx_app.WorldDialog(
+    dialog = world_dialog.WorldDialog(
         window,
         World("Penultimate", "pen.example", 9500),
         name_check=lambda name: "" if name == "Penultimate" else "that name is taken",
