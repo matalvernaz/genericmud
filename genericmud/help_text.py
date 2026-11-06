@@ -164,7 +164,9 @@ every so often, or once a day at a time such as 03:00. What it does is the same
 question the other rules answer, so it can send commands, fill your command box, write
 a note, store a value, or run Lua. Do it once only makes it a one-shot. An offset is
 how many seconds before its interval is up it fires, so two timers on the same interval
-take turns.
+take turns. Keep running while the world is disconnected lets it keep its clock while
+nothing is connected: then it can still speak, note, log, store a value or run a
+script, but commands have nowhere to go.
 
 Trigger, alias, and hotkey command fields accept one command per line. ${1}
 means the first matched part. ${script:attack} reads a value saved by a script.

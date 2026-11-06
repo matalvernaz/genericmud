@@ -534,6 +534,13 @@ one set for 120 with an offset of 60 fires at 60, 180, 300. The offset only move
 fire; the gap after that is still the interval. It means nothing for a daily timer, whose
 wait comes from the clock.
 
+A timer that should keep going while the world is down says so with **Keep running while the
+world is disconnected**. It keeps its clock through the disconnect, and what it does then is
+the local half of a rule: a note, a log line, a value stored, or a script run. Commands have
+nowhere to go and are dropped, so the flag belongs on an alert -- "still down, ten minutes
+now" -- and not on a fight. Every other timer waits for the world to come back and carries on
+from that moment when it does.
+
 Timers are named things in the engine, which is what makes that possible, and the names
 are MUSHclient's:
 

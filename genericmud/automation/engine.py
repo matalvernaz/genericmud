@@ -246,6 +246,7 @@ class _NamedTimer:
         next_delay: Callable[[], float] | None = None,
         group: str = "",
         source: str = "",
+        while_disconnected: bool = False,
     ) -> None:
         self._engine = engine
         self.name = name
@@ -257,14 +258,28 @@ class _NamedTimer:
         self.callback = callback
         self.group = group
         self.source = source
+        # MUSHclient's ActiveWhenClosed: a timer that keeps its clock through a disconnect. Every
+        # other timer waits for the world to come back (see AutomationEngine.suspend_timers).
+        self.while_disconnected = while_disconnected
         self.enabled = True
         self._pending: object | None = None
+
+    @property
+    def armed(self) -> bool:
+        """Whether a fire is waiting on the clock right now."""
+        return self._pending is not None
+
+    def _schedule(self, delay: float) -> None:
+        self._pending = self._engine.schedule_timer(
+            delay, self._fire, source=self.source,
+            while_disconnected=self.while_disconnected,
+        )
 
     def arm(self) -> None:
         self.disarm()
         if not self.enabled:
             return
-        self._pending = self._engine.schedule_timer(self.delay, self._fire, source=self.source)
+        self._schedule(self.delay)
 
     def disarm(self) -> None:
         if self._pending is not None:
@@ -282,13 +297,9 @@ class _NamedTimer:
         if not self.enabled:
             return
         if self.next_delay is not None:  # a time-of-day timer asks the clock each time
-            self._pending = self._engine.schedule_timer(
-                self.next_delay(), self._fire, source=self.source
-            )
+            self._schedule(self.next_delay())
         elif self.every is not None:
-            self._pending = self._engine.schedule_timer(
-                self.every, self._fire, source=self.source
-            )
+            self._schedule(self.every)
 
     def set_enabled(self, enabled: bool) -> None:
         self.enabled = enabled
@@ -298,13 +309,27 @@ class _NamedTimer:
             self.disarm()
 
 
-def _cancel_pending(entry: tuple[object, str, Callable[[], None] | None]) -> None:
-    handle, _source, on_cancel = entry
-    cancel = getattr(handle, "cancel", None)
+@dataclass
+class _PendingTimer:
+    """One scheduled callback the engine holds a handle for, so it can be taken back.
+
+    ``while_disconnected`` marks the work that must survive a dropped connection: a timer the
+    player asked to keep going, or a pack's timer flagged ActiveWhenClosed. Everything else is
+    cancelled when the world disconnects, because it has nothing left to run against.
+    """
+
+    handle: object
+    source: str
+    on_cancel: Callable[[], None] | None = None
+    while_disconnected: bool = False
+
+
+def _cancel_pending(entry: _PendingTimer) -> None:
+    cancel = getattr(entry.handle, "cancel", None)
     if cancel is not None:
         cancel()
-    if on_cancel is not None:
-        on_cancel()
+    if entry.on_cancel is not None:
+        entry.on_cancel()
 
 
 # A watch may start with one of these to hear only that protocol: gmcp.Char.Vitals.
@@ -399,10 +424,12 @@ class AutomationEngine:
         self.current_line: Line | None = None
         # False while a pack wants incoming lines kept quiet (Miriani-Next's Do Not Disturb).
         self.line_speech = True
-        # (handle, source) pairs let a live script reload cancel only the retiring script set.
-        # Each pending timer or other cancellable job: its handle, the source that made it,
-        # and what to run if it's cancelled instead of firing (see ScriptApi.add_timer).
-        self._timer_handles: list[tuple[object, str, Callable[[], None] | None]] = []
+        # Each pending timer or other cancellable job: its handle, the source that made it (so a
+        # live reload cancels only the retiring set), what to run if it is cancelled instead of
+        # firing (see ScriptApi.add_timer), and whether it outlives a disconnect.
+        self._timer_handles: list[_PendingTimer] = []
+        # The named timers a disconnect paused, so resume_timers() can start them again.
+        self._paused_timers: list[_NamedTimer] = []
 
     # --- registration ---
 
@@ -482,16 +509,18 @@ class AutomationEngine:
         group: str = "",
         source: str = "",
         enabled: bool = True,
+        while_disconnected: bool = False,
     ) -> _NamedTimer:
         """A timer with a name, so it can be found, switched and cancelled like a rule.
 
         ``delay`` is the first wait; ``every`` is the wait after each fire (None makes it a
         one-shot). MUSHclient's timer model: a named thing with a group, an on/off switch and
-        a send-to action, which a script or a rule can start and stop.
+        a send-to action, which a script or a rule can start and stop. ``while_disconnected``
+        is its ActiveWhenClosed: the timer keeps its clock through a dropped connection.
         """
         timer = _NamedTimer(
             self, name, delay, callback, every=every, next_delay=next_delay,
-            group=group, source=source,
+            group=group, source=source, while_disconnected=while_disconnected,
         )
         self._named_timers = [t for t in self._named_timers if t.name != name]
         self._named_timers.append(timer)
@@ -777,42 +806,72 @@ class AutomationEngine:
         *,
         source: str = "",
         on_cancel: Callable[[], None] | None = None,
+        while_disconnected: bool = False,
     ) -> object | None:
-        """Schedule a pack timer through the sink and track its handle.
+        """Schedule a timer through the sink and track its handle.
 
         Tracked so :meth:`cancel_timers` can drop everything still pending at session close;
         a one-shot cue timer that outlives its tab would otherwise fire and start audio with no
-        session left to stop it. ``on_cancel`` runs if it's cancelled instead of firing.
+        session left to stop it. ``on_cancel`` runs if it's cancelled instead of firing, and
+        ``while_disconnected`` keeps it through a dropped connection.
         """
         handle = self.sink.schedule(delay, callback)
         if handle is not None:
-            self._timer_handles.append((handle, source, on_cancel))
+            self._timer_handles.append(
+                _PendingTimer(handle, source, on_cancel, while_disconnected)
+            )
         return handle
 
     def track_pending(self, handle: object, *, source: str = "") -> None:
         """Hold other cancellable pending work (a sound still downloading) with the timers,
         so session teardown and a source's reload cancel it the same way."""
-        self._timer_handles.append((handle, source, None))
+        self._timer_handles.append(_PendingTimer(handle, source))
 
     def discard_timer(self, handle: object) -> None:
         """Forget a handle once it has fired, so the tracking list can't grow unbounded."""
-        self._timer_handles = [entry for entry in self._timer_handles if entry[0] is not handle]
+        self._timer_handles = [entry for entry in self._timer_handles if entry.handle is not handle]
 
     def cancel_source_timers(self, source: str) -> None:
         """Cancel pending timers registered by one retiring script/pack source."""
-        keep: list[tuple[object, str, Callable[[], None] | None]] = []
-        cancelled: list[tuple[object, str, Callable[[], None] | None]] = []
-        for entry in self._timer_handles:
-            (cancelled if entry[1] == source else keep).append(entry)
-        self._timer_handles = keep
+        cancelled = [entry for entry in self._timer_handles if entry.source == source]
+        self._timer_handles = [entry for entry in self._timer_handles if entry.source != source]
         for entry in cancelled:
             _cancel_pending(entry)
 
     def cancel_timers(self) -> None:
-        """Cancel every still-pending pack timer (session teardown, or a dropped connection)."""
+        """Cancel every still-pending timer (session teardown)."""
         cancelled, self._timer_handles = self._timer_handles, []
+        self._paused_timers = []
         for entry in cancelled:
             _cancel_pending(entry)
+
+    def suspend_timers(self) -> None:
+        """A dropped connection: stop the clocks, except the ones asked to keep going.
+
+        A timer that did not ask to outlive the connection is paused -- dropped now, armed again
+        by :meth:`resume_timers` -- so its schedule survives the drop instead of vanishing with
+        the socket. Everything anonymous (a one-shot ``mud.timer``, a sound still downloading)
+        has nothing to resume into, so it is cancelled as it always was.
+        """
+        newly_paused = [
+            timer for timer in self._named_timers
+            if timer.enabled and timer.armed and not timer.while_disconnected
+        ]
+        for timer in newly_paused:
+            timer.disarm()  # takes its handle out of the tracking list too
+        # Added, never replaced: a world that says it dropped twice must not lose the timers the
+        # first disconnect paused.
+        self._paused_timers.extend(newly_paused)
+        cancelled = [entry for entry in self._timer_handles if not entry.while_disconnected]
+        self._timer_handles = [entry for entry in self._timer_handles if entry.while_disconnected]
+        for entry in cancelled:
+            _cancel_pending(entry)
+
+    def resume_timers(self) -> None:
+        """The world is back: start the paused timers again, each with its wait from now."""
+        paused, self._paused_timers = self._paused_timers, []
+        for timer in paused:
+            timer.arm()
 
     # --- evaluation ---
 

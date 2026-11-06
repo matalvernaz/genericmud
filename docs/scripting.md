@@ -530,7 +530,13 @@ mud.delete_timer("tick")
 `every` is the gap between fires. `offset` is MUSHclient's head start: the number of seconds
 *before* the interval is up that the first fire comes, which is how two timers on one interval
 take turns instead of both going off at once. `group` puts it in a group with other rules, so
-one call switches them all.
+one call switches them all. `while_disconnected` is MUSHclient's ActiveWhenClosed: the timer
+keeps its clock when the world drops, which only makes sense for what a rule can do without a
+MUD to send to -- a note, a log line, a value, a script.
+
+A named timer that does not ask to keep going waits for the world to come back and then carries
+on from that moment. A one-shot `mud.timer` is gone: a dropped connection cancels it, because
+there is nothing to resume it into.
 
 For a timer at a time of day, use a rule in the Automation Manager (Ctrl+B): its **At this
 time each day** field takes `03:00`, and the rule can send, speak, note or run Lua.
@@ -808,8 +814,8 @@ Rules and timing:
 The alias and trigger options are `regex` and `priority`, plus `label` and `group`.
 A label is the name a rule is switched by -- `mud.set_enabled("shoot", false)` -- and the
 manager reads it out first; a group is what `mud.set_group_enabled` switches as one. A
-trigger can also use `channel`. The `mud.add_timer` options are `every`, `offset`, `group`
-and `enabled`. The only `mud.on_data` option is `changes`.
+trigger can also use `channel`. The `mud.add_timer` options are `every`, `offset`, `group`,
+`enabled` and `while_disconnected`. The only `mud.on_data` option is `changes`.
 
 Commands and output:
 
