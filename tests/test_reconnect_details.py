@@ -28,6 +28,9 @@ class _App:
     def set_encoding(self, encoding: str) -> None:
         self.encodings.append(encoding)
 
+    def apply_world_settings(self, world: World) -> None:
+        self.told = world
+
 
 def _panel(world: World):
     from genericmud.ui import wx_app
@@ -175,3 +178,43 @@ async def test_the_window_answers_with_the_world_as_it_stands_now(monkeypatch):
 
     assert panel._target_for_reconnect() == ("new.example", 9501, True)
     assert panel.world.port == 9501
+
+
+def test_the_engine_hears_the_port_and_tls_too(monkeypatch):
+    # The engine checks an MSSP offer of an encrypted port against the link it believes it is
+    # on. Left as the tab opened, a world edited onto that port and TLS was offered it again.
+    from genericmud.protocol.telnet import OPT_MSSP, WILL, Negotiation, Subnegotiation
+
+    _saving(monkeypatch, World("Pen", "pen.example", 9501, tls=True))
+    panel = _panel(World("Pen", "pen.example", 9500, tls=False))
+    backend = RecordingBackend()
+    panel.app = EngineApp(
+        VoiceRouter(backend, clock=lambda: 0.0),
+        send=[].append,
+        post=[].append,
+        keymap=load_keymap("vipmud"),
+        name="Pen",
+    )
+    panel.app.apply_world_settings(panel.world)
+
+    panel._adopt_saved_world()
+    panel.app.on_telnet_event(Negotiation(WILL, OPT_MSSP))
+    panel.app.on_telnet_event(Subnegotiation(OPT_MSSP, b"\x01SSL\x029501"))
+
+    assert not [line for line in backend.spoken if "encrypted" in line]
+
+
+def test_a_reconnect_that_finds_the_link_up_changes_nothing(monkeypatch):
+    # The link came back while the reconnect waited its turn: the session is live, so its
+    # encoding must not be swapped under it.
+    import asyncio
+
+    _saving(monkeypatch, World("Pen", "new.example", 9501, encoding="cp1251"))
+    panel = _panel(World("Pen", "pen.example", 9500, encoding="auto"))
+    panel._alive = True
+    panel._connection.connected = True
+
+    asyncio.run(panel._reconnect())
+
+    assert panel.world.host == "pen.example" and panel.world.encoding == "auto"
+    assert panel.app.encodings == []
