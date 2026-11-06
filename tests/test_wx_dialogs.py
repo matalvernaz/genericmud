@@ -1254,7 +1254,7 @@ def test_the_soundpacks_menu_opens_a_notepad_the_player_picks(frame, tmp_path, m
 
 def test_a_pack_update_from_its_repository_says_what_it_did():
     from genericmud.packs import GitUpdateResult
-    from genericmud.ui.wx_app import _git_update_message
+    from genericmud.ui.soundpack_manager import _git_update_message
 
     assert _git_update_message(GitUpdateResult("Erion", up_to_date=True)) == "Erion is up to date."
     message = _git_update_message(GitUpdateResult(
