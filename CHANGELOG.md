@@ -21,7 +21,7 @@ Entries start at 0.7.1. Earlier releases were tagged before this file existed.
   line, or just the selected text, without moving or changing it. A selection
   across several lines sends its nonblank lines separately.
 * Up and Down move through the document. Down on an unfinished final line
-  adds an empty tail without sending the draft. Escape inserts a blank line
+  adds an empty tail without sending the draft. Escape inserts a new line
   without deleting selected text. Backspace at the start of a line preserves
   its boundary; selected text and Delete still use ordinary native editing.
 * Ctrl+R completes a prefix from earlier rows, including drafts; press it
