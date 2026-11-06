@@ -8,10 +8,13 @@ from pathlib import Path
 
 from genericmud.automation.engine import AutomationEngine
 from genericmud.config.atomic import atomic_write_text
-from genericmud.scripting.api import ScriptApi
-from genericmud.scripting.lua_runtime import LuaPackRuntime
+from genericmud.scripting.mushclient_compat import MushclientPack
+from genericmud.scripting.world_runtime import world_runtime
 
 SCRIPTS_DIRNAME = "scripts"
+# The engine source every rule a world's script registers is filed under, one generation per
+# reload: "user-script:3". The manager shows those rules, so the prefix is named here.
+SOURCE_PREFIX = "user-script:"
 DEFAULT_SCRIPT_NAME = "main.lua"
 _SCRIPT_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*\.lua", re.IGNORECASE)
 _WINDOWS_RESERVED = {
@@ -39,7 +42,7 @@ DEFAULT_SCRIPT = """\
 class LoadedUserScript:
     name: str
     source: str
-    runtime: LuaPackRuntime
+    runtime: MushclientPack
 
 
 def scripts_dir(pack_dir: str | Path) -> Path:
@@ -108,11 +111,13 @@ def delete_script(pack_dir: str | Path, name: str) -> None:
 
 
 def validate_script(pack_dir: str | Path, source: str) -> None:
-    """Compile/run one candidate against a sinkless engine before replacing its file."""
+    """Compile/run one candidate against a sinkless engine before replacing its file.
+
+    Run in the world's own kind of state, not a stand-in: a file that leans on ``mud`` or on
+    MUSHclient's names has to be able to fail here for the same reasons it would fail live.
+    """
     engine = AutomationEngine()
-    runtime = LuaPackRuntime(
-        ScriptApi(engine, source="user-script-validation", base_dir=str(pack_dir))
-    )
+    runtime = world_runtime(engine, pack_dir, source_prefix="user-script-validation")
     try:
         runtime.run_source(str(source))
     finally:
@@ -122,20 +127,33 @@ def validate_script(pack_dir: str | Path, source: str) -> None:
 def load_scripts(
     engine: AutomationEngine, pack_dir: str | Path, *, source_prefix: str
 ) -> list[LoadedUserScript]:
-    """Load every script alphabetically; roll back this source set if any file fails."""
+    """Load every script, in alphabetical order, into ONE Lua state.
+
+    The files are parts of one world's automation, not separate programs: ``10-settings.lua``
+    can define a function that ``20-combat.lua`` calls, which is the reason to split a script
+    up in the first place. MUSHclient's plugins work the same way -- one state per plugin --
+    and the alternative was sharing only through ``mud.set_var``, which cannot carry a function
+    or a table.
+
+    The state itself is the world's scripting space (:func:`world_runtime`): the code a rule
+    sends to script runs in it too, so ``mud.*`` and MUSHclient's names are there for both, and
+    a rule can call a function a file defined.
+
+    Order is the rule that follows from it: a name has to be defined before it is used, and a
+    later file that defines the same global wins, exactly as reading the files in that order
+    would. A failure anywhere discards the whole set -- the caller keeps the scripts that were
+    working -- because half a new state is worse than the old one.
+    """
+    names = list_scripts(pack_dir)
+    if not names:
+        return []  # no files, so no state: nothing to load and nothing to leave behind
+    runtime = world_runtime(engine, pack_dir, source_prefix=source_prefix)
     loaded: list[LoadedUserScript] = []
-    attempted_sources: list[str] = []
     try:
-        for name in list_scripts(pack_dir):
-            source = f"{source_prefix}/{name}"
-            attempted_sources.append(source)
-            runtime = LuaPackRuntime(
-                ScriptApi(engine, source=source, base_dir=str(pack_dir))
-            )
+        for name in names:
             runtime.run_file(str(script_path(pack_dir, name)))
-            loaded.append(LoadedUserScript(name, source, runtime))
+            loaded.append(LoadedUserScript(name, source_prefix, runtime))
     except BaseException:
-        for source in attempted_sources:
-            engine.remove_source(source)
+        engine.remove_source(source_prefix)  # every rule the half-loaded set registered
         raise
     return loaded

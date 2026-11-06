@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from lupa import LuaError
+from lupa.lua51 import LuaError  # the dialect a world's own scripts run in: MUSHclient's 5.1
 
 from genericmud.app import EngineApp
 from genericmud.packs import PackStore
