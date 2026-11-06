@@ -202,6 +202,12 @@ class CommandBoxMixin:
         code = event.GetKeyCode()
         entry = isinstance(getattr(self, "input", None), CommandEntryCtrl)
         secret_entry = getattr(self, "_entry_input", None) is not None and self._input_masked
+        if entry and code in (0, wx.WXK_SHIFT, wx.WXK_CONTROL, wx.WXK_ALT, wx.WXK_RAW_CONTROL):
+            # Modifier transitions do not end a completion run. Cocoa reports
+            # flagsChanged as KEY_DOWN/0 even when releasing Command, while
+            # other ports report the modifier key. The next editing key resets it.
+            event.Skip()
+            return
         combo = _key_combo(event, allow_numpad=not self._prefs.numpad_compass)
         if ((entry or secret_entry) and combo in ("escape", "ctrl+r", "ctrl+enter")
                 and self._dispatch_entry_shortcut(combo)):

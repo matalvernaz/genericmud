@@ -194,6 +194,12 @@ def _probe():
         entry.move_to_tail()
         key(entry, ord("R"), ctrl=True)
         assert entry.GetValue() == "LOOK first\nlook draft\nlook draft"
+        # Actual Cocoa flagsChanged delivery uses KEY_DOWN with key code zero
+        # for modifier transitions; other ports report the modifier key itself.
+        # Releasing/pressing Control must not restart prefix completion.
+        for modifier in (0, wx.WXK_CONTROL, wx.WXK_RAW_CONTROL, wx.WXK_SHIFT, wx.WXK_ALT):
+            assert key(entry, modifier).GetSkipped()
+            assert key(entry, modifier, ctrl=True).GetSkipped()
         key(entry, ord("R"), ctrl=True)
         assert entry.GetValue().endswith("\nloOK first")  # preserve the typed prefix's case
         key(entry, wx.WXK_RETURN, ctrl=True)

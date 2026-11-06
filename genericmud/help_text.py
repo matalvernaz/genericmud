@@ -45,10 +45,11 @@ Ordinary Backspace at the start preserves the row boundary; Delete and selected
 text deletion remain native. There is no Line Entry Mode Off setting yet.
 Returning from Output or pressing Ctrl+Enter goes to the existing tail.
 Ctrl+R recalls earlier rows by prefix, including drafts. Pack/user keys still win.
+On macOS, use Command+R and Command+Enter for those editable-mode shortcuts.
 Ctrl+Enter does not toggle autoretype in editable mode; it keeps its saved value.
 Passwords use a separate field. Unhiding clears any unsent password and says so.
 The buffer is in memory until the session closes and is not automatically trimmed.
-Windows/NVDA, GTK/Orca, VoiceOver, mouse focus and IME still need validation for
+Windows/NVDA, GTK/Orca, VoiceOver and IME still need validation for
 this mode. VIPMud script-brace assembly is not implemented.
 A semicolon sends several commands at once, as in n;n;look; type it twice to
 send a real one. Each world can change the separator or turn it off in its
