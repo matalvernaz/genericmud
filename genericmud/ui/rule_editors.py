@@ -154,6 +154,27 @@ class _RuleEditorBase(wx.Dialog):
         grid.Add(ctrl, 1, wx.EXPAND)
         return ctrl
 
+    def _order_controls(self, grid: wx.FlexGridSizer, rule) -> tuple[wx.TextCtrl, wx.CheckBox]:
+        """Order, and whether the rules after this one are still tried.
+
+        Order is MUSHclient's sequence: lower is tried first, and the same-numbered rules fall
+        back to their pattern text, so the order is never about which file they came from.
+        """
+        order = self._text(grid, "&Order (lower is tried first):", str(rule.order))
+        keep = wx.CheckBox(self, label="&Keep checking the rules after this one")
+        keep.SetName("Keep checking the rules after this one")
+        keep.SetValue(rule.keep_evaluating)
+        grid.Add(wx.StaticText(self, label=""))
+        grid.Add(keep)
+        return order, keep
+
+    @staticmethod
+    def _order_value(widget: wx.TextCtrl, fallback: int = 100) -> int:
+        try:
+            return int(widget.GetValue().strip() or fallback)
+        except ValueError:
+            return fallback
+
     def _send_to_choice(self, grid: wx.FlexGridSizer, current: str) -> wx.Choice:
         """The "send to" box: one response text, one destination (MUSHclient's arrangement)."""
         grid.Add(wx.StaticText(self, label="Send it &to:"), 0, wx.ALIGN_CENTER_VERTICAL)
@@ -236,6 +257,7 @@ class TriggerEditorDialog(_RuleEditorBase):
                      "Remove it entirely"],
             majorDimension=1, style=wx.RA_SPECIFY_COLS,
         )
+        self._order, self._keep_evaluating = self._order_controls(grid, trigger)
         self._gag.SetSelection({"none": 0, "speech": 1, "line": 2}.get(trigger.gag, 0))
         outer_gag = self._gag
         grid.Add(wx.StaticText(self, label=""))
@@ -286,6 +308,8 @@ class TriggerEditorDialog(_RuleEditorBase):
             match=match,
             label=self._label.GetValue().strip(),
             group=self._group.GetValue().strip(),
+            order=self._order_value(self._order),
+            keep_evaluating=self._keep_evaluating.GetValue(),
             interrupt=self._interrupt.GetValue(),
             enabled=self._enabled,
         )
@@ -310,6 +334,7 @@ class AliasEditorDialog(_RuleEditorBase):
         self._group = self._text(
             grid, "&Group (rules sharing a name switch together):", alias.group
         )
+        self._order, self._keep_evaluating = self._order_controls(grid, alias)
         self._regex = wx.CheckBox(self, label="Pattern is a &regular expression")
         self._regex.SetValue(alias.regex)
         grid.Add(wx.StaticText(self, label=""))
@@ -326,6 +351,8 @@ class AliasEditorDialog(_RuleEditorBase):
             regex=self._regex.GetValue(),
             label=self._label.GetValue().strip(),
             group=self._group.GetValue().strip(),
+            order=self._order_value(self._order),
+            keep_evaluating=self._keep_evaluating.GetValue(),
             send=self._send.GetValue().strip(),
             send_to=SEND_TO_CHOICES[self._send_to.GetSelection()],
             speak=self._speak.GetValue().strip(),
