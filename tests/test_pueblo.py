@@ -8,6 +8,10 @@ world setting is off by default and the tests here hold it off.
 
 from __future__ import annotations
 
+import time
+
+import pytest
+
 from genericmud.app import EngineApp
 from genericmud.config.keymap import load_keymap
 from genericmud.config.worlds import World, load_worlds, save_worlds
@@ -444,3 +448,52 @@ def test_the_first_picture_or_sound_a_world_sends_is_noted_once():
     app.on_telnet_event(DataReceived(b'<img src="other.gif">\r\n'))
     noted = [fields for name, fields in events if name == "pueblo.image"]
     assert noted == [{"src": "maps/city.gif"}]
+
+
+# --- what a hostile line can't do ------------------------------------------------------------
+
+
+
+@pytest.mark.parametrize("unit", ["<img", "<!--", "<script>", "<b", "<p", "<a x>"])
+def test_a_long_line_of_openings_is_read_in_moments(unit):
+    # Each of these once made a pattern rescan to the end of the line for every opening: one
+    # 64 KB line of "<img" kept the session busy for half a minute, reading nothing else.
+    parser = PuebloParser()
+    parser.feed("<img xch_mode=html>")
+    line = unit * (65536 // len(unit))
+    started = time.perf_counter()
+    parser.feed(line)
+    assert time.perf_counter() - started < 1.0
+
+
+def test_an_unclosed_script_still_lets_a_later_closed_style_go():
+    parser = PuebloParser()
+    parser.feed("<img xch_mode=html>")
+    [line] = parser.feed("one <script>two <style>hidden</style> three")
+    assert line.text == "one two  three"
+
+
+def test_a_closed_comment_goes_and_an_unclosed_one_is_left_to_the_tags():
+    parser = PuebloParser()
+    parser.feed("<img xch_mode=html>")
+    [line] = parser.feed("a<!-- gone -->b<!-- open")
+    assert line.text == "ab<!-- open"
+
+
+@pytest.mark.parametrize(
+    "entity", ["&#xD800;", "&#0;", "&#27;", "&#x9B;", "&#127;", "&#63743;", "&#99999999;"]
+)
+def test_a_numbered_entity_that_is_no_printable_character_is_dropped(entity):
+    # As MXP does: half a surrogate pair stops the session log and is dropped by speech, an
+    # escape starts ANSI, and U+F8FF is the client's own picture marker.
+    parser = PuebloParser()
+    parser.feed("<img xch_mode=html>")
+    [line] = parser.feed(f"a{entity}b")
+    assert line.text == "ab"
+
+
+def test_printable_numbered_entities_still_read():
+    parser = PuebloParser()
+    parser.feed("<img xch_mode=html>")
+    [line] = parser.feed("&#65;&#x263A;&#233;")
+    assert line.text == "A☺é"
