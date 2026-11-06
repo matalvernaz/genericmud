@@ -126,15 +126,16 @@ Manager rules and its saved pack variables. The dialog says so when a name can't
 be changed. **Delete** asks first, and says exactly what it takes: the saved
 world and its login, and nothing else. Its logs, its sound folder, its map, its
 saved variables and any automation rules of its own all stay, so adding the
-world back by the same name finds them again. **Alt+R** or the **Delete** key do
-the same as the button. **Ctrl+D** disconnects and **Ctrl+W** closes the tab. If
-the MUD is unavailable at startup or the connection drops on its own, genericMud
-keeps trying every five seconds until it returns. **File → Connection
-settings...** turns Auto reconnect on or off and sets the interval (1–300
-seconds) for all worlds; both settings survive a restart. Turning it off leaves
-manual Reconnect available. Quitting from inside the game doesn't trigger
-recovery, and **Ctrl+D** while it's still trying stops that session without
-changing the global setting.
+world back by the same name finds them again. The button is **Delete...**, and
+its key is in its name where a screen reader reads it: **Alt+D**. The **Delete**
+key does the same while the saved world list has the focus. **Ctrl+D**
+disconnects and **Ctrl+W** closes the tab. If the MUD is unavailable at startup
+or the connection drops on its own, genericMud keeps trying every five seconds
+until it returns. **File → Connection settings...** turns Auto reconnect on or
+off and sets the interval (1–300 seconds) for all worlds; both settings survive
+a restart. Turning it off leaves manual Reconnect available. Quitting from
+inside the game doesn't trigger recovery, and **Ctrl+D** while it's still trying
+stops that session without changing the global setting.
 
 **Ctrl+D** takes a disconnected tab back to the MUD as well — the File menu
 entry changes to **Reconnect** to say so. Reconnecting reuses the tab, so the

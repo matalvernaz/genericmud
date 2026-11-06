@@ -2335,7 +2335,10 @@ class ConnectDialog(wx.Dialog):
         self._choice.Bind(wx.EVT_LISTBOX_DCLICK, self._on_connect)
         outer.Add(self._choice, 1, wx.ALL | wx.EXPAND, 10)
 
-        outer.Add(wx.StaticText(self, label="Connection &details:"), 0, wx.LEFT, 10)
+        # The D here moved to the end of the word so that the Delete button below can have it:
+        # Alt+D for the button that says Delete, and Alt+T for the details box, which is read,
+        # not written, and is the one of the two nobody presses a key for.
+        outer.Add(wx.StaticText(self, label="Connection de&tails:"), 0, wx.LEFT, 10)
         self._details = wx.TextCtrl(
             self, style=wx.TE_MULTILINE | wx.TE_READONLY, size=(-1, 64)
         )
@@ -2349,16 +2352,17 @@ class ConnectDialog(wx.Dialog):
         edit.Bind(wx.EVT_BUTTON, self._on_edit)
         new = wx.Button(self, _ID_NEW_WORLD, "&New World...")
         new.Bind(wx.EVT_BUTTON, lambda _event: self.EndModal(_ID_NEW_WORLD))
-        # No mnemonic in the label: Alt+D belongs to the "Connection details" label, and two
-        # Alt+D's in one dialog is how this button would steal it. Alt+R instead, and Delete
-        # while the list has the focus and a world picked -- Delete does nothing in a list box
-        # on Windows, so nothing is taken from it.
-        delete = wx.Button(self, _ID_DELETE_WORLD, "Delete...")
+        # Alt+D, the letter the button is spelled with and the key that deletes things
+        # everywhere else: the label above moved its own D along to make room, because two
+        # Alt+D's in one dialog is how a key ends up focusing the wrong control. Not Alt+R,
+        # which is the way back to a breadcrumb across the whole app -- and a mnemonic rather
+        # than a bare accelerator, so the button is read out with its key attached and nobody
+        # has to find it by accident or remember it.
+        delete = wx.Button(self, _ID_DELETE_WORLD, "&Delete...")
         delete.Bind(wx.EVT_BUTTON, self._on_delete)
+        # Delete with the list focused does the same. A list box does nothing with Delete on
+        # Windows, so this takes nothing from it.
         self._choice.Bind(wx.EVT_KEY_DOWN, self._on_choice_key)
-        self.SetAcceleratorTable(
-            wx.AcceleratorTable([(wx.ACCEL_ALT, ord("R"), _ID_DELETE_WORLD)])
-        )
         buttons.Add(self._connect, 0, wx.RIGHT, 6)
         buttons.Add(edit, 0, wx.RIGHT, 6)
         buttons.Add(delete, 0, wx.RIGHT, 6)
