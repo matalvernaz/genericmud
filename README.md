@@ -511,7 +511,10 @@ from the **Show** box. There is no separate simple or advanced builder.
 
 A trigger reacts to text from the MUD. It can play a sound, speak something
 shorter, send commands, hide the matched line, interrupt speech, or route the
-line to a chat channel. An alias replaces a shortcut you type: `sh` can send
+line to a chat channel. **Leave this line out of the session log** is separate from hiding
+it: what is worth reading now is not always worth keeping for months, and what is worth
+keeping is not always worth hearing, so a line can be shown and not written down, or
+written down and not shown. An alias replaces a shortcut you type: `sh` can send
 `shoot`, and whatever you type after the shortcut goes along with it, so
 `sh goblin` sends `shoot goblin`. A hotkey runs commands when you press a chosen
 key. These editors use ordinary fields; no code is required.

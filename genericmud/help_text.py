@@ -145,7 +145,9 @@ in it to say where they belong.
 Make a trigger without code:
 Show Triggers and choose New. Enter the text to watch for. The line contains
 this text is usually the right match choice. Add any commands, spoken text,
-sound, line handling, or channel routing you need, then choose OK.
+sound, line handling, or channel routing you need, then choose OK. Leave this line out of the
+session log is separate from hiding it: the line still works as it did, it just never
+reaches the file, which is how a repeating notice stops filling the record.
 
 Trigger, alias, and hotkey command fields accept one command per line. ${1}
 means the first matched part. ${script:attack} reads a value saved by a script.
