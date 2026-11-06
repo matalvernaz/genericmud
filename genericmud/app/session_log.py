@@ -23,8 +23,8 @@ class SessionLogMixin:
 
     Writes: logger.
 
-    Reads: _diag, _diag_backend_kind, _last_activation, _post, engine, log_dir, log_files, name,
-    sink, voice.
+    Reads: _diag, _diag_backend_kind, _last_activation, _post, engine, log_dir, log_files,
+    log_notes, name, sink, voice.
 
     Calls: _speak_system.
     """
@@ -54,6 +54,11 @@ class SessionLogMixin:
             f"diagnostic log {name}; backend {self._diag_backend_kind}; "
             f"{packs} packs, {triggers} triggers; {self.sink.cues} cues attempted"
         )
+
+    def _log_note_asked_for(self, text: str) -> None:
+        """A rule's note: written to the session log unless the world turned notes off."""
+        if self.log_notes:
+            self._log(text)
 
     def _log(self, text: str) -> None:
         if self.logger is not None and self.logger.active and not self.logger.log(text):
