@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from types import SimpleNamespace
 
 import pytest
 
 from genericmud.app import EngineApp
 from genericmud.protocol.telnet import IAC, OPT_MCCP2, SB, SE, WILL
+from genericmud.transport import connection as connection_module
 from genericmud.transport.connection import MudConnection, ReconnectPolicy
 from genericmud.voice.router import VoiceRouter
 from tests.helpers import RecordingBackend
@@ -60,7 +62,7 @@ async def test_failures_wait_after_each_attempt_then_recover_without_spamming(mo
     conn, sleeps, statuses = setup(monkeypatch, open_connection)
     with pytest.raises(OSError):
         await conn.connect("mud.example", 23)
-    assert conn.start_reconnect()
+    assert conn.start_reconnect(detail="unavailable")  # the reason, as the window passes it
     assert not conn.start_reconnect()
     try:
         for attempt in range(10):
@@ -72,7 +74,9 @@ async def test_failures_wait_after_each_attempt_then_recover_without_spamming(mo
         await asyncio.wait_for(asyncio.shield(retry), 1)
         assert conn.connected and not conn.connecting
         assert conn._reconnect_task is None
-        assert statuses == ["connection unavailable; reconnecting every 5s", "reconnected"]
+        assert statuses == [
+            "connection unavailable: unavailable; reconnecting every 5s", "reconnected"
+        ]
     finally:
         await conn.close()
 
@@ -279,7 +283,7 @@ async def test_interval_changes_only_subsequent_waits(monkeypatch):
     conn, sleeps, statuses = setup(monkeypatch, open_connection)
     with pytest.raises(OSError):
         await conn.connect("mud.example", 23)
-    conn.start_reconnect()
+    conn.start_reconnect(detail="unavailable")
     wake = await sleeps.next(5)
     old = conn._reconnect_task
     conn.configure_reconnect(True, 300)
@@ -287,8 +291,8 @@ async def test_interval_changes_only_subsequent_waits(monkeypatch):
         assert conn._reconnect_task is old and not wake.done()
         wake.set_result(None)
         await sleeps.next(300)
-        assert statuses == ["connection unavailable; reconnecting every 5s",
-                            "connection unavailable; reconnecting every 300s"]
+        assert statuses == ["connection unavailable: unavailable; reconnecting every 5s",
+                            "connection unavailable: unavailable; reconnecting every 300s"]
     finally:
         await conn.close()
 
@@ -447,3 +451,88 @@ async def test_the_first_status_says_why_the_connect_failed(monkeypatch):
         assert len(statuses) == 1
     finally:
         await conn.close()
+
+
+async def test_a_quit_older_than_the_grace_still_cannot_be_revived_by_settings(monkeypatch):
+    # Within the 30 s grace the quit itself stops a revival; this is the case after it.
+    reader = asyncio.StreamReader()
+
+    async def open_connection(*args, **kwargs):
+        return reader, _ClosingWriter()
+
+    conn, sleeps, statuses = setup(monkeypatch, open_connection)
+    await conn.connect("mud.example", 23)
+    conn.send_line("quit")
+    reader.feed_eof()
+    await conn._read_task
+    assert statuses == ["disconnected"]
+    real = time.monotonic
+    monkeypatch.setattr(connection_module, "time", SimpleNamespace(monotonic=lambda: real() + 31))
+    conn.configure_reconnect(False, 5)
+    conn.configure_reconnect(True, 5)
+    try:
+        assert not conn.connecting and sleeps.waits.empty() and statuses == ["disconnected"]
+    finally:
+        await conn.close()
+
+
+async def test_switching_off_during_retries_ends_the_session_audibly(monkeypatch):
+    # "disconnected" is what says "Disconnected from X." and stops pack timers and loops.
+    async def open_connection(*args, **kwargs):
+        raise OSError("unavailable")
+
+    conn, sleeps, statuses = setup(monkeypatch, open_connection)
+    with pytest.raises(OSError):
+        await conn.connect("mud.example", 23)
+    conn.start_reconnect()
+    await sleeps.next(5)
+    retry = conn._reconnect_task
+    conn.configure_reconnect(False, 5)
+    await asyncio.wait_for(asyncio.gather(retry, return_exceptions=True), 1)
+    try:
+        assert statuses == ["connection unavailable; reconnecting every 5s", "disconnected"]
+    finally:
+        await conn.close()
+
+
+async def test_a_new_reason_for_failing_is_said_and_the_same_one_is_not(monkeypatch):
+    # The first status says why; while the retries go on, a different reason is said once more
+    # and a repeated one says nothing.
+    failures = iter(["connection refused", "connection refused", "No route to host"])
+
+    async def open_connection(host, port, ssl=None):
+        raise OSError(next(failures, "No route to host"))
+
+    conn, sleeps, statuses = setup(monkeypatch, open_connection)
+    with pytest.raises(OSError) as failure:
+        await conn.connect("mud.example", 23)
+    assert conn.start_reconnect(detail=str(failure.value))
+    try:
+        for _ in range(3):
+            wake = await sleeps.next(5)
+            wake.set_result(None)
+        await sleeps.next(5)
+        assert statuses == [
+            "connection unavailable: connection refused; reconnecting every 5s",
+            "connection unavailable: No route to host; reconnecting every 5s",
+        ]
+    finally:
+        await conn.close()
+
+
+def test_the_app_says_a_changed_reason_but_not_a_repeated_outage():
+    backend = RecordingBackend()
+    app = EngineApp(VoiceRouter(backend, clock=lambda: 0.0), post=lambda _message: None, keymap={})
+    for status in (
+        "connection lost; reconnecting every 5s",
+        "connection unavailable; reconnecting every 5s",  # the same outage, worded by a retry
+        "connection unavailable: connection refused; reconnecting every 5s",
+        "connection unavailable: connection refused; reconnecting every 5s",
+        "connection unavailable: No route to host; reconnecting every 5s",
+    ):
+        app.on_connection_status(status)
+    assert backend.spoken == [
+        "connection lost; reconnecting every 5s",
+        "connection unavailable: connection refused; reconnecting every 5s",
+        "connection unavailable: No route to host; reconnecting every 5s",
+    ]
