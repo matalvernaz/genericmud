@@ -67,9 +67,20 @@ class EngineSink:
 
     def send(self, text: str) -> None: ...
     def send_packet(self, data: bytes) -> None: ...
-    def echo(self, text: str, channel: str = "main") -> None: ...
+    def echo(self, text: str, channel: str = "main", *, log: bool = False) -> None:
+        """Show ``text`` in the output as a line of the client's own (MUSHclient's echo).
+
+        ``log`` asks for it to be written to the session log too, which is the difference
+        between a note and a print: a note is part of the record, a print is not.
+        """
     def file_line(self, text: str, channel: str) -> None:
         """Keep ``text`` in the scrollback under ``channel``, without showing or speaking it."""
+    def type_text(self, text: str) -> None:
+        """Put ``text`` in the player's command box, unsent (MUSHclient's "send to command")."""
+
+    def log_line(self, text: str) -> None:
+        """Write ``text`` to the session log without showing it (MUSHclient's "send to log")."""
+
     def speak(self, text: str, channel: str = "main", interrupt: bool = False) -> None: ...
     def stop_speech(self) -> None: ...
     def play(
@@ -177,9 +188,14 @@ class _Rule:
     enabled: bool = True
     gag: bool = False
     gag_but_display: bool = False
+    omit_from_log: bool = False
     keep_evaluating: bool = True
     source: str = ""
     channel: str | None = None
+    # MUSHclient's group: rules sharing a name can be switched together. Read from the rules
+    # when it is asked for rather than kept in a list of its own, so a reload cannot leave a
+    # group pointing at rules that no longer exist.
+    group: str = ""
     # When a trigger with a stop scope stops evaluation, only the later triggers in the same
     # scope are skipped. MUSHclient stops within one plugin's list, so a pack's trigger can't
     # silence another pack's or the player's own. Without one, a stop ends the whole line.
@@ -209,6 +225,77 @@ def _wildcards(match: re.Match[str]) -> list[str]:
 
 def _named(match: re.Match[str]) -> dict[str, str]:
     return {name: value if value is not None else "" for name, value in match.groupdict().items()}
+
+
+class _NamedTimer:
+    """One named timer: when to fire, what to do, and whether it is on.
+
+    Kept on the engine rather than only in a handle so that "the timer called tick" can be
+    switched off, moved to another group's fate, or deleted by name -- which is what makes a
+    timer something a player can manage rather than a callback that runs until the session ends.
+    """
+
+    def __init__(
+        self,
+        engine: AutomationEngine,
+        name: str,
+        delay: float,
+        callback: Callback,
+        *,
+        every: float | None = None,
+        next_delay: Callable[[], float] | None = None,
+        group: str = "",
+        source: str = "",
+    ) -> None:
+        self._engine = engine
+        self.name = name
+        self.delay = max(0.0, float(delay))
+        self.every = None if every is None else max(0.0, float(every))
+        # Asked each time instead of a fixed repeat, for a timer that fires at a time of day:
+        # its wait is "until the next 03:00", which changes with the clock.
+        self.next_delay = next_delay
+        self.callback = callback
+        self.group = group
+        self.source = source
+        self.enabled = True
+        self._pending: object | None = None
+
+    def arm(self) -> None:
+        self.disarm()
+        if not self.enabled:
+            return
+        self._pending = self._engine.schedule_timer(self.delay, self._fire, source=self.source)
+
+    def disarm(self) -> None:
+        if self._pending is not None:
+            cancel = getattr(self._pending, "cancel", None)
+            if cancel is not None:
+                cancel()
+            self._engine.discard_timer(self._pending)
+            self._pending = None
+
+    def _fire(self) -> None:
+        self._pending = None
+        if not self.enabled:
+            return
+        self.callback()
+        if not self.enabled:
+            return
+        if self.next_delay is not None:  # a time-of-day timer asks the clock each time
+            self._pending = self._engine.schedule_timer(
+                self.next_delay(), self._fire, source=self.source
+            )
+        elif self.every is not None:
+            self._pending = self._engine.schedule_timer(
+                self.every, self._fire, source=self.source
+            )
+
+    def set_enabled(self, enabled: bool) -> None:
+        self.enabled = enabled
+        if enabled:
+            self.arm()
+        else:
+            self.disarm()
 
 
 def _cancel_pending(entry: tuple[object, str, Callable[[], None] | None]) -> None:
@@ -278,6 +365,7 @@ def _heard(
 class AutomationEngine:
     def __init__(self, sink: EngineSink | None = None, *, sound: SoundBus | None = None) -> None:
         self.sink = sink or EngineSink()
+        self._named_timers: list[_NamedTimer] = []  # named timers, findable by name and group
         self._triggers: list[_Rule] = []
         self._aliases: list[_Rule] = []
         self._keys: dict[str, Callback] = {}  # effective binding (last writer wins)
@@ -328,11 +416,13 @@ class AutomationEngine:
         name: str = "",
         gag: bool = False,
         gag_but_display: bool = False,
+        omit_from_log: bool = False,
         keep_evaluating: bool = True,
         source: str = "",
         channel: str | None = None,
         stop_scope: str | None = None,
         tiebreak: str = "",
+        group: str = "",
     ) -> _Rule:
         rule = _Rule(
             compile_pattern(pattern, regex),
@@ -342,11 +432,13 @@ class AutomationEngine:
             True,
             gag,
             gag_but_display,
+            omit_from_log,
             keep_evaluating,
-            source,
-            channel,
-            stop_scope,
-            tiebreak,
+            source=source,
+            channel=channel,
+            group=group,
+            stop_scope=stop_scope,
+            tiebreak=tiebreak,
         )
         self._triggers.append(rule)
         self._triggers.sort(key=_rule_order)
@@ -366,16 +458,107 @@ class AutomationEngine:
         stop_scope: str | None = None,
         consumes: bool = False,
         fallback: bool = False,
+        group: str = "",
     ) -> _Rule:
         # process_input anchors every alias at the start; a wildcard alias is anchored at the
         # end too, so it has to be the whole command. Regex aliases keep whatever their
         # author wrote.
         rule = _Rule(compile_pattern(pattern, regex, whole=True), callback, priority, name, True,
                      source=source, keep_evaluating=keep_evaluating, tiebreak=tiebreak,
-                     stop_scope=stop_scope, consumes=consumes, fallback=fallback)
+                     stop_scope=stop_scope, consumes=consumes, fallback=fallback,
+                     group=group)
         self._aliases.append(rule)
         self._aliases.sort(key=_rule_order)
         return rule
+
+    def add_named_timer(
+        self,
+        name: str,
+        delay: float,
+        callback: Callback,
+        *,
+        every: float | None = None,
+        next_delay: Callable[[], float] | None = None,
+        group: str = "",
+        source: str = "",
+        enabled: bool = True,
+    ) -> _NamedTimer:
+        """A timer with a name, so it can be found, switched and cancelled like a rule.
+
+        ``delay`` is the first wait; ``every`` is the wait after each fire (None makes it a
+        one-shot). MUSHclient's timer model: a named thing with a group, an on/off switch and
+        a send-to action, which a script or a rule can start and stop.
+        """
+        timer = _NamedTimer(
+            self, name, delay, callback, every=every, next_delay=next_delay,
+            group=group, source=source,
+        )
+        self._named_timers = [t for t in self._named_timers if t.name != name]
+        self._named_timers.append(timer)
+        if enabled:
+            timer.arm()
+        return timer
+
+    def named_timer(self, name: str) -> _NamedTimer | None:
+        for timer in self._named_timers:
+            if timer.name == name:
+                return timer
+        return None
+
+    def remove_named_timer(self, name: str) -> bool:
+        """Cancel and forget one named timer (MUSHclient's DeleteTimer)."""
+        timer = self.named_timer(name)
+        if timer is None:
+            return False
+        timer.disarm()
+        self._named_timers = [t for t in self._named_timers if t is not timer]
+        return True
+
+    def set_timer_enabled(self, name: str, enabled: bool) -> bool:
+        """Switch one named timer on or off (MUSHclient's EnableTimer)."""
+        timer = self.named_timer(name)
+        if timer is None:
+            return False
+        timer.set_enabled(enabled)
+        return True
+
+    def set_group_enabled(self, group: str, enabled: bool) -> int:
+        """Turn every rule in a named group on or off; returns how many changed.
+
+        MUSHclient's EnableGroup, and the reason to put a name on a set of rules: "all the
+        combat triggers off" is one call rather than a list the player has to keep in step with
+        the rules. A group nothing belongs to is not an error -- it is a group waiting.
+        """
+        if not group:
+            return 0
+        changed = 0
+        for rule in [*self._triggers, *self._aliases]:
+            if rule.group == group:
+                rule.enabled = enabled
+                changed += 1
+        for timer in self._named_timers:
+            if timer.group == group:
+                timer.set_enabled(enabled)
+                changed += 1
+        return changed
+
+    def set_enabled(self, name: str, enabled: bool) -> bool:
+        """Turn a named trigger, alias or key on or off; True if one had that name.
+
+        MUSHclient's EnableTrigger/EnableAlias/EnableKey, which act by name because a script has
+        no other handle on a rule the player made. A rule without a name can only be switched
+        from the manager, which is what makes naming one worth doing.
+        """
+        if not name:
+            return False
+        found = False
+        for rule in [*self._triggers, *self._aliases, *self._keys]:
+            if rule.name == name:
+                rule.enabled = enabled
+                found = True
+        if self.set_timer_enabled(name, enabled):
+            found = True
+        return found
 
     def remove_trigger(self, name: str) -> None:
         self._triggers = [rule for rule in self._triggers if rule.name != name]
@@ -674,6 +857,8 @@ class AutomationEngine:
             if rule.gag or rule.gag_but_display:
                 line.gagged = True
                 line.display_when_gagged = rule.gag_but_display
+            if rule.omit_from_log:
+                line.omit_from_log = True
             if rule.callback is not None:
                 rule.callback(MatchContext(line, _wildcards(match), _named(match), self))
             if not rule.keep_evaluating:

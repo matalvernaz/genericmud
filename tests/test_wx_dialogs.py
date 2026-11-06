@@ -262,6 +262,20 @@ def test_rule_editors_offer_variables_only_with_a_live_session(frame, tmp_path):
             without.Destroy()
 
 
+def test_a_rule_editor_keeps_the_variable_its_target_stores_under(frame, tmp_path):
+    from genericmud.packs.user_rules import UserTrigger
+    from genericmud.ui.rule_editors import TriggerEditorDialog
+
+    rule = UserTrigger(pattern="backup", send="${1}", send_to="variable", variable="pager")
+    dialog = TriggerEditorDialog(frame, tmp_path, rule)
+    try:
+        assert dialog._variable.GetValue() == "pager"
+        result = dialog.result()
+        assert (result.send_to, result.variable) == ("variable", "pager")
+    finally:
+        dialog.Destroy()
+
+
 def test_inserting_a_variable_puts_its_reference_at_the_caret(frame, tmp_path, monkeypatch):
     from genericmud.packs.user_rules import UserKey
     from genericmud.ui import rule_editors, variables_dialog

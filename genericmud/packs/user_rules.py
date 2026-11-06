@@ -19,6 +19,7 @@ import re
 import shutil
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 from genericmud.automation.engine import MatchContext
@@ -34,6 +35,23 @@ SOUNDS_DIRNAME = "sounds"  # picked sound files are copied here (keeps the pack 
 
 _CAPTURE_RE = re.compile(r"%(\d)")
 _GAG_CHOICES = ("none", "speech", "line")
+# Where a rule's response text goes -- MUSHclient's "send to" box (its eSendTo* enum). The
+# order is the order they are offered in, and matches SEND_TO_LABELS.
+SEND_TO_CHOICES = ("world", "command", "output", "log", "execute", "script", "variable")
+SEND_TO_LABELS = (
+    "The MUD (send these commands)",
+    "My command box, unsent (finish it myself)",
+    "The output, as a note (kept in the log)",
+    "The session log only (never shown)",
+    "This client again (run it as if I typed it)",
+    "A script (a function name, or Lua code)",
+    "A script variable (store the text under a name)",
+)
+
+
+def send_to_kind(value: object) -> str:
+    """The send-to target a saved value names; anything unknown goes to the MUD, as before."""
+    return value if isinstance(value, str) and value in SEND_TO_CHOICES else "world"
 # How a trigger pattern matches a line. "contains" and "exact" are newbie-facing
 # sugar over regex (escaped literal, searched / anchored); "wildcard" is * and ?.
 MATCH_CHOICES = ("contains", "wildcard", "exact", "regex")
@@ -58,12 +76,34 @@ class UserTrigger:
     pan: int = 0  # -100 (left) .. 100 (right)
     loop: bool = False
     speak: str = ""  # spoken text; %1 or ${1}, ${script:x}, ${mud:x}
-    send: str = ""  # commands, one per line; %1 or ${1}, ${script:x}, ${mud:x}
+    send: str = ""  # what to do with the matched line; %1 or ${1}, ${script:x}, ${mud:x}
+    # Where "send" goes: SEND_TO_CHOICES. MUSHclient calls this "send to", and it is the same
+    # question for triggers, aliases and timers -- the text is one field, the destination
+    # another. Never a separate field per destination.
+    send_to: str = "world"
+    # The name the text is stored under when "send to" is a variable: MUSHclient's variable
+    # target, which is how a capture becomes something ${script:name} can use later.
+    variable: str = ""
     gag: str = "none"  # "none" | "speech" (silent but shown) | "line" (removed)
+    omit_log: bool = False  # leave the line out of the session log, whatever gag does
     channel: str = ""  # route the line to this channel ("" = leave on main)
     stop_channel: str = ""  # stop this user cue channel when fired ("" = none)
     match: str = ""  # one of MATCH_CHOICES; "" = legacy file (the regex flag decides)
     interrupt: bool = False  # cut current speech the moment this fires
+    # MUSHclient's trigger name: the handle a script turns it off and on with, and what the
+    # manager reads out first. Empty means no handle; the manager can still disable it.
+    label: str = ""
+    # MUSHclient's group: rules sharing a name are switched together by one call, which is what
+    # "turn all the combat rules off" needs. Empty means the rule stands alone.
+    group: str = ""
+    # MUSHclient's sequence: the lower the number, the sooner the rule is tried. Rules with the
+    # same order are tried by their pattern text, as MUSHclient does, so the order is never a
+    # matter of which file they were added from.
+    order: int = 100
+    # Whether the rules after this one are still tried when it matches. True keeps today's
+    # behaviour (every matching rule acts); clearing it makes this rule the last one heard about
+    # the line. MUSHclient's default is the other way round, which is why this says what it does.
+    keep_evaluating: bool = True
     enabled: bool = True
 
     def match_kind(self) -> str:
@@ -76,8 +116,14 @@ class UserTrigger:
 class UserAlias:
     pattern: str = ""  # what the user types; * ? wildcards unless regex
     regex: bool = False
-    send: str = ""  # replacement commands, one per line; capture/variable templates allowed
+    send: str = ""  # what to do with the typed command; capture/variable templates allowed
+    send_to: str = "world"  # where that text goes, as for triggers (SEND_TO_CHOICES)
+    variable: str = ""  # as for triggers: the name a variable target stores under
     speak: str = ""  # optional speech, same templates; can read a value with no commands
+    label: str = ""  # as for triggers: the handle that turns it off and on
+    group: str = ""  # as for triggers: switched together with the rest of its group
+    order: int = 100  # as for triggers: lower is tried first
+    keep_evaluating: bool = True  # as for triggers: let later aliases see the command too
     enabled: bool = True
 
 
@@ -88,6 +134,28 @@ class UserKey:
     speak: str = ""  # e.g. "${mud:Char.Vitals.hp} health": a key that reads a value
     sound: str = ""  # pack-relative one-shot cue
     enabled: bool = True
+
+
+@dataclass
+class UserTimer:
+    """Something to do on a clock rather than on a line (MUSHclient's timer).
+
+    Two shapes, as MUSHclient has them: every so often (``every`` seconds), or once a day at a
+    time (``at``, "HH:MM:SS"). ``one_shot`` does it once and stops. What it does is the same
+    question every other rule answers -- a text and a send-to target -- so a timer can send to
+    the MUD, put something in your command box, write a note, or run Lua.
+    """
+
+    label: str = ""  # MUSHclient's timer name: the handle a script switches it by
+    enabled: bool = True
+    every: float = 0.0  # seconds between fires; 0 means "not an interval timer"
+    at: str = ""  # "HH:MM:SS" for a daily timer; "" means "not a daily one"
+    one_shot: bool = False
+    send: str = ""
+    send_to: str = "world"
+    variable: str = ""  # as for triggers: the name a variable target stores under
+    omit_log: bool = False  # leave whatever it writes out of the session log
+    group: str = ""  # as for triggers: switched together with the rest of its group
 
 
 @dataclass
@@ -119,6 +187,7 @@ class UserWatch:
 @dataclass
 class UserRules:
     triggers: list[UserTrigger] = field(default_factory=list)
+    timers: list[UserTimer] = field(default_factory=list)
     aliases: list[UserAlias] = field(default_factory=list)
     keys: list[UserKey] = field(default_factory=list)
     channels: list[UserChannel] = field(default_factory=list)
@@ -146,6 +215,7 @@ class UserRules:
             triggers=build(UserTrigger, data.get("triggers")),
             aliases=build(UserAlias, data.get("aliases")),
             keys=build(UserKey, data.get("keys")),
+            timers=build(UserTimer, data.get("timers")),
             channels=build(UserChannel, data.get("channels")),
             watches=build(UserWatch, data.get("watches")),
         )
@@ -197,12 +267,30 @@ def _substitute(text: str, wildcards: list[str]) -> str:
     return _CAPTURE_RE.sub(one, text)
 
 
-def _commands(text: str) -> tuple[str, ...]:
-    """Non-empty commands from a one-command-per-line field."""
-    commands = tuple(line.strip() for line in text.splitlines() if line.strip())
+def _commands(text: str, *, keep_spaces: bool = False) -> tuple[str, ...]:
+    """Non-empty commands from a one-command-per-line field.
+
+    ``keep_spaces`` leaves the ends alone, for text going into the command box rather than out
+    to the MUD: the trailing space of "tell Ariadne " is there to be typed into.
+    """
+    cleaner = (lambda line: line) if keep_spaces else (lambda line: line.strip())
+    commands = tuple(cleaner(line) for line in text.splitlines() if line.strip())
     if len(commands) > _MAX_COMMANDS_PER_RULE:
         raise ValueError(f"too many commands (maximum {_MAX_COMMANDS_PER_RULE})")
     return commands
+
+
+def _response_parts(text: str, send_to: str) -> tuple[str, ...]:
+    """A rule's text, cut into the pieces its destination wants.
+
+    Every destination but a variable is a stack: one command per line, for the MUD, the command
+    box, the output, the log, or the client. A variable holds one value, so its text is not cut
+    at all -- a semicolon in it is part of the value, not another command.
+    """
+    if send_to_kind(send_to) == "variable":
+        value = text.strip()
+        return (value,) if value else ()
+    return _commands(text, keep_spaces=send_to_kind(send_to) == "command")
 
 
 def _capture_values(ctx: MatchContext | None) -> dict[str, object]:
@@ -229,36 +317,57 @@ def _speech(api: ScriptApi, text: str, ctx: MatchContext | None = None) -> str:
 
 
 def _expand_commands(
-    api: ScriptApi, commands: tuple[str, ...], ctx: MatchContext | None = None
+    api: ScriptApi,
+    commands: tuple[str, ...],
+    ctx: MatchContext | None = None,
+    *,
+    as_value: bool = False,
 ) -> list[str]:
-    """Expand a command stack completely without sending any part of it."""
+    """Expand a command stack completely without sending any part of it.
+
+    ``as_value`` is text going into a variable rather than out to the MUD: a line break in it is
+    then content, not a second command. The guard against one belongs where the value is used as
+    a command, and stays there.
+    """
     wildcards = ctx.wildcards if ctx is not None else [""]
     values = _capture_values(ctx)
     expanded = []
     for command in commands:
         # Expand ${...} before legacy %1 replacement. Captured MUD text containing
         # `${...}` must stay literal instead of becoming a second command template.
-        value = _substitute(api.expand_command(command, values), wildcards)
-        if any(char in value for char in ("\r", "\n", "\x00")):
-            raise ValueError("expanded command contains a line break or NUL")
+        value = _substitute(
+            api.expand_command(command, values, one_line=not as_value), wildcards
+        )
+        forbidden = ("\x00",) if as_value else ("\r", "\n", "\x00")
+        if any(char in value for char in forbidden):
+            raise ValueError(
+                "expanded text contains a NUL" if as_value
+                else "expanded command contains a line break or NUL"
+            )
         expanded.append(value)
     return expanded
 
 
 def _command_action(
-    api: ScriptApi, text: str, *, carry_words: bool = False
+    api: ScriptApi,
+    text: str,
+    *,
+    send_to: str = "world",
+    variable: str = "",
+    carry_words: bool = False,
 ) -> tuple[tuple[str, ...], Callable[[MatchContext | None], bool]]:
-    """A contained command-stack action plus whether the stack has any commands.
+    """A contained action and whether it has any text, delivering to the rule's send-to target.
 
     ``carry_words`` puts the match's first capture, the words typed after a plain alias, on
-    the end of the last command.
+    the end of the last line.
     """
-    commands = _commands(text)
+    commands = _response_parts(text, send_to)
+    as_value = send_to_kind(send_to) == "variable"
     spoken_errors: set[str] = set()
 
     def run(ctx: MatchContext | None = None) -> bool:
         try:
-            expanded = _expand_commands(api, commands, ctx)
+            expanded = _expand_commands(api, commands, ctx, as_value=as_value)
         except ValueError as error:
             detail = str(error)
             if api.diag is not None:
@@ -267,17 +376,81 @@ def _command_action(
                 )
             if detail not in spoken_errors:
                 spoken_errors.add(detail)
-                api.speak(f"Automation command not sent: {detail}", channel="system")
+                api.speak(f"Automation text not used: {detail}", channel="system")
             return False
         if carry_words and expanded and ctx is not None and len(ctx.wildcards) > 1:
             # Added after expansion, so the player's own words go out as typed and are never
             # read as a template.
             expanded[-1] = f"{expanded[-1].rstrip()} {ctx.wildcards[1]}"
-        for command in expanded:
-            api.send(command)
+        deliver(api, expanded, send_to, ctx, variable=variable)
         return True
 
     return commands, run
+
+
+def deliver(
+    api: ScriptApi,
+    lines: list[str],
+    send_to: str,
+    ctx: MatchContext | None = None,
+    *,
+    variable: str = "",
+) -> None:
+    """Put the expanded text where the rule says (MUSHclient's "send to" targets).
+
+    The text is one field and the destination another, for triggers, aliases and timers alike:
+    never a separate field per destination.
+    """
+    kind = send_to_kind(send_to)
+    if kind == "command":
+        # The box holds several lines now, so a stack arrives as a block to finish and send,
+        # which is the point of putting it there rather than sending it.
+        api.type_text("\n".join(lines))
+    elif kind == "output":
+        for line in lines:
+            api.note(line)
+    elif kind == "log":
+        for line in lines:
+            api.log_line(line)
+    elif kind == "variable":
+        name = variable.strip()
+        if not name:
+            return  # register_rules refuses a variable target with no name, so this is unreached
+        api.set_var(name, "\n".join(lines))
+    elif kind == "script":
+        line = ctx.line.plain_text if ctx is not None else ""
+        # ctx.wildcards[0] is the whole matched line; a Lua function's wildcards[1] is the
+        # first capture, as mud.trigger's callback has it.
+        wildcards = list(ctx.wildcards[1:]) if ctx is not None else []
+        for text in lines:  # each line is its own call: a function name, or Lua code
+            try:
+                api.run_script(text, line=line, wildcards=wildcards)
+            except Exception as error:  # noqa: BLE001 - a broken rule must say so, once
+                _script_failed(api, error)
+    elif kind == "execute":
+        # MUSHclient's "execute": hand it back to the client as if it had been typed, so an
+        # alias takes it first and only what falls through reaches the MUD. Its "send to
+        # script" is a different thing -- calling a named routine in a script -- and this
+        # client's scripts are hook files with no named entry points yet, so that one waits.
+        api.execute("\n".join(lines))
+    else:
+        for line in lines:
+            api.send(line)
+
+
+def _script_failed(api: ScriptApi, error: Exception) -> None:
+    """A rule's script went wrong: log it, and say it once per distinct problem."""
+    detail = f"{type(error).__name__}: {error}"
+    said = getattr(api, "_rule_script_failures", None)
+    if said is None:
+        said = set()
+        api._rule_script_failures = said  # noqa: SLF001 - one set per session's api
+    if detail in said:
+        return
+    said.add(detail)
+    if api.diag is not None:
+        api.diag.event("user_rule.script_error", source=api.source or SOURCE, error=detail)
+    api.speak(f"Automation script failed: {detail}", channel="system")
 
 
 def extra_words_pattern(shortcut: str) -> str:
@@ -289,6 +462,44 @@ def extra_words_pattern(shortcut: str) -> str:
     return re.escape(shortcut) + r"[ \t]+(.*\S)[ \t]*\Z"
 
 
+def _rule_name(rule: object) -> str:
+    """What to call a rule in a spoken complaint: its label, else what it matches or when."""
+    label = str(getattr(rule, "label", "") or "").strip()
+    if label:
+        return label
+    pattern = str(getattr(rule, "pattern", "") or "").strip()
+    if pattern:
+        return pattern
+    at = str(getattr(rule, "at", "") or "").strip()
+    if at:
+        return f"at {at}"
+    every = getattr(rule, "every", 0) or 0
+    if isinstance(every, (int, float)) and every > 0:
+        return f"every {every:g} seconds"
+    return "with no label"
+
+
+def _check_variable_targets(rules: UserRules) -> None:
+    """Refuse a rule that stores to a variable without saying which one.
+
+    Before registering anything: a rule that cannot do what it says would otherwise be a rule
+    that quietly does nothing, and the reload speaks this instead. Only rules that will actually
+    register are checked, so a draft left half-finished cannot stop the working set loading.
+    """
+    live = [
+        *(t for t in rules.triggers if t.enabled and t.pattern),
+        *(a for a in rules.aliases if a.enabled and a.pattern),
+        *(t for t in rules.timers if t.enabled),
+    ]
+    for rule in live:
+        if not str(rule.send).strip():
+            continue  # nothing to store
+        if send_to_kind(rule.send_to) == "variable" and not str(rule.variable).strip():
+            raise ValueError(
+                f"the rule {_rule_name(rule)} stores to a variable but has no variable name"
+            )
+
+
 def register_rules(api: ScriptApi, rules: UserRules) -> None:
     """Register every rule on the engine under the ``user`` source.
 
@@ -296,6 +507,7 @@ def register_rules(api: ScriptApi, rules: UserRules) -> None:
     (the builder copies picked files there). Call ``engine.remove_source(SOURCE)``
     first when reloading.
     """
+    _check_variable_targets(rules)
     for channel in rules.channels:
         if channel.enabled and channel.name:
             api.set_channel(
@@ -311,6 +523,8 @@ def register_rules(api: ScriptApi, rules: UserRules) -> None:
     for key in rules.keys:
         if key.enabled and key.key:
             _register_key(api, key)
+    for timer in rules.timers:
+        _register_timer(api, timer)
     for watch in rules.watches:
         if watch.enabled and watch.name.strip():
             _register_watch(api, watch)
@@ -333,7 +547,9 @@ def _trigger_pattern(t: UserTrigger) -> tuple[str, bool]:
 
 def _register_trigger(api: ScriptApi, t: UserTrigger) -> None:
     gag = t.gag if t.gag in _GAG_CHOICES else "none"
-    commands, send_commands = _command_action(api, t.send)
+    commands, send_commands = _command_action(
+        api, t.send, send_to=t.send_to, variable=t.variable
+    )
     has_actions = bool(t.sound or t.speak or commands or t.stop_channel or t.interrupt)
 
     def fire(ctx: MatchContext) -> None:
@@ -362,10 +578,22 @@ def _register_trigger(api: ScriptApi, t: UserTrigger) -> None:
         pattern,
         fire if has_actions else None,
         regex=regex,
+        # A lower order number is tried first, so the engine's higher-priority-first becomes a
+        # sign change; equal orders fall back to the pattern, which is MUSHclient's order too.
+        priority=-int(t.order),
+        tiebreak=t.pattern,
+        # A rule that stops the search stops it for the player's own rules, never for a pack's:
+        # stop_scope keeps one player rule from silencing a soundpack. That is what MUSHclient
+        # means by stopping evaluation inside one plugin.
+        stop_scope=SOURCE,
+        keep_evaluating=t.keep_evaluating,
         gag=(gag == "line"),
         gag_but_display=(gag == "speech"),
+        omit_from_log=t.omit_log,
         channel=t.channel or None,
         source=SOURCE,
+        name=t.label.strip(),
+        group=t.group.strip(),
     )
 
 
@@ -379,22 +607,112 @@ def _register_trigger(api: ScriptApi, t: UserTrigger) -> None:
 _KEY_REPLY_CHANNEL = REVIEW_CHANNEL
 
 
+def parse_at(value: str) -> float | None:
+    """The seconds after midnight an "HH:MM:SS" names, or None if it does not name one."""
+    parts = str(value).strip().split(":")
+    if len(parts) not in (2, 3):
+        return None
+    try:
+        numbers = [float(part) for part in parts]
+    except ValueError:
+        return None
+    hours, minutes = numbers[0], numbers[1]
+    seconds = numbers[2] if len(numbers) == 3 else 0.0
+    if not (0 <= hours <= 23 and 0 <= minutes <= 59 and 0 <= seconds < 60):
+        return None
+    return hours * 3600 + minutes * 60 + seconds
+
+
+def seconds_until(target: float, *, now: float) -> float:
+    """How long from ``now`` (seconds since midnight) until ``target`` comes round again.
+
+    A time that has already passed today is tomorrow's, so a daily timer set for 03:00 fires at
+    the next 03:00 rather than in the past. Exactly now counts as a day away, not as zero: a
+    timer that fires the instant it is created has nothing to wait for.
+    """
+    difference = (target - now) % 86400
+    return difference if difference > 0 else 86400.0
+
+
+def clock_seconds(now: datetime | None = None) -> float:
+    """Seconds since midnight, for the daily timers; a seam so tests need no waiting."""
+    moment = now or datetime.now()
+    return moment.hour * 3600 + moment.minute * 60 + moment.second + moment.microsecond / 1e6
+
+
+def _register_timer(api: ScriptApi, t: UserTimer, *, clock=clock_seconds) -> None:
+    """Schedule one timer under a name, so a label or a group can switch it later.
+
+    A draft with no label still gets a name of its own (its place in the file), so every timer
+    is findable: the manager and the script calls work the same whether the player named it or
+    not.
+    """
+    if not t.enabled or not t.send.strip():
+        return
+    at = parse_at(t.at) if t.at.strip() else None
+    if at is None and t.every <= 0:
+        return  # neither shape: nothing to schedule
+
+    def fire() -> None:
+        parts = _response_parts(t.send, t.send_to)
+        if parts:
+            deliver(api, list(parts), t.send_to, variable=t.variable)
+
+    # A timer that names a time of day has no fixed period -- its wait is "until the next
+    # 03:00" -- so it asks the clock each time; an interval timer just repeats.
+    daily = at is not None and not t.one_shot
+    every = None if t.one_shot or at is not None else float(t.every)
+    delay = seconds_until(at, now=clock()) if at is not None else float(t.every)
+    name = t.label.strip() or f"timer {t.at or f'{t.every:g}s'}"
+    api.add_named_timer(
+        name,
+        delay,
+        fire,
+        every=every,
+        next_delay=(lambda: seconds_until(at, now=clock())) if daily else None,
+        group=t.group.strip(),
+        enabled=t.enabled,
+    )
+
+
 def _register_alias(api: ScriptApi, a: UserAlias) -> None:
-    commands, send_commands = _command_action(api, a.send)
+    commands, send_commands = _command_action(
+        api, a.send, send_to=a.send_to, variable=a.variable
+    )
 
     def fire(ctx: MatchContext) -> None:
         sent = send_commands(ctx)
         if a.speak and sent:
             api.speak(_speech(api, a.speak, ctx))
 
-    api.add_alias(a.pattern, fire, regex=a.regex, source=SOURCE)
+    api.add_alias(
+        a.pattern,
+        fire,
+        regex=a.regex,
+        source=SOURCE,
+        name=a.label.strip(),
+        group=a.group.strip(),
+        priority=-int(a.order),
+        tiebreak=a.pattern,
+        stop_scope=SOURCE,
+        keep_evaluating=a.keep_evaluating,
+        # An alias that matches takes the command -- what was typed does not also go to the
+        # MUD -- whether or not later aliases are allowed to see it.
+        consumes=True,
+    )
     # A plain alias also takes more words typed after it. Not one that only speaks: it has no
     # command for the words to join, and taking the line would stop it reaching the MUD.
-    plain = not a.regex and not any(wildcard in a.pattern for wildcard in "*?")
+    plain = (
+        not a.regex
+        and not any(wildcard in a.pattern for wildcard in "*?")
+        and send_to_kind(a.send_to) == "world"  # nothing to carry words onto elsewhere
+    )
     if not plain or not commands:
         return
     places_words = any(_FIRST_CAPTURE_RE.search(command) for command in commands)
-    _, send_with_words = _command_action(api, a.send, carry_words=not places_words)
+    _, send_with_words = _command_action(
+        api, a.send, send_to=a.send_to, variable=a.variable, carry_words=not places_words
+    )
 
     def fire_with_words(ctx: MatchContext) -> None:
         sent = send_with_words(ctx)
@@ -404,6 +722,7 @@ def _register_alias(api: ScriptApi, a: UserAlias) -> None:
     api.add_alias(
         extra_words_pattern(a.pattern), fire_with_words, regex=True, source=SOURCE,
         priority=EXTRA_WORDS_PRIORITY, fallback=True,
+        consumes=True,  # it takes the words it was given, as the alias itself does
     )
 
 
