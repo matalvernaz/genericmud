@@ -13,6 +13,7 @@ import wx
 from genericmud import help_text
 from genericmud.automation.engine import AutomationEngine
 from genericmud.packs.user_rules import (
+    DEFAULT_ORDER,
     UserAlias,
     UserChannel,
     UserKey,
@@ -59,6 +60,14 @@ def _rule_summary(kind: str, rule) -> str:
     # refers to it by, so it is the thing they are looking for in the list.
     named = f"{rule.label}: " if getattr(rule, "label", "") else ""
     grouped = f" (group {rule.group})" if getattr(rule, "group", "") else ""
+    # The order decides which of two matching rules is heard first, so it belongs beside the
+    # kind where it can be compared, not after the action. A rule left at the default says
+    # nothing, the way a group you never set says nothing.
+    ordered = (
+        f", order {rule.order}"
+        if getattr(rule, "order", DEFAULT_ORDER) != DEFAULT_ORDER
+        else ""
+    )
     commands = "; ".join(
         line.strip() for line in rule.send.splitlines() if line.strip()
     ) if hasattr(rule, "send") else ""
@@ -76,7 +85,7 @@ def _rule_summary(kind: str, rule) -> str:
         how = rule.match_kind()
         label = f"{rule.pattern}" if how == "wildcard" else f"{rule.pattern} ({how})"
         return (
-            f"{status}{named}Trigger{grouped}: {label}: "
+            f"{status}{named}Trigger{ordered}{grouped}: {label}: "
             f"{'; '.join(actions) or 'no action'}"
         )
     if kind == "timer":
@@ -105,7 +114,7 @@ def _rule_summary(kind: str, rule) -> str:
 
     if kind == "alias":
         return (
-            f"{status}{named}Alias{grouped}: {rule.pattern} "
+            f"{status}{named}Alias{ordered}{grouped}: {rule.pattern} "
             f"{_sends(rule, commands) or 'sends nothing'}"
         )
     if kind == "key":

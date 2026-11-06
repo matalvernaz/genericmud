@@ -601,7 +601,8 @@ rules sharing a number fall back to their pattern text, so the order never depen
 file they came from. **Keep checking the rules after this one** is on by default -- every
 matching rule acts -- and clearing it makes that rule the last one heard about the line. A
 player rule that stops the search never stops a soundpack's rules; MUSHclient draws the same
-line between one plugin and the next.
+line between one plugin and the next. The manager's list says a rule's order beside its kind
+when you have set one, so two rules can be compared without opening them.
 
 **A Group** is on everything that can run: rules sharing a name switch together, so
 `mud.set_group_enabled("combat", false)` turns all of them off in one call -- MUSHclient's

@@ -105,7 +105,8 @@ When several rules match the same line, **Order** decides which is tried first: 
 number first, and rules sharing a number fall back to their pattern text, so the order never
 depends on which file they came from. **Keep checking the rules after this one** is on by
 default, so every matching rule acts; clearing it makes that rule the last one heard about the
-line.
+line. The manager's list says a rule's order beside its kind when you have set one, so two
+rules can be compared without opening them.
 
 A player rule that stops the search never stops a soundpack's rules: MUSHclient draws the same
 line between one plugin and the next, so a pack's own triggers keep working.

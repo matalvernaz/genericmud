@@ -32,6 +32,10 @@ from genericmud.voice.router import REVIEW_CHANNEL
 SOURCE = "user"  # registration source: remove_source(SOURCE) clears rules for reload
 RULES_FILENAME = "rules.json"
 SOUNDS_DIRNAME = "sounds"  # picked sound files are copied here (keeps the pack portable)
+# The order a rule has when the player has not put it in one. Lower numbers are tried first, and
+# equal numbers fall back to the pattern text, so this is the value that means "no order set",
+# and the manager's list says nothing about a rule left at it.
+DEFAULT_ORDER = 100
 
 _CAPTURE_RE = re.compile(r"%(\d)")
 _GAG_CHOICES = ("none", "speech", "line")
@@ -102,7 +106,7 @@ class UserTrigger:
     # MUSHclient's sequence: the lower the number, the sooner the rule is tried. Rules with the
     # same order are tried by their pattern text, as MUSHclient does, so the order is never a
     # matter of which file they were added from.
-    order: int = 100
+    order: int = DEFAULT_ORDER
     # Whether the rules after this one are still tried when it matches. True keeps today's
     # behaviour (every matching rule acts); clearing it makes this rule the last one heard about
     # the line. MUSHclient's default is the other way round, which is why this says what it does.
@@ -126,7 +130,7 @@ class UserAlias:
     speak: str = ""  # optional speech, same templates; can read a value with no commands
     label: str = ""  # as for triggers: the handle that turns it off and on
     group: str = ""  # as for triggers: switched together with the rest of its group
-    order: int = 100  # as for triggers: lower is tried first
+    order: int = DEFAULT_ORDER  # as for triggers: lower is tried first
     keep_evaluating: bool = True  # as for triggers: let later aliases see the command too
     enabled: bool = True
 

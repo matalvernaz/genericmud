@@ -122,3 +122,16 @@ def test_the_sequencing_survives_a_saved_rules_file(tmp_path):
     loaded = load_rules(tmp_path)
     assert (loaded.triggers[0].order, loaded.triggers[0].keep_evaluating) == (20, False)
     assert (loaded.aliases[0].order, loaded.aliases[0].keep_evaluating) == (30, False)
+
+
+def test_the_list_says_a_rules_order_and_says_nothing_at_the_default():
+    # The order decides which of two matching rules is heard first, and the list is the only
+    # place to compare them without opening each one in turn.
+    from genericmud.ui.automation_manager import _rule_summary
+
+    ordered = _rule_summary("trigger", UserTrigger(pattern="backup", order=20, send="x"))
+    assert "Trigger, order 20" in ordered
+    default = _rule_summary("trigger", UserTrigger(pattern="backup", send="x"))
+    assert "order" not in default
+    alias = _rule_summary("alias", UserAlias(pattern="sh", order=5, send="shoot"))
+    assert "Alias, order 5" in alias

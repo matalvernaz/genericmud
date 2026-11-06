@@ -160,7 +160,8 @@ data rule can be in the same group as the triggers. Order decides which is tried
 when several match: the lower number first, and equal numbers fall back to the pattern
 text. Keep checking the rules after this one is on by default -- every matching rule acts
 -- and clearing it makes that rule the last one heard about the line. A player rule that
-stops the search never silences a soundpack.
+stops the search never silences a soundpack. The manager's list says a rule's order beside
+its kind when you have set one, so two rules can be compared without opening them.
 
 A timer (Timers in the Automation Manager) acts on a clock rather than on a line:
 every so often, or once a day at a time such as 03:00. What it does is the same
