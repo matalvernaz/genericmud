@@ -217,6 +217,7 @@ places. Up and Down move through those lines. Down on the final unfinished line
 adds an empty tail without sending the draft. Tab back from Output, or Ctrl+Enter,
 returns to the existing tail; a final draft remains there. Typing from Output
 also goes to that tail, preserving letter case and non-English characters on GTK too.
+Emoji typed from Output stay intact on Windows.
 
 Enter executes the logical line at the start of the selection and leaves an empty
 tail, copying an older line to the bottom. Shift+Enter executes the current line,

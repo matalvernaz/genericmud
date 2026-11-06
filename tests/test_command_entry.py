@@ -417,10 +417,17 @@ def _probe():
             elif stage == "output" and alpha.output.HasFocus():
                 _text, char, typing = current
                 if typing:
-                    event = wx.KeyEvent(wx.wxEVT_CHAR)
-                    event.SetUnicodeKey(ord(char))
-                    event.SetKeyCode(ord(char))
-                    alpha.output.GetEventHandler().ProcessEvent(event)
+                    # wxChar is 16 bits on MSW: WM_CHAR delivers non-BMP input as two events.
+                    units = [ord(char)]
+                    if sys.platform == "win32" and ord(char) > 0xFFFF:
+                        encoded = char.encode("utf-16-le")
+                        units = [int.from_bytes(encoded[index:index + 2], "little")
+                                 for index in (0, 2)]
+                    for unit in units:
+                        event = wx.KeyEvent(wx.wxEVT_CHAR)
+                        event.SetUnicodeKey(unit)
+                        event.SetKeyCode(unit)
+                        alpha.output.GetEventHandler().ProcessEvent(event)
                 elif sys.platform == "darwin":
                     key(alpha.output, wx.WXK_TAB, char=True)
                 else:

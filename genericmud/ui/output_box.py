@@ -26,6 +26,7 @@ class OutputBoxMixin:
     SessionPanel.__init__: _alive, _find, _find_anchored, _find_direction, _find_restart,
     _flush_scheduled, _input_masked, _keep_caret_on_focus, _loop, _pending, _prefs, app, input and
     output. Hands keys to command_box's _dispatch_bound_combo.
+    Holds _output_high_surrogate only until Windows delivers a character's second UTF-16 half.
     """
 
     def _fill_command(self, text: str) -> None:
@@ -172,6 +173,7 @@ class OutputBoxMixin:
         is already at the end when the screen reader reads the newly focused control.
         """
         self._entry_from_output = True
+        self._output_high_surrogate = 0
         if self._keep_caret_on_focus:
             # Focus is coming back from the Find dialog, so the search must run from where
             # the reader actually was. Jumping to the bottom here would throw that away.
@@ -385,6 +387,18 @@ class OutputBoxMixin:
     def _on_output_char(self, event: wx.KeyEvent) -> None:
         unicode_key = event.GetUnicodeKey()
         modified = event.ControlDown() or event.AltDown()
+        if not modified and 0xD800 <= unicode_key <= 0xDBFF:
+            # MSW sends a non-BMP character as two WM_CHAR events. Keep focus here until
+            # both arrive; forwarding one half would corrupt the character or its draft.
+            self._output_high_surrogate = unicode_key
+            return
+        high = self._output_high_surrogate
+        self._output_high_surrogate = 0
+        if 0xDC00 <= unicode_key <= 0xDFFF:
+            if modified or not high:
+                event.Skip()
+                return
+            unicode_key = 0x10000 + ((high - 0xD800) << 10) + unicode_key - 0xDC00
         if unicode_key >= 32 and unicode_key != 127 and not modified:
             entry = isinstance(self.input, CommandEntryCtrl)
             selection = self.input.GetSelection()

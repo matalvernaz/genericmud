@@ -115,6 +115,8 @@ range reads normalize a lone CR as a newline too; caret mapping chooses the comp
 delimiter when both positions read the same. A first-row Escape request
 inside a CRLF is normalized to a valid caret rather than deliberately splitting a
 native separator. Other native editing/undo details can vary by platform.
+Windows non-BMP typing from Output is delivered as two UTF-16 events. The window waits
+for both halves before moving focus and inserting the complete character, in either mode.
 
 Automated genericMud checks on macOS use real wxPython 4.2.5 / wxWidgets 3.2.9 Cocoa
 controls and focus, with synthetic key/character/submission events and deterministic

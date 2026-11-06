@@ -32,7 +32,7 @@ def test_typing_from_output_preserves_command_selection():
     )
     assert result.returncode == 0, result.stdout + result.stderr
     cases = json.loads(result.stdout)
-    assert len(cases) == 6
+    assert len(cases) == 7
     failures = [case for case in cases if case["observed"] != case["expected"]
                 or case["caret"] != case["expected_caret"]]
     assert not failures, json.dumps(failures, ensure_ascii=False, indent=2)
@@ -48,6 +48,7 @@ def _probe():
         ("substring", "attack goblin", 2, 6, "X"),
         ("empty", "", 0, 0, "X"),
         ("unicode_character", "attack goblin", 3, 3, "я"),
+        ("non_bmp_character", "attack goblin", 3, 3, "🐉"),
         ("space", "attack goblin", 3, 3, " "),
         ("unicode_command", "атака гоблина", 3, 3, "X"),
     ]
@@ -57,6 +58,7 @@ def _probe():
     app.SetTopWindow(frame)
     panel = wx.Panel(frame)
     controls = SimpleNamespace(
+        _output_high_surrogate=0,
         output=wx.TextCtrl(panel, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_DONTWRAP),
         input=wx.TextCtrl(panel, style=wx.TE_PROCESS_ENTER),
     )
@@ -102,22 +104,32 @@ def _probe():
                 controls.output.SetFocus()
             elif stage == "output" and focused(controls.output):
                 assert controls.input.GetSelection() == (start, end)
-                event = wx.KeyEvent(wx.wxEVT_CHAR)
-                event.SetUnicodeKey(ord(char))
-                event.SetKeyCode(ord(char))
-                event.SetId(controls.output.GetId())
-                event.SetEventObject(controls.output)
+                units = [ord(char)]
+                if sys.platform == "win32" and ord(char) > 0xFFFF:
+                    encoded = char.encode("utf-16-le")
+                    units = [int.from_bytes(encoded[index:index + 2], "little")
+                             for index in (0, 2)]
                 inside_handler = True
-                controls.output.GetEventHandler().ProcessEvent(event)
+                for unit in units:
+                    event = wx.KeyEvent(wx.wxEVT_CHAR)
+                    event.SetUnicodeKey(unit)
+                    event.SetKeyCode(unit)
+                    event.SetId(controls.output.GetId())
+                    event.SetEventObject(controls.output)
+                    controls.output.GetEventHandler().ProcessEvent(event)
                 inside_handler = False
                 settle_at = time.monotonic() + 0.1
                 stage = "settle"
             elif stage == "settle" and focused(controls.input) and time.monotonic() >= settle_at:
                 assert focus_events, "No native Command EVT_SET_FOCUS received"
+                # MSW/Cocoa caret units can count UTF-16 pairs; GTK counts code points.
+                units = len(char)
+                if controls.input.GetLastPosition() != len(controls.input.GetValue()):
+                    units = len(char.encode("utf-16-le")) // 2
                 results.append({
                     "name": name, "expected": text[:start] + char + text[end:],
                     "observed": controls.input.GetValue(),
-                    "expected_caret": start + len(char),
+                    "expected_caret": start + units,
                     "caret": controls.input.GetInsertionPoint(),
                     "focus_events": list(focus_events),
                 })
