@@ -168,7 +168,7 @@ def _labels(dialog) -> list[str]:
 
 
 def test_variables_dialog_reads_as_one_row_per_value_and_filters(frame):
-    from genericmud.ui.wx_app import VariablesDialog
+    from genericmud.ui.variables_dialog import VariablesDialog
 
     dialog = VariablesDialog(frame, _rows, world_name="Aard")
     try:
@@ -190,7 +190,7 @@ def test_variables_dialog_reads_as_one_row_per_value_and_filters(frame):
 
 
 def test_variables_dialog_says_why_it_is_empty(frame):
-    from genericmud.ui.wx_app import VariablesDialog
+    from genericmud.ui.variables_dialog import VariablesDialog
 
     empty = VariablesDialog(frame, lambda: ([], False), world_name="Aard")
     unanswered = VariablesDialog(frame, lambda: None, world_name="Aard")
@@ -204,7 +204,7 @@ def test_variables_dialog_says_why_it_is_empty(frame):
 
 
 def test_variables_dialog_copies_the_reference_and_keeps_the_row_on_refresh(frame):
-    from genericmud.ui.wx_app import VariablesDialog
+    from genericmud.ui.variables_dialog import VariablesDialog
 
     spoken: list[str] = []
     dialog = VariablesDialog(frame, _rows, world_name="Aard", announce=spoken.append)
@@ -228,7 +228,7 @@ def test_variables_dialog_copies_the_reference_and_keeps_the_row_on_refresh(fram
 
 
 def test_variables_picker_returns_the_chosen_row(frame):
-    from genericmud.ui.wx_app import VariablesDialog
+    from genericmud.ui.variables_dialog import VariablesDialog
 
     dialog = VariablesDialog(frame, _rows, world_name="", pick=True)
     try:
@@ -244,7 +244,7 @@ def test_variables_picker_returns_the_chosen_row(frame):
 
 def test_rule_editors_offer_variables_only_with_a_live_session(frame, tmp_path):
     from genericmud.packs.user_rules import UserAlias, UserKey, UserTrigger
-    from genericmud.ui.wx_app import AliasEditorDialog, KeyEditorDialog, TriggerEditorDialog
+    from genericmud.ui.rule_editors import AliasEditorDialog, KeyEditorDialog, TriggerEditorDialog
 
     makers = (
         lambda fetch: TriggerEditorDialog(frame, tmp_path, UserTrigger(), variables=fetch),
@@ -264,14 +264,14 @@ def test_rule_editors_offer_variables_only_with_a_live_session(frame, tmp_path):
 
 def test_inserting_a_variable_puts_its_reference_at_the_caret(frame, tmp_path, monkeypatch):
     from genericmud.packs.user_rules import UserKey
-    from genericmud.ui import wx_app
+    from genericmud.ui import rule_editors, variables_dialog
 
     def choose_first(picker):
         picker.chosen = picker._shown[0]
         return wx.ID_OK
 
-    monkeypatch.setattr(wx_app.VariablesDialog, "ShowModal", choose_first)
-    editor = wx_app.KeyEditorDialog(frame, tmp_path, UserKey(key="f2", speak="HP "),
+    monkeypatch.setattr(variables_dialog.VariablesDialog, "ShowModal", choose_first)
+    editor = rule_editors.KeyEditorDialog(frame, tmp_path, UserKey(key="f2", speak="HP "),
                                     variables=_rows)
     try:
         editor._speak.SetInsertionPointEnd()
@@ -284,12 +284,12 @@ def test_inserting_a_variable_puts_its_reference_at_the_caret(frame, tmp_path, m
 def test_focus_returns_to_the_field_only_after_the_picker_has_closed(frame, tmp_path,
                                                                         monkeypatch):
     from genericmud.packs.user_rules import UserKey
-    from genericmud.ui import wx_app
+    from genericmud.ui import rule_editors, variables_dialog
 
     deferred: list = []
-    monkeypatch.setattr(wx_app.VariablesDialog, "ShowModal", lambda _picker: wx.ID_CANCEL)
+    monkeypatch.setattr(variables_dialog.VariablesDialog, "ShowModal", lambda _picker: wx.ID_CANCEL)
     monkeypatch.setattr(wx, "CallAfter", lambda func, *args: deferred.append((func, args)))
-    editor = wx_app.KeyEditorDialog(frame, tmp_path, UserKey(), variables=_rows)
+    editor = rule_editors.KeyEditorDialog(frame, tmp_path, UserKey(), variables=_rows)
     try:
         focused: list = []
         monkeypatch.setattr(editor._speak, "SetFocus", lambda: focused.append(True))
@@ -303,7 +303,7 @@ def test_focus_returns_to_the_field_only_after_the_picker_has_closed(frame, tmp_
 
 
 def test_deferred_focus_on_a_closed_window_is_harmless(frame):
-    from genericmud.ui.wx_app import _focus_if_alive
+    from genericmud.ui.variables_dialog import _focus_if_alive
 
     field = wx.TextCtrl(frame)
     field.Destroy()
@@ -394,7 +394,7 @@ def test_the_automation_manager_refuses_a_hotkey_genericmud_already_uses(
 
     from genericmud.config.keymap import load_keymap
     from genericmud.packs.user_rules import UserKey
-    from genericmud.ui import wx_app
+    from genericmud.ui import automation_manager, rule_editors
 
     panel = types.SimpleNamespace(
         world=World("Test", "mud.example", 4000),
@@ -403,10 +403,10 @@ def test_the_automation_manager_refuses_a_hotkey_genericmud_already_uses(
         _keymap=load_keymap("vipmud"),
     )
     answers = iter([wx.ID_OK, wx.ID_CANCEL])  # press OK, read the refusal, then cancel
-    monkeypatch.setattr(wx_app.KeyEditorDialog, "ShowModal", lambda _editor: next(answers))
+    monkeypatch.setattr(rule_editors.KeyEditorDialog, "ShowModal", lambda _editor: next(answers))
     told: list[str] = []
     monkeypatch.setattr(wx, "MessageBox", lambda text, *_args: told.append(text))
-    manager = wx_app.AutomationManagerDialog(frame, panel)
+    manager = automation_manager.AutomationManagerDialog(frame, panel)
     try:
         assert manager._edit_rule("key", UserKey(key="alt+up", send="score")) is None
         assert len(told) == 1 and "Alt+Up" in told[0]
@@ -1889,10 +1889,10 @@ def test_the_copy_box_fills_the_clipboard_and_says_so(
 
 def test_the_mud_data_editor_round_trips_a_rule(frame, tmp_path):
     from genericmud.packs.user_rules import UserWatch
-    from genericmud.ui import wx_app
+    from genericmud.ui import rule_editors
 
     rule = UserWatch(name="Char.Vitals.hp", only_changes=False, speak="${value} health")
-    dialog = wx_app.DataRuleEditorDialog(frame, tmp_path, rule)
+    dialog = rule_editors.DataRuleEditorDialog(frame, tmp_path, rule)
     try:
         assert dialog.result() == rule
         assert dialog._only_changes.GetValue() is False
@@ -1904,7 +1904,7 @@ def test_the_manager_offers_mud_data_sixth_and_makes_a_rule(frame, tmp_path, mon
     import types
 
     from genericmud.packs.user_rules import UserWatch
-    from genericmud.ui import wx_app
+    from genericmud.ui import automation_manager, rule_editors
 
     panel = types.SimpleNamespace(
         world=World("Test", "mud.example", 4000),
@@ -1912,8 +1912,8 @@ def test_the_manager_offers_mud_data_sixth_and_makes_a_rule(frame, tmp_path, mon
         variable_snapshot=None,
         _keymap={},
     )
-    monkeypatch.setattr(wx_app.DataRuleEditorDialog, "ShowModal", lambda _editor: wx.ID_OK)
-    manager = wx_app.AutomationManagerDialog(frame, panel)
+    monkeypatch.setattr(rule_editors.DataRuleEditorDialog, "ShowModal", lambda _editor: wx.ID_OK)
+    manager = automation_manager.AutomationManagerDialog(frame, panel)
     try:
         assert manager._category.GetString(5).startswith("MUD data")
         rule = UserWatch(name="Char.Vitals.hp", speak="${value}")
@@ -1921,7 +1921,9 @@ def test_the_manager_offers_mud_data_sixth_and_makes_a_rule(frame, tmp_path, mon
         told: list[str] = []
         monkeypatch.setattr(wx, "MessageBox", lambda text, *_args: told.append(text))
         answers = iter([wx.ID_OK, wx.ID_CANCEL])
-        monkeypatch.setattr(wx_app.DataRuleEditorDialog, "ShowModal", lambda _e: next(answers))
+        monkeypatch.setattr(
+            rule_editors.DataRuleEditorDialog, "ShowModal", lambda _e: next(answers)
+        )
         assert manager._edit_rule("data", UserWatch(name="")) is None  # a name is required
         assert told and "the name of a value the MUD sends" in told[0]
     finally:
@@ -1941,7 +1943,7 @@ def _aged_rows():
 
 
 def test_variables_most_recent_first_says_how_long_ago(frame):
-    from genericmud.ui.wx_app import VariablesDialog
+    from genericmud.ui.variables_dialog import VariablesDialog
 
     dialog = VariablesDialog(frame, _aged_rows, world_name="Aard")
     try:
@@ -1958,7 +1960,7 @@ def test_variables_most_recent_first_says_how_long_ago(frame):
 
 
 def test_watch_this_makes_a_rule_for_a_mud_value_but_not_a_script_one(frame):
-    from genericmud.ui.wx_app import VariablesDialog
+    from genericmud.ui.variables_dialog import VariablesDialog
 
     watched: list[str] = []
     dialog = VariablesDialog(
