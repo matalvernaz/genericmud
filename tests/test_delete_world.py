@@ -37,10 +37,10 @@ class _Panel:
 
 
 def _frame(*, panels: list[_Panel] | None = None):
-    from genericmud.ui import wx_app
+    from genericmud.ui import main_window
 
     panels = panels or []
-    frame = wx_app.GenericMudFrame.__new__(wx_app.GenericMudFrame)
+    frame = main_window.GenericMudFrame.__new__(main_window.GenericMudFrame)
     frame.book = type(
         "Book",
         (),
@@ -81,11 +81,11 @@ def answer(monkeypatch):
 
 
 def _saving(monkeypatch, worlds: list[World]) -> list[list[World]]:
-    from genericmud.ui import wx_app
+    from genericmud.ui import main_window
 
     written: list[list[World]] = []
-    monkeypatch.setattr(wx_app, "load_worlds", lambda: list(worlds))
-    monkeypatch.setattr(wx_app, "save_worlds", lambda kept: written.append(list(kept)))
+    monkeypatch.setattr(main_window, "load_worlds", lambda: list(worlds))
+    monkeypatch.setattr(main_window, "save_worlds", lambda kept: written.append(list(kept)))
     return written
 
 
@@ -162,14 +162,14 @@ def test_a_tab_that_is_only_disconnected_is_not_mentioned(answer, monkeypatch):
 def test_a_failed_save_keeps_the_login(answer, monkeypatch):
     # The world is still in the file, so its password must stay with it.
     wx = pytest.importorskip("wx")
-    from genericmud.ui import wx_app
+    from genericmud.ui import main_window
 
-    monkeypatch.setattr(wx_app, "load_worlds", lambda: [World("Pen", "pen.example", 9500)])
+    monkeypatch.setattr(main_window, "load_worlds", lambda: [World("Pen", "pen.example", 9500)])
 
     def refuse(_kept):
         raise OSError("disk full")
 
-    monkeypatch.setattr(wx_app, "save_worlds", refuse)
+    monkeypatch.setattr(main_window, "save_worlds", refuse)
     told: list[str] = []
     monkeypatch.setattr(wx, "MessageBox", lambda text, *_a, **_k: told.append(text))
     frame = _frame()
