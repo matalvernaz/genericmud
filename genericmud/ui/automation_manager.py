@@ -17,13 +17,16 @@ from genericmud.packs.user_rules import (
     UserChannel,
     UserKey,
     UserRules,
+    UserTimer,
     UserTrigger,
     UserWatch,
+    engine_rule_state,
     load_rules,
     register_rules,
     save_rules,
+    send_to_kind,
 )
-from genericmud.scripting import user_scripts
+from genericmud.scripting import rule_scripts, user_scripts
 from genericmud.scripting.api import ScriptApi
 from genericmud.ui.help_dialog import HelpDialog
 from genericmud.ui.keyboard import _NUMPAD_KEYS, _hotkey_taken
@@ -32,15 +35,30 @@ from genericmud.ui.rule_editors import (
     ChannelEditorDialog,
     DataRuleEditorDialog,
     KeyEditorDialog,
+    TimerEditorDialog,
     TriggerEditorDialog,
 )
 from genericmud.ui.session_panel import SessionPanel
+
+
+def _sends(rule, commands: str) -> str:
+    """One rule's response text in the words its destination deserves, for the manager list."""
+    if not commands:
+        return ""
+    if send_to_kind(getattr(rule, "send_to", "world")) == "variable":
+        name = str(getattr(rule, "variable", "") or "").strip() or "(no variable name)"
+        return f"store {commands} in variable {name}"
+    return f"send {commands}"
 
 
 def _rule_summary(kind: str, rule) -> str:
     """One spoken line per rule for the manager list."""
     # Plain words, no arrow/dash glyphs: these lines are read by a screen reader.
     status = "Disabled. " if not rule.enabled else ""
+    # The label first when it has one: it is what the player named the rule, and what a script
+    # refers to it by, so it is the thing they are looking for in the list.
+    named = f"{rule.label}: " if getattr(rule, "label", "") else ""
+    grouped = f" (group {rule.group})" if getattr(rule, "group", "") else ""
     commands = "; ".join(
         line.strip() for line in rule.send.splitlines() if line.strip()
     ) if hasattr(rule, "send") else ""
@@ -50,19 +68,49 @@ def _rule_summary(kind: str, rule) -> str:
         actions = [part for part in (
             f"sound {Path(rule.sound).name}" if rule.sound else "",
             f"speak {rule.speak}" if rule.speak else "",
-            f"send {commands}" if commands else "",
+            _sends(rule, commands),
             "interrupts speech" if rule.interrupt else "",
             {"speech": "silence line", "line": "remove line"}.get(rule.gag, ""),
             f"channel {rule.channel}" if rule.channel else "",
         ) if part]
         how = rule.match_kind()
         label = f"{rule.pattern}" if how == "wildcard" else f"{rule.pattern} ({how})"
-        return f"{status}Trigger: {label}: {'; '.join(actions) or 'no action'}"
+        return (
+            f"{status}{named}Trigger{grouped}: {label}: "
+            f"{'; '.join(actions) or 'no action'}"
+        )
+    if kind == "timer":
+        when = (
+            f"every {rule.every:g} seconds"
+            if rule.every > 0 and not rule.at.strip()
+            else f"each day at {rule.at or '?'}"
+        )
+        if getattr(rule, "offset", 0) and rule.every > 0 and not rule.at.strip():
+            # Saying it matters: two timers on one interval take turns, and the list is where
+            # you see which one goes first.
+            when += f", offset {rule.offset:g} seconds"
+        once = ", once only" if rule.one_shot else ""
+        if getattr(rule, "run_disconnected", False):
+            # Worth hearing in the list: it is the difference between a timer that quietly
+            # waits for the world and one that speaks while nothing is coming back.
+            once += ", runs while disconnected"
+        # "every 30 seconds: look" already reads as what happens; only a variable target needs
+        # saying, because "every 30 seconds: ${1}" would not tell you where it went.
+        doing = (
+            _sends(rule, commands)
+            if send_to_kind(getattr(rule, "send_to", "world")) == "variable"
+            else commands
+        )
+        return f"{status}{named}Timer{grouped}: {when}{once}: {doing or 'nothing'}"
+
     if kind == "alias":
-        return f"{status}Alias: {rule.pattern} sends {commands or 'nothing'}"
+        return (
+            f"{status}{named}Alias{grouped}: {rule.pattern} "
+            f"{_sends(rule, commands) or 'sends nothing'}"
+        )
     if kind == "key":
         action = commands or rule.speak or rule.sound or "nothing"
-        return f"{status}Hotkey: {rule.key} runs {action}"
+        return f"{status}Hotkey{grouped}: {rule.key} runs {action}"
     if kind == "data":
         actions = [part for part in (
             f"sound {Path(rule.sound).name}" if rule.sound else "",
@@ -71,13 +119,33 @@ def _rule_summary(kind: str, rule) -> str:
             "interrupts speech" if rule.interrupt else "",
         ) if part]
         when = "when it changes" if rule.only_changes else "every time"
-        return f"{status}MUD data: {rule.name}, {when}: {'; '.join(actions) or 'no action'}"
+        return (
+            f"{status}MUD data{grouped}: {rule.name}, {when}: "
+            f"{'; '.join(actions) or 'no action'}"
+        )
     return (
         f"{status}Channel: {rule.name}"
         f" ({'speaks' if rule.speak else 'silent'},"
         f" {'shown' if rule.display else 'hidden'}"
         f"{', interrupts' if rule.interrupt else ''})"
     )
+
+
+def _live_rule_line(rule) -> str:
+    """One spoken line for a rule a script registered: what it is, and what it matches.
+
+    No editing words in it: these rules have no file of their own. What a script wrote is the only
+    copy of them, so the line says what they are and whether they are on, and the button to switch
+    one off works the way the others do.
+    """
+    status = "Disabled. " if not rule.enabled else ""
+    named = f"{rule.name}: " if rule.name else ""
+    what = {
+        "trigger": "Trigger", "alias": "Alias", "key": "Hotkey",
+        "timer": "Timer", "data": "MUD data rule",
+    }[rule.kind]
+    grouped = f" (group {rule.group})" if rule.group else ""
+    return f"{status}{named}{what} from a script{grouped}: {rule.summary}"
 
 
 class AutomationManagerDialog(wx.Dialog):
@@ -114,25 +182,39 @@ class AutomationManagerDialog(wx.Dialog):
             "such as your health. It can play a sound, speak, or send commands. The MUD "
             "variables list (Ctrl+Shift+V) shows what this MUD sends.",
         ),
+        (
+            "timer", "Timers — when a clock reaches a time",
+            "A timer fires every so often, or once a day at a time. What it does is the "
+            "same question every rule answers: send to the MUD, fill your command box, "
+            "write a note, or run a script.",
+        ),
+        (
+            "live", "From your scripts — what a script registered",
+            "Rules your Lua scripts made with mud.trigger, mud.alias, mud.key, mud.timer, "
+            "mud.add_timer or mud.on_data. They are listed here so a rule a script got wrong is "
+            "visible, and can be switched off. The script's own text stays where it is, so they "
+            "cannot be edited from this window.",
+        ),
     )
     _CATEGORY_WORDS = {
-        "trigger": "Triggers", "alias": "Aliases", "key": "Hotkeys",
-        "channel": "Channels", "script": "Scripts", "data": "MUD data",
+        "trigger": "Triggers", "alias": "Aliases", "key": "Hotkeys", "timer": "Timers",
+        "channel": "Channels", "script": "Scripts", "data": "MUD data", "live": "Script rules",
     }
     _KIND_WORD = {
-        "trigger": "Trigger", "alias": "Alias", "key": "Hotkey", "channel": "Channel",
-        "data": "MUD data rule",
+        "trigger": "Trigger", "alias": "Alias", "key": "Hotkey", "timer": "Timer",
+        "channel": "Channel", "data": "MUD data rule", "live": "Script rule",
     }
     _RULE_TYPES = {
-        "trigger": UserTrigger, "alias": UserAlias,
-        "key": UserKey, "channel": UserChannel, "data": UserWatch,
+        "trigger": UserTrigger, "alias": UserAlias, "key": UserKey, "timer": UserTimer,
+        "channel": UserChannel, "data": UserWatch,
     }
     _RULE_COLLECTIONS = {
-        "trigger": "triggers", "alias": "aliases", "key": "keys", "channel": "channels",
-        "data": "watches",
+        "trigger": "triggers", "alias": "aliases", "key": "keys", "timer": "timers",
+        "channel": "channels", "data": "watches",
     }
     _REQUIRED_FIELD = {
         "trigger": ("pattern", "text to match"),
+        "timer": ("send", "something for it to do"),
         "alias": ("pattern", "the shortcut you will type"),
         "key": ("key", "a key combination"),
         "channel": ("name", "a name"),
@@ -225,11 +307,12 @@ class AutomationManagerDialog(wx.Dialog):
     def _collection(self, kind: str) -> list:
         return {
             "trigger": self._rules.triggers, "alias": self._rules.aliases,
-            "key": self._rules.keys, "channel": self._rules.channels,
-            "data": self._rules.watches,
+            "key": self._rules.keys, "timer": self._rules.timers,
+            "channel": self._rules.channels, "data": self._rules.watches,
         }[kind]
 
     def _refresh(self, select: int | str | None = None, *, focus: bool = False) -> None:
+        self._sync_from_engine()  # a script may have switched something since the last look
         kind = self._kind()
         _kind, _label, description = self._CATEGORIES[self._category.GetSelection()]
         self._description.SetLabel(description)
@@ -237,6 +320,8 @@ class AutomationManagerDialog(wx.Dialog):
 
         if kind == "script":
             labels = user_scripts.list_scripts(self._pack_dir) if self._pack_dir else []
+        elif kind == "live":
+            labels = [_live_rule_line(rule) for rule in self._live_rules()]
         else:
             labels = [_rule_summary(kind, rule) for rule in self._collection(kind)]
         previous = self._selections.get(kind, 0)
@@ -277,16 +362,23 @@ class AutomationManagerDialog(wx.Dialog):
         index = self._selected_index()
         has_item = index is not None
         is_script = kind == "script"
+        # A rule a script registered has no file to edit and no text to create: it can be listed
+        # and switched off, and that is all.
+        from_script = kind == "live"
         singular = "script" if is_script else self._KIND_WORD[kind].lower()
         self._buttons["new"].SetLabel(f"&New {singular}...")
-        self._buttons["edit"].Enable(has_item)
-        self._buttons["duplicate"].Enable(has_item)
-        self._buttons["delete"].Enable(has_item)
+        self._buttons["new"].Enable(not from_script)
+        self._buttons["edit"].Enable(has_item and not from_script)
+        self._buttons["duplicate"].Enable(has_item and not from_script)
+        self._buttons["delete"].Enable(has_item and not from_script)
         self._buttons["toggle"].Enable(has_item and not is_script)
         self._buttons["rename"].Enable(has_item and is_script)
         self._buttons["reload"].Enable(is_script)
         self._buttons["folder"].Enable(is_script)
-        if has_item and not is_script:
+        if has_item and from_script:
+            enabled = self._live_rules()[index].enabled
+            self._buttons["toggle"].SetLabel("Disa&ble" if enabled else "E&nable")
+        elif has_item and not is_script:
             enabled = self._collection(kind)[index].enabled
             self._buttons["toggle"].SetLabel("Disa&ble" if enabled else "E&nable")
         else:
@@ -324,9 +416,53 @@ class AutomationManagerDialog(wx.Dialog):
             return
         event.Skip()
 
-    def _save_and_reload_rules(self, select: int | None = None) -> bool:
+    def _sync_from_engine(self, *, except_rule=None) -> None:
+        """Take each rule's on/off state from the engine before showing or saving it.
+
+        A script's EnableTrigger, EnableGroup or EnableTimer switches the rule the client runs,
+        not the copy in the rules file, so the manager has to ask. ``except_rule`` is the one the
+        dialog has only now returned: its Enabled box is the player's decision of this moment, and
+        the engine's older state must not overwrite it.
+        """
+        app = getattr(self._panel, "app", None)
+        engine = getattr(app, "engine", None)
+        if engine is None:
+            return  # no live session (a test, or the manager before a world opens)
+        for kind, collection in (
+            ("trigger", self._rules.triggers), ("alias", self._rules.aliases),
+            ("timer", self._rules.timers), ("key", self._rules.keys),
+            ("data", self._rules.watches),
+        ):
+            for index, rule in enumerate(collection):
+                if rule is except_rule:
+                    continue
+                live = engine_rule_state(engine, kind, rule)
+                if live is not None and live != rule.enabled:
+                    collection[index] = replace(rule, enabled=live)
+
+    def _live_rules(self) -> list:
+        """The rules this world's scripts registered, as the engine has them now.
+
+        Read fresh each time rather than kept: a script can add or drop one at any moment, and a
+        stale copy would list a rule that no longer runs.
+        """
+        engine = getattr(getattr(self._panel, "app", None), "engine", None)
+        if engine is None:
+            return []
+        return engine.live_rules((user_scripts.SOURCE_PREFIX, rule_scripts.RULE_SOURCE))
+
+    def _save_and_reload_rules(
+        self, select: int | None = None, *, just_edited=None
+    ) -> bool:
+        """Save the rules and reload them live.
+
+        ``just_edited`` is the rule the dialog has only now returned; every other rule takes its
+        on/off state from the engine first, so saving one rule cannot switch a script's decision
+        back on.
+        """
         if self._pack_dir is None:
             return False
+        self._sync_from_engine(except_rule=just_edited)
         try:
             register_rules(
                 ScriptApi(
@@ -359,6 +495,8 @@ class AutomationManagerDialog(wx.Dialog):
             dialog = KeyEditorDialog(self, self._pack_dir, rule, variables=variables)
         elif kind == "data":
             dialog = DataRuleEditorDialog(self, self._pack_dir, rule, variables=variables)
+        elif kind == "timer":
+            dialog = TimerEditorDialog(self, rule)
         else:
             dialog = ChannelEditorDialog(self, rule)
         try:
@@ -428,6 +566,8 @@ class AutomationManagerDialog(wx.Dialog):
 
     def _on_new(self, _event: wx.CommandEvent) -> None:
         kind = self._kind()
+        if kind == "live":
+            return  # a script's rule has no file to write a new one to
         if kind == "script":
             self._new_script()
             return
@@ -436,10 +576,12 @@ class AutomationManagerDialog(wx.Dialog):
             return
         items = self._collection(kind)
         items.append(result)
-        if self._save_and_reload_rules(len(items) - 1):
+        if self._save_and_reload_rules(len(items) - 1, just_edited=result):
             self._announce_rule_change(kind, result, f"{self._KIND_WORD[kind]} added.")
 
     def _on_edit(self, _event: wx.CommandEvent) -> None:
+        if self._kind() == "live":
+            return  # read-only: the script's own text is the only copy
         if self._kind() == "script":
             self._edit_selected_script()
             return
@@ -450,11 +592,11 @@ class AutomationManagerDialog(wx.Dialog):
         result = self._edit_rule(kind, items[index])
         if result is not None:
             items[index] = result
-            if self._save_and_reload_rules(index):
+            if self._save_and_reload_rules(index, just_edited=result):
                 self._announce_rule_change(kind, result, f"{self._KIND_WORD[kind]} updated.")
 
     def _on_duplicate(self, _event: wx.CommandEvent) -> None:
-        if (index := self._selected_index()) is None:
+        if self._kind() == "live" or (index := self._selected_index()) is None:
             return
         kind = self._kind()
         if kind == "script":
@@ -473,12 +615,24 @@ class AutomationManagerDialog(wx.Dialog):
         if result is None:
             return
         items.append(result)
-        if self._save_and_reload_rules(len(items) - 1):
+        if self._save_and_reload_rules(len(items) - 1, just_edited=result):
             self._announce_rule_change(kind, result, f"{self._KIND_WORD[kind]} duplicated.")
 
     def _on_toggle(self, _event: wx.CommandEvent) -> None:
         kind = self._kind()
         if kind == "script" or (index := self._selected_index()) is None:
+            return
+        if kind == "live":
+            rule = self._live_rules()[index]
+            engine = getattr(getattr(self._panel, "app", None), "engine", None)
+            if engine is None or not engine.set_live_enabled(rule.handle, not rule.enabled):
+                return  # it went away since the list was drawn
+            self._announce_rule_change(
+                kind, rule,
+                f"{self._KIND_WORD[kind]} {rule.summary} "
+                f"{'enabled' if not rule.enabled else 'disabled'}.",
+            )
+            self._refresh(index)
             return
         items = self._collection(kind)
         items[index] = replace(items[index], enabled=not items[index].enabled)
@@ -487,6 +641,8 @@ class AutomationManagerDialog(wx.Dialog):
             self._announce_rule_change(kind, items[index], f"{self._KIND_WORD[kind]} {state}.")
 
     def _on_delete(self, _event: wx.CommandEvent) -> None:
+        if self._kind() == "live":
+            return  # see _on_edit: switching one off is what the category is for
         if self._kind() == "script":
             self._delete_script()
             return

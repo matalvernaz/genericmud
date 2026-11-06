@@ -266,8 +266,11 @@ def test_saved_hotkey_explains_compass_only_when_it_blocks_use(
         _announce=spoken.append,
     )
     manager._collection = lambda _kind: manager._rules.keys
-    manager._save_and_reload_rules = lambda select: manager_type._save_and_reload_rules(
-        manager, select,
+    manager._sync_from_engine = lambda **_kwargs: None  # no live session in this fake
+    # The manager's save is called with the rule the dialog just returned, so that its own
+    # Enabled answer is not overwritten by the engine's older state.
+    manager._save_and_reload_rules = lambda select, **kwargs: (
+        manager_type._save_and_reload_rules(manager, select, **kwargs)
     )
     manager._announce_rule_change = lambda kind, saved, verb: manager_type._announce_rule_change(
         manager, kind, saved, verb,
