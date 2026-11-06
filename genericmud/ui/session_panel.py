@@ -24,7 +24,7 @@ from genericmud.session.diaglog import DiagnosticLog
 from genericmud.session.hub import SessionHub
 from genericmud.transport.connection import MudConnection
 from genericmud.ui.command_box import _HISTORY_LIMIT, CommandBoxMixin
-from genericmud.ui.command_entry import CommandEntryCtrl
+from genericmud.ui.command_buffer import CommandEntryCtrl
 from genericmud.ui.output_box import OutputBoxMixin
 from genericmud.ui.pack_dialogs import PackNotepadFrame, _PackQuestion
 from genericmud.ui.pack_window import PackWindowMixin

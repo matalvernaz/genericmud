@@ -8,7 +8,7 @@ from __future__ import annotations
 import wx
 
 from genericmud.app import CLIENT_PREFIX
-from genericmud.ui.command_entry import CommandEntryCtrl
+from genericmud.ui.command_buffer import CommandEntryCtrl
 from genericmud.ui.keyboard import (
     _COMPLETE_BACKWARD,
     _COMPLETE_FORWARD,

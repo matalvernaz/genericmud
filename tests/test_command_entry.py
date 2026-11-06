@@ -39,7 +39,7 @@ def _probe():
     from genericmud.config.keymap import load_keymap
     from genericmud.config.ui_prefs import UiPrefs
     from genericmud.config.worlds import World
-    from genericmud.ui.command_entry import CommandEntryCtrl
+    from genericmud.ui.command_buffer import CommandEntryCtrl
     from genericmud.ui.main_window import GenericMudFrame
     from genericmud.ui.session_panel import SessionPanel
     from genericmud.voice.router import VoiceRouter
