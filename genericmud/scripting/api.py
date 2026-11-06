@@ -572,6 +572,37 @@ class ScriptApi:
         """Drop this source's binding of ``key``."""
         self._engine.remove_key(key, source=self._source)
 
+    def add_named_timer(
+        self,
+        name: str,
+        delay: float,
+        callback: Callable[[], None],
+        *,
+        every: float | None = None,
+        next_delay: Callable[[], float] | None = None,
+        group: str = "",
+        enabled: bool = True,
+    ) -> object:
+        """A timer with a name (MUSHclient's AddTimer): findable, switchable, cancellable."""
+        return self._engine.add_named_timer(
+            str(name),
+            delay,
+            callback,
+            every=every,
+            next_delay=next_delay,
+            group=str(group),
+            source=self._source,
+            enabled=enabled,
+        )
+
+    def remove_named_timer(self, name: str) -> bool:
+        """MUSHclient's DeleteTimer."""
+        return self._engine.remove_named_timer(str(name))
+
+    def set_timer_enabled(self, name: str, enabled: bool = True) -> bool:
+        """MUSHclient's EnableTimer."""
+        return self._engine.set_timer_enabled(str(name), bool(enabled))
+
     def add_timer(self, delay: float, callback: Callable[[], None]) -> None:
         if self._active_timers >= _MAX_ACTIVE_TIMERS:
             # Refuse: too many pending timers would starve the event loop (UI freeze). A

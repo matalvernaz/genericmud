@@ -15,6 +15,7 @@ from genericmud.packs import user_rules
 from genericmud.packs.user_rules import (
     UserRules,
     UserTimer,
+    UserTrigger,
     load_rules,
     parse_at,
     save_rules,
@@ -280,3 +281,93 @@ def test_the_timer_editor_round_trips(tmp_path):
     finally:
         dialog.Destroy()
         frame.Destroy()
+
+# --- named timers: the handle a script, a label or a group uses ------------------------
+
+
+def _named(tmp_path, **kwargs):
+    sink = RecordingSink()
+    engine = AutomationEngine(sink)
+    api = ScriptApi(engine, source=user_rules.SOURCE, base_dir=str(tmp_path))
+    api.add_named_timer("tick", 10, lambda: sink.sent.append("tick"), **kwargs)
+    return sink, engine, api
+
+
+def test_a_named_timer_can_be_switched_off_and_on(tmp_path):
+    sink, engine, _api = _named(tmp_path, every=10)
+    assert engine.set_timer_enabled("tick", False) is True
+    _fire(sink, 0)  # the callback still runs from the queue, but does nothing now
+    assert sink.sent == []
+    assert engine.set_timer_enabled("tick", True) is True
+    engine.named_timer("tick")._fire()
+    assert sink.sent == ["tick"]
+
+
+def test_a_named_timer_can_be_deleted(tmp_path):
+    _sink, engine, _api = _named(tmp_path, every=10)
+    assert engine.remove_named_timer("tick") is True
+    assert engine.named_timer("tick") is None
+    assert engine.remove_named_timer("tick") is False  # already gone
+    assert engine.set_timer_enabled("tick", False) is False
+
+
+def test_an_unknown_name_says_so_rather_than_raising(tmp_path):
+    _sink, engine, _api = _named(tmp_path)
+    assert engine.set_timer_enabled("no-such-timer", False) is False
+    assert engine.named_timer("no-such-timer") is None
+
+
+def test_a_label_switches_a_timer_as_well_as_a_rule(tmp_path):
+    # A name is a name: the manager and a script should not have to know which kind of rule
+    # they are switching.
+    sink = RecordingSink()
+    engine = AutomationEngine(sink)
+    api = ScriptApi(engine, source=user_rules.SOURCE, base_dir=str(tmp_path))
+    user_rules.register_rules(
+        api, UserRules(timers=[UserTimer(label="tick", every=10, send="look")])
+    )
+    assert engine.set_enabled("tick", False) is True
+    assert engine.named_timer("tick").enabled is False
+
+
+def test_a_group_switches_timers_with_the_rules_in_it(tmp_path):
+    sink = RecordingSink()
+    engine = AutomationEngine(sink)
+    api = ScriptApi(engine, source=user_rules.SOURCE, base_dir=str(tmp_path))
+    user_rules.register_rules(
+        api,
+        UserRules(
+            triggers=[UserTrigger(pattern="backup", send="look", group="combat")],
+            timers=[UserTimer(label="tick", every=10, send="say tick", group="combat")],
+        ),
+    )
+    assert engine.set_group_enabled("combat", False) == 2  # the trigger and the timer
+    assert engine.named_timer("tick").enabled is False
+
+
+def test_a_daily_timer_asks_the_clock_for_its_next_wait(tmp_path):
+    sink = RecordingSink()
+    engine = AutomationEngine(sink)
+    api = ScriptApi(engine, source=user_rules.SOURCE, base_dir=str(tmp_path))
+    user_rules.register_rules(api, UserRules(timers=[UserTimer(at="03:00", send="look")]))
+    timer = engine.named_timer("timer 03:00")
+    assert timer is not None
+    assert timer.next_delay is not None  # not a fixed repeat: the wait moves each day
+    assert 0 < timer.next_delay() <= 86400
+
+
+def test_lua_names_the_three_timer_calls_mushclient_has(tmp_path):
+    pytest.importorskip("lupa")
+    from genericmud.scripting.lua_runtime import LuaPackRuntime
+
+    sink = RecordingSink()
+    engine = AutomationEngine(sink)
+    runtime = LuaPackRuntime(ScriptApi(engine, source="probe"))
+    runtime.run_source(
+        'mud.add_timer("lua-tick", 5, function() mud.command("look") end, {every=5})'
+    )
+    assert engine.named_timer("lua-tick") is not None
+    runtime.run_source('mud.enable_timer("lua-tick", false)')
+    assert engine.named_timer("lua-tick").enabled is False
+    runtime.run_source('mud.delete_timer("lua-tick")')
+    assert engine.named_timer("lua-tick") is None

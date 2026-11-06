@@ -499,6 +499,24 @@ mud.timer(60, check_score)
 
 Reloading or deleting the script cancels its waiting timers.
 
+A timer that repeats, can be found by name, and can be switched off is `mud.add_timer`. The
+options table is where its shape goes:
+
+```lua
+mud.add_timer("tick", 60, function()
+    mud.command("score")
+end, {every=60, group="checks"})
+
+mud.enable_timer("tick", false)  -- off, by name
+mud.delete_timer("tick")
+```
+
+`every` is the gap between fires. `group` puts it in a group with other rules, so one call
+switches them all.
+
+For a timer at a time of day, use a rule in the Automation Manager (Ctrl+B): its **At this
+time each day** field takes `03:00`, and the rule can send, speak, note or run Lua.
+
 ## Speech, text, and sounds
 
 Speak text:
@@ -712,12 +730,16 @@ Rules and timing:
 - `mud.trigger(pattern, callback [, options])`
 - `mud.key(key_name, callback)`
 - `mud.timer(seconds, callback)`
+- `mud.add_timer(name, seconds, callback [, options])`
+- `mud.enable_timer(name, true_or_false)`
+- `mud.delete_timer(name)`
 - `mud.on_data(name, callback [, options])`
 
 The alias and trigger options are `regex` and `priority`, plus `label` and `group`.
 A label is the name a rule is switched by -- `mud.set_enabled("shoot", false)` -- and the
 manager reads it out first; a group is what `mud.set_group_enabled` switches as one. A
-trigger can also use `channel`. The only `mud.on_data` option is `changes`.
+trigger can also use `channel`. The `mud.add_timer` options are `every`, `group` and
+`enabled`. The only `mud.on_data` option is `changes`.
 
 Commands and output:
 
