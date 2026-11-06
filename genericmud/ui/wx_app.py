@@ -1,19 +1,17 @@
-"""Native wxPython UI (Windows-first).
+"""Start the native window: the wx app, the main window, and the loop thread the engines run on.
 
-The VIPMud-class interaction model on native controls: a read-only multiline
-output box NVDA reads like Notepad (Tab to it, arrow/say-line), a separate command
-box, Tab/Shift+Tab between them, type-on-output jumps to the command box, and one
-wx.Simplebook page per MUD (no visible tab strip, so nothing sits in the keyboard Tab
-order; Ctrl+Tab / Ctrl+Shift+Tab switch sessions).
+The window follows the VIPMud model on native controls: a read-only output box a screen reader
+reads like Notepad, a separate command box, Tab and Shift+Tab between them, typing in the output
+jumps to the command box, and one wx.Simplebook page per world with no visible tab strip, so
+nothing extra sits in the Tab order (Ctrl+Tab and Ctrl+Shift+Tab switch worlds).
 
-Threading: wx runs on the main thread; an asyncio loop runs in a background thread
-for the connections. Engine output is marshaled to the UI with wx.CallAfter; input
-and keys are pushed to the loop with call_soon_threadsafe. Each session's engine
-objects (connection, voice, EngineApp) are created ON the loop thread so the SAPI
-voice's COM apartment is correct.
+Threading: wx runs on the main thread, and an asyncio loop runs in a background thread for the
+connections. Engine output reaches the window through wx.CallAfter; input and keys go to the
+loop with call_soon_threadsafe. Each tab's engine objects (connection, voice, EngineApp) are
+created on the loop thread, so the SAPI voice's COM apartment is right.
 
-Build-blind: this module isn't exercised by the test suite (wxPython needs a display
-and isn't installed on the dev host); the reused engine is what the tests cover.
+The window itself is main_window (menus and tabs) and session_panel (one world's tab, with
+session_connection, command_box, output_box and pack_window), plus a module for each dialog.
 """
 
 from __future__ import annotations

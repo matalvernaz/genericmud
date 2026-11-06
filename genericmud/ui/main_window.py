@@ -25,7 +25,7 @@ from genericmud.ui.help_dialog import HelpDialog
 from genericmud.ui.pack_dialogs import PackNotepadFrame
 from genericmud.ui.rule_editors import _add_data_rule
 from genericmud.ui.saved_worlds import SavedWorldsMixin
-from genericmud.ui.self_update_window import SelfUpdateMixin
+from genericmud.ui.self_update_window import SelfUpdateMixin, UpdateProgressDialog
 from genericmud.ui.session_panel import SessionPanel
 from genericmud.ui.soundpack_manager import PackManagerDialog
 from genericmud.ui.soundpack_setup import SoundpackSetupMixin
@@ -211,7 +211,7 @@ class GenericMudFrame(SavedWorldsMixin, SoundpackSetupMixin, SelfUpdateMixin, wx
         self.Bind(wx.EVT_CLOSE, self._on_frame_close)  # confirm + disconnect before exit
         self.Bind(wx.EVT_ACTIVATE, self._on_app_activate)  # background-silence focus tracking
 
-        self._update_progress_dialog: wx.ProgressDialog | None = None
+        self._update_progress_dialog: UpdateProgressDialog | None = None
         self._update_cancelled = threading.Event()
         self._alive = True  # an in-flight update callback must not touch the frame after close
 

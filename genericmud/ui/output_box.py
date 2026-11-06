@@ -94,7 +94,8 @@ class OutputBoxMixin:
             self._choose_from_menu(message)
         elif kind == protocol.COPY_LINE:
             self._offer_line_for_copying(str(message.get("text", "")))
-        # Sound/status messages are ignored here for now (native SFX is a follow-up).
+        # Sound needs nothing here: this window's engine plays it through its own sound backend.
+        # The gauge status messages have nothing to show them in the native window.
 
     def _offer_line_for_copying(self, text: str) -> None:
         """Ctrl+Shift+C: the reviewed line in a box, to copy all of it or any part.
