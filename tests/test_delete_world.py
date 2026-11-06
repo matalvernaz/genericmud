@@ -7,11 +7,11 @@ what it is about to take: the world and its login, but not the logs it wrote or 
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 
 import pytest
 
 from genericmud.config.worlds import World
+from tests.ui_source import ui_source
 
 
 class _Credentials:
@@ -271,12 +271,7 @@ def test_the_delete_key_removes_the_picked_world(window):
 def test_the_dialog_binds_no_bare_accelerator_of_its_own():
     # A key that is not in any label is a key nobody can find. The delete button uses a
     # mnemonic instead, and gives Alt+R back to the breadcrumb it belongs to.
-    source = (Path(__file__).resolve().parents[1] / "genericmud/ui/wx_app.py").read_text(
-        encoding="utf-8"
-    )
-    start = source.index("class ConnectDialog(")
-    end = source.index("class PackManagerDialog(")
-    assert "AcceleratorTable" not in source[start:end]
+    assert "AcceleratorTable" not in ui_source("ConnectDialog")
 
 
 def test_the_details_label_gave_up_its_d_rather_than_share_it(window):
