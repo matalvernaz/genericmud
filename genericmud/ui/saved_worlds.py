@@ -70,29 +70,15 @@ class SavedWorldsMixin:
     def _on_new_world(self, _event: wx.CommandEvent) -> None:
         self._show_world_dialog(show_connect=True)
 
-    def _show_world_dialog(
-        self,
-        *,
-        initial: World | None = None,
-        title: str = "New World",
-        connect: bool = True,
-        original_name: str | None = None,
-        show_save: bool = True,
-        show_connect: bool = False,
-        lock_name: bool = False,
-        note: str = "",
-    ) -> _WorldDialogDone:
-        """Show the world dialog and do what it was told: save, connect, or both."""
+    def _show_world_dialog(self, *, show_connect: bool = False) -> _WorldDialogDone:
+        """Show the New World dialog and do what it was told: save, connect, or both."""
         dialog = WorldDialog(
             self,
-            initial,
-            title=title,
+            title="New World",
             save_default=True,
-            show_save=show_save,
+            show_save=True,
             show_connect=show_connect,
-            lock_name=lock_name,
             credentials=self._credentials,
-            note=note,
         )
         try:
             if dialog.ShowModal() != wx.ID_OK:
@@ -100,11 +86,7 @@ class SavedWorldsMixin:
             world = dialog.get_world()
             saved = True
             if dialog.should_save():
-                saved = self._save_world(world, replacing=original_name)
-            if saved and original_name is not None:
-                self._apply_to_open_tabs(original_name, world)
-            if not connect:
-                return _WorldDialogDone(_SAVED if saved else _CANCELLED, world)
+                saved = self._save_world(world)
             if not dialog.should_connect():
                 if saved:
                     self.announce(
