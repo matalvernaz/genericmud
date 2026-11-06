@@ -2,13 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import threading
-import webbrowser
 
 import wx
 
 from genericmud import __version__, help_text
 from genericmud.config.ui_prefs import load_ui_prefs, save_ui_prefs
-from genericmud.config.update_prefs import is_snoozed, load_prefs, save_prefs, snooze_timestamp
 from genericmud.config.world_files import migrate_world_files
 from genericmud.config.worlds import World, config_dir, load_worlds
 from genericmud.packs import PackStore
@@ -16,25 +14,16 @@ from genericmud.session.credentials import open_credential_store
 from genericmud.session.diaglog import make_diagnostic_log
 from genericmud.session.hub import SessionHub
 from genericmud.ui.automation_manager import AutomationManagerDialog
-from genericmud.ui.background_work import _run_async
 from genericmud.ui.connect_dialog import ConnectionSettingsDialog
 from genericmud.ui.help_dialog import HelpDialog
 from genericmud.ui.pack_dialogs import PackNotepadFrame
 from genericmud.ui.rule_editors import _add_data_rule
 from genericmud.ui.saved_worlds import SavedWorldsMixin
-from genericmud.ui.self_update_window import (
-    _ID_RELEASE_PAGE,
-    _ID_SKIP,
-    _ID_SNOOZE,
-    _ID_UPDATE_NOW,
-    UpdateNotificationDialog,
-    UpdateProgressDialog,
-)
+from genericmud.ui.self_update_window import SelfUpdateMixin
 from genericmud.ui.session_panel import SessionPanel
 from genericmud.ui.soundpack_manager import PackManagerDialog
 from genericmud.ui.soundpack_setup import SoundpackSetupMixin
 from genericmud.ui.variables_dialog import VariablesDialog
-from genericmud.update import self_update
 from genericmud.voice.factory import make_voice_backend
 
 
@@ -55,7 +44,7 @@ _APP_NAME = "genericMud"
 _TITLE_FORMAT = "{app} - [{world}]"
 
 
-class GenericMudFrame(SavedWorldsMixin, SoundpackSetupMixin, wx.Frame):
+class GenericMudFrame(SavedWorldsMixin, SoundpackSetupMixin, SelfUpdateMixin, wx.Frame):
     def __init__(self, loop: asyncio.AbstractEventLoop, keymap: dict):
         super().__init__(None, title=_APP_NAME, size=(900, 600))
         self._loop = loop
@@ -555,151 +544,6 @@ class GenericMudFrame(SavedWorldsMixin, SoundpackSetupMixin, wx.Frame):
             "https://github.com/matalvernaz/genericmud\n\n"
             "New releases install themselves: Help menu, Check for Updates.",
         )
-
-    # --- self-update ---
-
-    def check_for_updates(self, *, manual: bool) -> None:
-        """Kick off a background release check.
-
-        A manual check (menu) reports "up to date" or an error; the automatic startup check
-        stays silent unless there is a release to offer, so it never interrupts a launch.
-        """
-        if manual:
-            self.announce("Checking for updates.")
-        if self._diag is not None:
-            # Trace what the build thinks it is + that the check ran, so "the updater can't
-            # detect the new version" is answerable from the log instead of by inference.
-            self._diag.event("update.check", phase="start", manual=manual,
-                             current=self_update.current_version() or "")
-        _run_async(
-            self_update.check_for_update,
-            lambda outcome: self._on_update_checked(outcome, manual=manual),
-        )
-
-    def _on_update_checked(self, outcome, *, manual: bool) -> None:
-        if isinstance(outcome, Exception):
-            self._log_update_check("error", error=repr(outcome))
-            if manual:
-                # Defer the modal to a fresh event-loop turn (as _on_update_finished already
-                # does for its own MessageBox). This callback runs as the _run_async completion
-                # *inside* wx's pending-event dispatch; showing a native modal there raises
-                # RPC_E_CANTCALLOUT_ININPUTSYNCCALL (0x8001010d) while a screen reader's
-                # input-synchronous COM call is in flight -- the faulthandler "Windows fatal
-                # exception" recorded in the crash log. CallAfter re-posts it to run cleanly.
-                wx.CallAfter(
-                    wx.MessageBox, f"Couldn't check for updates: {outcome}",
-                    "Check for Updates", wx.OK | wx.ICON_ERROR,
-                )
-            return
-        if outcome is None:
-            self._log_update_check("up_to_date")
-            if manual:
-                self.announce("genericMud is up to date.")
-                wx.CallAfter(
-                    wx.MessageBox, "genericMud is up to date.",
-                    "Check for Updates", wx.OK | wx.ICON_INFORMATION,
-                )
-            return
-        prefs = load_prefs()
-        # A snooze suppresses only the version it was set on (scoped): a newer release than the
-        # one you clicked "Remind me later" on must still prompt. Skip is likewise per-version.
-        # A manual check ignores both -- asking explicitly overrides any earlier deferral.
-        snoozed_this = is_snoozed(prefs) and outcome["tag"] == prefs.snoozed_version
-        if not manual and (outcome["tag"] == prefs.skipped_version or snoozed_this):
-            self._log_update_check(
-                "suppressed", tag=outcome["tag"],
-                reason="skipped" if outcome["tag"] == prefs.skipped_version else "snoozed",
-            )
-            return
-        self._log_update_check("offer", tag=outcome["tag"])
-        self._offer_update(outcome)
-
-    def _log_update_check(self, decision: str, **fields: object) -> None:
-        if self._diag is not None:
-            self._diag.event("update.check", phase="result", decision=decision, **fields)
-
-    def _offer_update(self, info: dict) -> None:
-        current = self_update.current_version() or "an earlier version"
-        dialog = UpdateNotificationDialog(self, info, current)
-        action = dialog.ShowModal()
-        dialog.Destroy()
-        if action == _ID_UPDATE_NOW:
-            self._perform_update(info)
-        elif action == _ID_RELEASE_PAGE:
-            if info.get("release_url"):
-                webbrowser.open(info["release_url"])
-        elif action == _ID_SNOOZE:
-            prefs = load_prefs()
-            prefs.snoozed_until = snooze_timestamp()
-            prefs.snoozed_version = info["tag"]  # scope the snooze; a newer release still prompts
-            save_prefs(prefs)
-        elif action == _ID_SKIP:
-            prefs = load_prefs()
-            prefs.skipped_version = info["tag"]
-            save_prefs(prefs)
-
-    def _perform_update(self, info: dict) -> None:
-        self._update_cancelled = threading.Event()
-        self._update_progress_dialog = UpdateProgressDialog(
-            self, info["tag"], self.announce, self._update_cancelled
-        )
-        # Owner-disabled instead of PD_APP_MODAL: the frame takes no input while the
-        # dialog is up, without wx.ProgressDialog's separate-thread native machinery.
-        self.Disable()
-        self._update_progress_dialog.Show()
-
-        def work():
-            return self_update.download_and_replace(info, progress_cb=self._on_update_progress)
-
-        _run_async(work, self._on_update_finished)
-
-    def _on_update_progress(self, done: int, total: int) -> None:  # background thread
-        # Raising here aborts the download; download_and_replace cleans up and re-raises, so
-        # _on_update_finished sees the cancellation. The Cancel button sets the flag this
-        # checks, on the main thread, in UpdateProgressDialog._on_cancel.
-        if self._update_cancelled.is_set():
-            raise RuntimeError("Update cancelled by user.")
-        wx.CallAfter(self._pump_update_progress, done, total)
-
-    def _pump_update_progress(self, done: int, total: int) -> None:  # main thread
-        if not self._alive or self._update_progress_dialog is None:
-            return
-        self._update_progress_dialog.pump(done, total)
-
-    def _on_update_finished(self, outcome) -> None:
-        if not self._alive:
-            return  # the frame was closed while the update was downloading
-        # Re-enable before destroying the owned dialog: destroying the focused window while
-        # its owner is still disabled makes Windows throw focus to another application.
-        self.Enable()
-        if self._update_progress_dialog is not None:
-            self._update_progress_dialog.Destroy()
-            self._update_progress_dialog = None
-        if isinstance(outcome, Exception):
-            if self._update_cancelled.is_set():
-                self.announce("Update cancelled.")
-            else:
-                # Defer off the dialog-teardown stack: opening a window while the screen
-                # reader still has input-synchronous queries against the closing dialog is
-                # the 0x8001010d trap (see _on_browse_online).
-                wx.CallAfter(
-                    wx.MessageBox, f"Update failed: {outcome}", "Update", wx.OK | wx.ICON_ERROR
-                )
-            return
-        # Success: the helper is blocked on our PID; it overlays the files and relaunches us
-        # once we exit.
-        self.announce("Update downloaded. genericMud will restart to finish installing.")
-        wx.CallAfter(self._quit_for_update)
-
-    def _quit_for_update(self) -> None:
-        for i in range(self.book.GetPageCount()):
-            self.book.GetPage(i).close()  # graceful teardown before we exit for the swap
-        self.Destroy()  # ends MainLoop -> process exits -> the helper swaps and relaunches
-
-    def show_recovery(self, recovery) -> None:
-        """Tell the user a failed update was rolled back (called once at startup)."""
-        self.announce(recovery.title)
-        wx.MessageBox(recovery.message, recovery.title, wx.OK | wx.ICON_WARNING)
 
     def _on_toggle_self_voice(self, _event: wx.CommandEvent) -> None:
         self._self_voice = self._self_voice_item.IsChecked()
