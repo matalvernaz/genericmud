@@ -108,13 +108,21 @@ def _probe():
     def check_document():
         entry.WriteText("north")
         enter()
+        assert entry.GetValue() == "north\n", (
+            repr(entry.GetValue()), entry.GetSelection(), entry.GetLastPosition(),
+        )
         entry.WriteText("look target")
         key(entry, wx.WXK_DOWN)
+        assert entry.GetValue() == "north\nlook target\n", (
+            repr(entry.GetValue()), entry.GetSelection(), entry.GetLastPosition(),
+        )
         entry.WriteText("south")
         enter()
         entry.WriteText("east")
         enter()
-        assert entry.GetValue() == "north\nlook target\nsouth\neast\n"
+        assert entry.GetValue() == "north\nlook target\nsouth\neast\n", (
+            repr(entry.GetValue()), entry.GetSelection(), entry.GetLastPosition(),
+        )
         assert [m["text"] for p, m in sent if p is alpha] == ["north", "south", "east"]
         before = entry.GetValue()
         assert key(entry, wx.WXK_UP).GetSkipped()
@@ -253,6 +261,26 @@ def _probe():
         assert entry.current_command() == "dragon🐉 suffix"
         start, _end = entry.line_bounds()
         assert entry.text_range(start, entry.GetInsertionPoint()) == "dragon🐉"
+        # A row shortcut ends output-word completion before it can carry an old suffix
+        # into another draft. Modifier-only transitions must still preserve cycling.
+        alpha.app.word_index = SimpleNamespace(
+            complete=lambda prefix: ["dragon", "drake"] if prefix == "dr" else [],
+        )
+        for code, ctrl in ((wx.WXK_DOWN, False), (wx.WXK_ESCAPE, False),
+                           (wx.WXK_RETURN, True)):
+            entry.SetValue("dr suffix")
+            position(2)
+            alpha._completion.reset()
+            key(entry, wx.WXK_SPACE, ctrl=True)
+            assert entry.GetValue() == "dragon suffix"
+            for modifier in (0, wx.WXK_CONTROL):
+                key(entry, modifier)
+            key(entry, wx.WXK_SPACE, ctrl=True)
+            assert entry.GetValue() == "drake suffix"
+            key(entry, code, ctrl=ctrl)
+            before, selection = entry.GetValue(), entry.GetSelection()
+            key(entry, wx.WXK_SPACE, ctrl=True)
+            assert entry.GetValue() == before and entry.GetSelection() == selection
         # Offline handling preserves text and selection for both submission actions.
         alpha._connect_finished = True
         alpha.is_connected = lambda: False

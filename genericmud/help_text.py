@@ -38,6 +38,8 @@ Down at an unfinished tail adds a blank line without sending the draft.
 Enter executes one logical line; older lines are copied to the tail.
 Shift+Enter executes the line or selected text in place, preserving the selection.
 A multi-line selection sends its nonblank lines as separate commands.
+Executing an old line keeps other drafts separate, including text ending in a tab.
+Moving rows ends word completion rather than carrying its old text into another draft.
 Adjacent completed duplicates are removed, including manual repetitions, once
 three line separators exist; very short buffers keep duplicates.
 Escape inserts a blank row; in the first row it splits at the caret.

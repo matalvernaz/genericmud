@@ -209,6 +209,10 @@ class CommandBoxMixin:
             event.Skip()
             return
         combo = _key_combo(event, allow_numpad=not self._prefs.numpad_compass)
+        if entry and combo not in (_COMPLETE_FORWARD, _COMPLETE_BACKWARD):
+            # A row move or editing shortcut cannot reuse another row's word and suffix.
+            # Modifier-only transitions returned above, so repeated completion still cycles.
+            self._completion.reset()
         if ((entry or secret_entry) and combo in ("escape", "ctrl+r", "ctrl+enter")
                 and self._dispatch_entry_shortcut(combo)):
             return

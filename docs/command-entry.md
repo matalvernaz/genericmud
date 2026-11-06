@@ -59,6 +59,9 @@ leaving an empty tail. Case and spaces matter. This applies equally to manually
 entered, edited, and recalled text; there is no submitted-row identity. The short
 buffer exception is intentional. Removing a duplicate never cancels execution.
 Earlier unsent text otherwise remains at its existing location.
+An executed copy always starts a separate row, even when a preserved draft ends with a tab.
+Moving rows or using an editing shortcut ends output-word completion, so its old suffix
+cannot be carried into another draft. Modifier-only transitions still preserve cycling.
 
 ## Shared execution and programmatic input
 
