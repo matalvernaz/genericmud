@@ -502,8 +502,8 @@ off its own map — some clan halls and quest rooms are deliberately unmapped.
 ## Automation: triggers, aliases, hotkeys, channels, and scripts
 
 **Ctrl+B** opens one Automation Manager for the current world. Choose
-**Triggers**, **Aliases**, **Hotkeys**, **Channels**, **Scripts** or **MUD data**
-from the **Show** box. There is no separate simple or advanced builder.
+**Triggers**, **Aliases**, **Hotkeys**, **Channels**, **Scripts**, **MUD data** or
+**Timers** from the **Show** box. There is no separate simple or advanced builder.
 
 A trigger reacts to text from the MUD. It can play a sound, speak something
 shorter, send commands, hide the matched line, interrupt speech, or route the
@@ -521,6 +521,11 @@ written as a regular expression, or a soundpack's own alias comes first. When
 the alias sends several commands, the extra words go on the end of the last one,
 unless a command says where they belong with `${1}`, as in `give ${1} to bob`.
 The shortcut has to be a word of its own, so `sh` never takes `shout`.
+
+A **timer** fires every so often (`every 30 seconds`) or once a day at a time
+(`03:00`), and answers the same question the other rules do: a text and a **Send it to**
+target. **Do it once only** makes it a one-shot. It has a **Label** like triggers and
+aliases, which is what a script switches it by.
 
 **Send it to** sits beside the response text and says where it goes, the way
 MUSHclient's "send to" does. One text, one destination:
@@ -784,7 +789,7 @@ View, **Alt+H** Help.
 | Ctrl+Shift+B | Browse soundpacks online |
 | Ctrl+B | Open the Automation Manager |
 | Ctrl+Shift+V | List the values the MUD has sent and scripts have saved |
-| Ctrl+1..6 in Automation Manager | Show triggers / aliases / hotkeys / channels / scripts / MUD data |
+| Ctrl+1..7 in Automation Manager | Show triggers / aliases / hotkeys / channels / scripts / MUD data / timers |
 | Ctrl+N in Automation Manager | Create an item in the category being shown |
 | Enter / Delete in an automation list | Edit / delete the selected item |
 | Enter / F5 in the variables list | Copy the reference / refresh the values |

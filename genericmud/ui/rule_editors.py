@@ -22,6 +22,7 @@ from genericmud.packs.user_rules import (
     UserChannel,
     UserKey,
     UserRules,
+    UserTimer,
     UserTrigger,
     UserWatch,
     copy_sound_into_pack,
@@ -511,6 +512,67 @@ class DataRuleEditorDialog(_RuleEditorBase):
             interrupt=self._interrupt.GetValue(),
             enabled=self._enabled,
         )
+
+
+class TimerEditorDialog(_RuleEditorBase):
+    def __init__(self, parent: wx.Window, timer: UserTimer) -> None:
+        super().__init__(
+            parent, title="Timer", style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER
+        )
+        self._enabled = timer.enabled
+        outer = wx.BoxSizer(wx.VERTICAL)
+        grid = self._grid()
+        self._label = self._text(
+            grid, "&Label (a script turns it off and on by this name):", timer.label
+        )
+        self._kind = wx.RadioBox(
+            self, label="&When it fires",
+            choices=[
+                "Every so often",
+                "Once a day, at a time",
+            ],
+            majorDimension=1, style=wx.RA_SPECIFY_COLS,
+        )
+        daily = bool(timer.at.strip()) or timer.every <= 0
+        self._kind.SetSelection(1 if daily else 0)
+        grid.Add(wx.StaticText(self, label=""))
+        grid.Add(self._kind, 1, wx.EXPAND)
+        self._every = self._text(
+            grid, "E&very this many seconds:", str(timer.every or "")
+        )
+        self._at = self._text(grid, "At this &time each day (HH:MM:SS):", timer.at)
+        self._one_shot = wx.CheckBox(self, label="Do it &once only")
+        self._one_shot.SetName("Do it once only")
+        self._one_shot.SetValue(timer.one_shot)
+        grid.Add(wx.StaticText(self, label=""))
+        grid.Add(self._one_shot)
+        self._send = self._command_text(grid, timer.send, captures=False)
+        self._send_to = self._send_to_choice(grid, timer.send_to)
+        self._omit_log = wx.CheckBox(self, label="Leave what it writes out of the session log")
+        self._omit_log.SetName("Leave what it writes out of the session log")
+        self._omit_log.SetValue(timer.omit_log)
+        grid.Add(wx.StaticText(self, label=""))
+        grid.Add(self._omit_log)
+        self._finish(outer, grid)
+
+    def result(self) -> UserTimer:
+        return UserTimer(
+            label=self._label.GetValue().strip(),
+            enabled=self._enabled,
+            every=max(0.0, self._number(self._every.GetValue())),
+            at=self._at.GetValue().strip() if self._kind.GetSelection() == 1 else "",
+            one_shot=self._one_shot.GetValue(),
+            send=self._send.GetValue().strip(),
+            send_to=SEND_TO_CHOICES[self._send_to.GetSelection()],
+            omit_log=self._omit_log.GetValue(),
+        )
+
+    @staticmethod
+    def _number(text: str) -> float:
+        try:
+            return float(text.strip() or 0)
+        except ValueError:
+            return 0.0
 
 
 class ChannelEditorDialog(_RuleEditorBase):

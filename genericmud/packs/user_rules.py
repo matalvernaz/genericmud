@@ -19,6 +19,7 @@ import re
 import shutil
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 from genericmud.automation.engine import MatchContext
@@ -117,6 +118,26 @@ class UserKey:
 
 
 @dataclass
+class UserTimer:
+    """Something to do on a clock rather than on a line (MUSHclient's timer).
+
+    Two shapes, as MUSHclient has them: every so often (``every`` seconds), or once a day at a
+    time (``at``, "HH:MM:SS"). ``one_shot`` does it once and stops. What it does is the same
+    question every other rule answers -- a text and a send-to target -- so a timer can send to
+    the MUD, put something in your command box, write a note, or run Lua.
+    """
+
+    label: str = ""  # MUSHclient's timer name: the handle a script switches it by
+    enabled: bool = True
+    every: float = 0.0  # seconds between fires; 0 means "not an interval timer"
+    at: str = ""  # "HH:MM:SS" for a daily timer; "" means "not a daily one"
+    one_shot: bool = False
+    send: str = ""
+    send_to: str = "world"
+    omit_log: bool = False  # leave whatever it writes out of the session log
+
+
+@dataclass
 class UserChannel:
     name: str = ""
     speak: bool = True
@@ -145,6 +166,7 @@ class UserWatch:
 @dataclass
 class UserRules:
     triggers: list[UserTrigger] = field(default_factory=list)
+    timers: list[UserTimer] = field(default_factory=list)
     aliases: list[UserAlias] = field(default_factory=list)
     keys: list[UserKey] = field(default_factory=list)
     channels: list[UserChannel] = field(default_factory=list)
@@ -172,6 +194,7 @@ class UserRules:
             triggers=build(UserTrigger, data.get("triggers")),
             aliases=build(UserAlias, data.get("aliases")),
             keys=build(UserKey, data.get("keys")),
+            timers=build(UserTimer, data.get("timers")),
             channels=build(UserChannel, data.get("channels")),
             watches=build(UserWatch, data.get("watches")),
         )
@@ -396,6 +419,8 @@ def register_rules(api: ScriptApi, rules: UserRules) -> None:
     for key in rules.keys:
         if key.enabled and key.key:
             _register_key(api, key)
+    for timer in rules.timers:
+        _register_timer(api, timer)
     for watch in rules.watches:
         if watch.enabled and watch.name.strip():
             _register_watch(api, watch)
@@ -464,6 +489,65 @@ def _register_trigger(api: ScriptApi, t: UserTrigger) -> None:
 # channel speaks through the mute that keeps background tabs quiet, so an alias there would
 # talk over, and with interrupt cut off, the session the player is actually in.
 _KEY_REPLY_CHANNEL = REVIEW_CHANNEL
+
+
+def parse_at(value: str) -> float | None:
+    """The seconds after midnight an "HH:MM:SS" names, or None if it does not name one."""
+    parts = str(value).strip().split(":")
+    if len(parts) not in (2, 3):
+        return None
+    try:
+        numbers = [float(part) for part in parts]
+    except ValueError:
+        return None
+    hours, minutes = numbers[0], numbers[1]
+    seconds = numbers[2] if len(numbers) == 3 else 0.0
+    if not (0 <= hours <= 23 and 0 <= minutes <= 59 and 0 <= seconds < 60):
+        return None
+    return hours * 3600 + minutes * 60 + seconds
+
+
+def seconds_until(target: float, *, now: float) -> float:
+    """How long from ``now`` (seconds since midnight) until ``target`` comes round again.
+
+    A time that has already passed today is tomorrow's, so a daily timer set for 03:00 fires at
+    the next 03:00 rather than in the past. Exactly now counts as a day away, not as zero: a
+    timer that fires the instant it is created has nothing to wait for.
+    """
+    difference = (target - now) % 86400
+    return difference if difference > 0 else 86400.0
+
+
+def clock_seconds(now: datetime | None = None) -> float:
+    """Seconds since midnight, for the daily timers; a seam so tests need no waiting."""
+    moment = now or datetime.now()
+    return moment.hour * 3600 + moment.minute * 60 + moment.second + moment.microsecond / 1e6
+
+
+def _register_timer(api: ScriptApi, t: UserTimer, *, clock=clock_seconds) -> None:
+    """Schedule one timer, and reschedule it after each fire unless it is a one-shot."""
+    if not t.enabled or not t.send.strip():
+        return
+    at = parse_at(t.at) if t.at.strip() else None
+    if at is None and t.every <= 0:
+        return  # neither shape: nothing to schedule
+
+    def delay() -> float:
+        return seconds_until(at, now=clock()) if at is not None else float(t.every)
+
+    def fire() -> None:
+        commands = _commands(t.send, keep_spaces=send_to_kind(t.send_to) == "command")
+        if commands:
+            deliver(api, list(commands), t.send_to)
+        if not t.one_shot:
+            schedule()  # the next one, from this moment
+
+    def schedule() -> None:
+        # The api's timer call is the one that counts against the session's limit and is
+        # cancelled with this source when the rules reload.
+        api.add_timer(delay(), fire)
+
+    schedule()
 
 
 def _register_alias(api: ScriptApi, a: UserAlias) -> None:
