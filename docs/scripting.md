@@ -290,6 +290,11 @@ Remove a saved value with:
 mud.delete_var("my_attack")
 ```
 
+These are the same values a rule's **Send it to** reaches when it says *a script variable*:
+that target stores the matched text under a name without any Lua, and a script reads it with
+`mud.get_var` like any other. One trigger remembering who paged you, one alias reading it, no
+code in between.
+
 ## Read data sent by the MUD
 
 Some MUDs send structured data to the client. The common protocols are GMCP,

@@ -109,16 +109,27 @@ class ScriptApi:
         finally:
             self._execute_depth -= 1
 
-    def expand_command(self, text: str, values: dict[str, object] | None = None) -> str:
+    def expand_command(
+        self,
+        text: str,
+        values: dict[str, object] | None = None,
+        *,
+        one_line: bool = True,
+    ) -> str:
         """Resolve ``${name}`` placeholders from captures, script vars, or MUD data.
 
         ``values`` contains callback-local values such as wildcard captures. Unscoped names use
         callback values first, then persistent script variables, then GMCP/MSDP/MSSP values.
         ``${script:name}`` and ``${mud:name}`` select a namespace explicitly. Missing values
         raise instead of sending a potentially destructive half-expanded command.
+
+        ``one_line`` refuses a line break in the result, because a command that grew a second
+        line is a command stack nobody asked for. Text being stored in a variable is not a
+        command yet -- it becomes one where it is used, and that is where it is checked -- so a
+        value keeps its line breaks.
         """
         expanded = self._expand(text, values, missing=None)
-        if any(char in expanded for char in ("\r", "\n", "\x00")):
+        if one_line and any(char in expanded for char in ("\r", "\n", "\x00")):
             raise ValueError("expanded command contains a line break or NUL")
         return expanded
 

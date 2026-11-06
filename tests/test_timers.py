@@ -134,6 +134,15 @@ def test_a_timer_uses_the_send_to_target_like_any_other_rule(tmp_path):
     assert sink.sent == []
 
 
+def test_a_timer_can_store_its_text_in_a_variable(tmp_path):
+    sink, engine, _scheduled_list = _scheduled(
+        tmp_path, UserTimer(every=10, send="tick", send_to="variable", variable="last_run")
+    )
+    _fire(sink, 0)
+    assert engine.get_var("last_run") == "tick"
+    assert sink.sent == []
+
+
 def test_a_timer_can_write_a_note(tmp_path):
     sink, _engine, scheduled = _scheduled(
         tmp_path, UserTimer(every=10, send="backup soon", send_to="output")
@@ -208,6 +217,12 @@ def test_the_timer_editor_round_trips(tmp_path):
         dialog._at.SetValue("03:30")
         assert dialog.result().at == "03:30"
         assert dialog.result().every == 15  # kept, ignored while it is a daily timer
+        from genericmud.packs.user_rules import SEND_TO_CHOICES
+
+        dialog._send_to.SetSelection(SEND_TO_CHOICES.index("variable"))
+        dialog._variable.SetValue("last_fired")
+        assert dialog.result().send_to == "variable"
+        assert dialog.result().variable == "last_fired"
     finally:
         dialog.Destroy()
         frame.Destroy()

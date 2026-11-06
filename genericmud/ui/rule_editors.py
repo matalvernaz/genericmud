@@ -90,6 +90,17 @@ class _RuleEditorBase(wx.Dialog):
         grid.Add(ctrl, 1, wx.EXPAND)
         return ctrl
 
+    def _variable_name(self, grid: wx.FlexGridSizer, value: str) -> wx.TextCtrl:
+        """The name a variable target stores under (MUSHclient's variable field).
+
+        It sits right after the "send to" box because it belongs to that choice: the label says
+        so, since the screen reader has no way to see that the pair is one question. Its mnemonic
+        is N, not V: every one of these dialogs already has a field with V in it.
+        """
+        return self._text(
+            grid, 'Variable &name (only for "a script variable" above):', value
+        )
+
     def _command_text(
         self, grid: wx.FlexGridSizer, value: str, *, captures: bool, detail: str | None = None
     ) -> wx.TextCtrl:
@@ -245,6 +256,7 @@ class TriggerEditorDialog(_RuleEditorBase):
         self._variable_button(grid, self._speak, "Insert a v&ariable into the speech...")
         self._send = self._command_text(grid, trigger.send, captures=True)
         self._send_to = self._send_to_choice(grid, trigger.send_to)
+        self._variable = self._variable_name(grid, trigger.variable)
         self._interrupt = wx.CheckBox(
             self, label="&Interrupt current speech the moment this fires"
         )
@@ -301,6 +313,7 @@ class TriggerEditorDialog(_RuleEditorBase):
             speak=self._speak.GetValue().strip(),
             send=self._send.GetValue().strip(),
             send_to=SEND_TO_CHOICES[self._send_to.GetSelection()],
+            variable=self._variable.GetValue().strip(),
             gag=("none", "speech", "line")[self._gag.GetSelection()],
             omit_log=self._omit_log.GetValue(),
             channel=self._channel.GetValue().strip(),
@@ -341,6 +354,7 @@ class AliasEditorDialog(_RuleEditorBase):
         grid.Add(self._regex)
         self._send = self._command_text(grid, alias.send, captures=True)
         self._send_to = self._send_to_choice(grid, alias.send_to)
+        self._variable = self._variable_name(grid, alias.variable)
         self._speak = self._text(grid, "Spea&k this confirmation (optional):", alias.speak)
         self._variable_button(grid, self._speak, "Insert a v&ariable into the speech...")
         self._finish(outer, grid)
@@ -355,6 +369,7 @@ class AliasEditorDialog(_RuleEditorBase):
             keep_evaluating=self._keep_evaluating.GetValue(),
             send=self._send.GetValue().strip(),
             send_to=SEND_TO_CHOICES[self._send_to.GetSelection()],
+            variable=self._variable.GetValue().strip(),
             speak=self._speak.GetValue().strip(),
             enabled=self._enabled,
         )
@@ -583,6 +598,7 @@ class TimerEditorDialog(_RuleEditorBase):
         grid.Add(self._one_shot)
         self._send = self._command_text(grid, timer.send, captures=False)
         self._send_to = self._send_to_choice(grid, timer.send_to)
+        self._variable = self._variable_name(grid, timer.variable)
         self._omit_log = wx.CheckBox(self, label="Leave what it writes out of the session log")
         self._omit_log.SetName("Leave what it writes out of the session log")
         self._omit_log.SetValue(timer.omit_log)
@@ -599,6 +615,7 @@ class TimerEditorDialog(_RuleEditorBase):
             one_shot=self._one_shot.GetValue(),
             send=self._send.GetValue().strip(),
             send_to=SEND_TO_CHOICES[self._send_to.GetSelection()],
+            variable=self._variable.GetValue().strip(),
             omit_log=self._omit_log.GetValue(),
         )
 

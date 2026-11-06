@@ -3,10 +3,12 @@
 The text is one field and the destination another, for triggers and aliases alike -- never a
 separate field per destination. The targets are the ones this client has a use for, in
 MUSHclient's terms: the MUD, the command box (unsent, to finish yourself), the output as a note,
-the session log alone, or a script.
+the session log alone, a script, or a variable.
 """
 
 from __future__ import annotations
+
+import pytest
 
 from genericmud.automation.engine import AutomationEngine
 from genericmud.model.buffer import Line
@@ -42,7 +44,9 @@ def _alias(tmp_path, alias: UserAlias) -> tuple[RecordingSink, AutomationEngine]
 
 
 def test_the_targets_are_the_ones_this_client_can_do():
-    assert SEND_TO_CHOICES == ("world", "command", "output", "log", "execute", "script")
+    assert SEND_TO_CHOICES == (
+        "world", "command", "output", "log", "execute", "script", "variable",
+    )
     assert len(SEND_TO_LABELS) == len(SEND_TO_CHOICES)
 
 
@@ -139,6 +143,114 @@ def test_carried_words_only_apply_to_the_mud(tmp_path):
     assert sink.echoed == []
     engine.process_input("sh")
     assert sink.echoed == [("shoot", "main")]
+
+
+# --- a variable: the text is kept under a name, to be read later ---------------------------
+
+
+def test_to_a_variable_stores_the_expanded_text_and_does_nothing_else(tmp_path):
+    # MUSHclient's variable target: a capture becomes a value, which is how a trigger can
+    # remember who paged you without a line of Lua.
+    sink, engine = _rule(
+        tmp_path,
+        UserTrigger(
+            pattern="* pages: *", send="${1}", send_to="variable", variable="pager"
+        ),
+    )
+    engine.process_line(Line("Brady pages: hello"))
+    assert engine.get_var("pager") == "Brady"
+    assert sink.sent == [] and sink.echoed == [] and sink.typed == []
+
+
+def test_a_stored_value_is_there_for_the_rule_that_reads_it(tmp_path):
+    sink = RecordingSink()
+    engine = AutomationEngine(sink)
+    api = ScriptApi(engine, source=user_rules.SOURCE, base_dir=str(tmp_path))
+    user_rules.register_rules(
+        api,
+        UserRules(
+            triggers=[
+                UserTrigger(
+                    pattern="* pages: *", send="${1}", send_to="variable", variable="pager"
+                ),
+                UserTrigger(pattern="page back", send="reply ${script:pager}"),
+            ]
+        ),
+    )
+    engine.process_line(Line("Brady pages: hello"))
+    engine.process_line(Line("page back"))
+    assert sink.sent == ["reply Brady"]
+
+
+def test_a_variable_keeps_semicolons_and_line_breaks_whole(tmp_path):
+    # Every other target is a stack of commands; a value is one value, so its text is not split.
+    _sink, engine = _rule(
+        tmp_path,
+        UserTrigger(
+            pattern="lookup", send="first; second\nthird", send_to="variable", variable="value"
+        ),
+    )
+    engine.process_line(Line("lookup"))
+    assert engine.get_var("value") == "first; second\nthird"
+
+
+def test_an_alias_can_store_what_you_typed(tmp_path):
+    sink, engine = _alias(
+        tmp_path,
+        UserAlias(
+            pattern="mark *", send="${1}", send_to="variable", variable="marked"
+        ),
+    )
+    engine.process_input("mark goblin")
+    assert engine.get_var("marked") == "goblin"
+    assert sink.sent == [] and sink.typed == []
+
+
+def test_a_variable_target_without_a_name_is_refused(tmp_path):
+    # Refused with a reason rather than quietly doing nothing: a rule that cannot say where its
+    # text goes would look like a rule that works.
+    with pytest.raises(ValueError, match="no variable name"):
+        _rule(tmp_path, UserTrigger(pattern="backup", send="look", send_to="variable"))
+
+
+def test_a_disabled_rule_may_be_half_finished(tmp_path):
+    # A draft left with the target but no name must not stop the rules that do work loading.
+    sink, engine = _rule(
+        tmp_path,
+        UserTrigger(
+            pattern="backup", send="look", send_to="variable", variable="", enabled=False
+        ),
+    )
+    engine.process_line(Line("Starting database backup."))
+    assert sink.sent == []
+
+
+def test_the_variable_target_survives_a_saved_rules_file(tmp_path):
+    save_rules(
+        tmp_path,
+        UserRules(
+            triggers=[
+                UserTrigger(pattern="a", send="x", send_to="variable", variable="where")
+            ]
+        ),
+    )
+    loaded = load_rules(tmp_path)
+    assert loaded.triggers[0].send_to == "variable"
+    assert loaded.triggers[0].variable == "where"
+
+
+def test_the_manager_says_where_the_text_went():
+    # A list line reading "backup: ${1}" would not say the text went into a variable.
+    pytest.importorskip("wx")
+    from genericmud.ui.automation_manager import _rule_summary
+
+    stored = _rule_summary(
+        "trigger",
+        UserTrigger(pattern="backup", send="${1}", send_to="variable", variable="pager"),
+    )
+    assert "store ${1} in variable pager" in stored
+    sent = _rule_summary("trigger", UserTrigger(pattern="backup", send="look"))
+    assert "send look" in sent
 
 
 # --- the setting survives ----------------------------------------------------------------
