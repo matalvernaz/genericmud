@@ -262,6 +262,67 @@ def test_rule_editors_offer_variables_only_with_a_live_session(frame, tmp_path):
             without.Destroy()
 
 
+def test_the_manager_shows_a_rule_a_script_switched_off(frame, tmp_path):
+    # MUSHclient's dialogs show the state the engine holds: EnableTrigger, EnableGroup and
+    # EnableTimer switch the rule the client runs, so the manager has to ask rather than trust
+    # the copy of the rules file it loaded.
+    import types
+    from dataclasses import replace
+
+    from genericmud.automation.engine import AutomationEngine
+    from genericmud.config.keymap import load_keymap
+    from genericmud.config.worlds import World
+    from genericmud.packs import user_rules
+    from genericmud.packs.user_rules import UserRules, UserTrigger, load_rules, save_rules
+    from genericmud.scripting.api import ScriptApi
+    from genericmud.ui import automation_manager
+
+    engine = AutomationEngine()
+    rules = UserRules(
+        triggers=[
+            UserTrigger(pattern="backup", send="look", label="watched"),
+            UserTrigger(pattern="other", send="score"),
+        ]
+    )
+    save_rules(tmp_path, rules)
+    user_rules.register_rules(
+        ScriptApi(engine, source=user_rules.SOURCE, base_dir=str(tmp_path)), rules
+    )
+    engine.set_enabled("watched", False)  # what mud.set_enabled does
+
+    def reloaded() -> None:
+        return None
+
+    panel = types.SimpleNamespace(
+        world=World("Test", "mud.example", 4000),
+        app=types.SimpleNamespace(
+            user_rules_dir=lambda: tmp_path, engine=engine, reload_user_rules=reloaded
+        ),
+        variable_snapshot=None,
+        _keymap=load_keymap("vipmud"),
+        _loop=types.SimpleNamespace(call_soon_threadsafe=lambda _fn, *_args: None),
+    )
+    manager = automation_manager.AutomationManagerDialog(frame, panel)
+    try:
+        rows = [manager._list.GetString(index) for index in range(manager._list.GetCount())]
+        assert rows[0].startswith("Disabled."), rows  # the script switched it off
+        assert manager._collection("trigger")[0].enabled is False
+
+        # Saving another rule must not switch the script's decision back on.
+        edited = replace(manager._collection("trigger")[1], send="score twice")
+        manager._collection("trigger")[1] = edited
+        assert manager._save_and_reload_rules(1, just_edited=edited)
+        assert [rule.enabled for rule in load_rules(tmp_path).triggers] == [False, True]
+
+        # And the rule the player just ticked on keeps the player's answer, not the engine's.
+        turned_on = replace(manager._collection("trigger")[0], enabled=True)
+        manager._collection("trigger")[0] = turned_on
+        assert manager._save_and_reload_rules(0, just_edited=turned_on)
+        assert load_rules(tmp_path).triggers[0].enabled is True
+    finally:
+        manager.Destroy()
+
+
 def test_every_rule_editor_shows_whether_the_rule_is_enabled(frame, tmp_path):
     # The manager could switch a rule off, but the dialog is where a rule is written: "is this
     # one on?" belongs there, and a rule can be kept and parked.

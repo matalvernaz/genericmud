@@ -370,6 +370,14 @@ class _DataWatch:
     enabled: bool = True  # a group can turn this watch off without unregistering it
 
 
+def _watch_key(name: object) -> str:
+    """A MUD data name as a watch compares it: no protocol prefix, casefolded, dot-joined."""
+    parts = [part for part in str(name or "").split(".") if part]
+    if len(parts) > 1 and parts[0].casefold() in _DATA_PROTOCOLS:
+        parts = parts[1:]
+    return ".".join(part.casefold() for part in parts)
+
+
 def _walk(value: object, parts: tuple[str, ...]) -> tuple[bool, object]:
     """Follow ``parts`` down into nested data: dictionary keys any case, list indexes from 0."""
     for part in parts:
@@ -598,6 +606,48 @@ class AutomationEngine:
                 watch.enabled = enabled
                 changed += 1
         return changed
+
+    def is_rule_enabled(self, kind: str, key: object, *, source: str = "") -> bool | None:
+        """Whether the engine has this rule switched on now; None if it has no such rule.
+
+        The manager asks this before showing a rule, so a script's EnableTrigger, EnableGroup or
+        EnableTimer reaches the place the rule is edited. A switch that only changes what runs is
+        half a switch: MUSHclient's dialogs show the same state the engine holds.
+
+        ``kind`` is the manager's word for the rule -- "trigger", "alias", "timer", "key" or
+        "data" -- and ``key`` is what identifies it there: a label, a timer's name, a key combo or
+        a MUD data name. ``source`` narrows a combo or a data name to one owner's binding, since
+        a pack can bind the same one.
+        """
+        name = str(key or "").strip()
+        if not name:
+            return None  # unnamed: nothing a script could have switched, so the file is the truth
+        if kind in ("trigger", "alias"):
+            found = None
+            for rule in (self._triggers if kind == "trigger" else self._aliases):
+                if rule.name == name:
+                    found = rule.enabled  # a later rule of that name wins, as set_enabled does
+            return found
+        if kind == "timer":
+            timer = self.named_timer(name)
+            return None if timer is None else timer.enabled
+        if kind == "key":
+            wanted = name.lower()
+            found = None
+            for binding in self._key_bindings:
+                if binding.key == wanted and (not source or binding.source == source):
+                    found = binding.enabled
+            return found
+        if kind == "data":
+            wanted = _watch_key(name)
+            found = None
+            for watch in self._data_watches:
+                if ".".join(watch.parts) == wanted and (
+                    not source or watch.source == source
+                ):
+                    found = watch.enabled
+            return found
+        return None
 
     def set_enabled(self, name: str, enabled: bool) -> bool:
         """Turn a named trigger, alias or key on or off; True if one had that name.
