@@ -151,7 +151,7 @@ class WorldFilesMixin:
         if pack_dir is None:
             return False
         next_generation = self._user_script_generation + 1
-        prefix = f"user-script:{next_generation}"
+        prefix = f"{user_scripts.SOURCE_PREFIX}{next_generation}"
         try:
             loaded = user_scripts.load_scripts(self.engine, pack_dir, source_prefix=prefix)
         except Exception as error:  # noqa: BLE001 - keep the previous working script set live

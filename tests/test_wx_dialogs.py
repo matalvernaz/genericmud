@@ -323,6 +323,67 @@ def test_the_manager_shows_a_rule_a_script_switched_off(frame, tmp_path):
         manager.Destroy()
 
 
+def test_the_manager_lists_the_rules_a_script_made_and_only_switches_them(frame, tmp_path):
+    # A rule with no file behind it is invisible otherwise: a trigger a script got wrong either
+    # fires when it should not or does nothing, and the diagnostic log is the only other clue.
+    import types
+
+    from genericmud.automation.engine import AutomationEngine
+    from genericmud.config.keymap import load_keymap
+    from genericmud.config.worlds import World
+    from genericmud.scripting import user_scripts
+    from genericmud.scripting.api import ScriptApi
+    from genericmud.ui import automation_manager
+
+    engine = AutomationEngine()
+    api = ScriptApi(engine, source=f"{user_scripts.SOURCE_PREFIX}1", base_dir=str(tmp_path))
+    api.add_trigger("You see *", lambda _ctx: None)
+    api.add_named_timer("tick", 5, lambda: None, every=5)
+    api.add_key("f2", lambda _ctx: None)
+
+    panel = types.SimpleNamespace(
+        world=World("Test", "mud.example", 4000),
+        app=types.SimpleNamespace(
+            user_rules_dir=lambda: tmp_path, engine=engine, reload_user_rules=lambda: None
+        ),
+        variable_snapshot=None,
+        _keymap=load_keymap("vipmud"),
+        _loop=types.SimpleNamespace(call_soon_threadsafe=lambda _fn, *_args: None),
+    )
+    manager = automation_manager.AutomationManagerDialog(frame, panel)
+    try:
+        kinds = [entry[0] for entry in manager._CATEGORIES]
+        manager._category.SetSelection(kinds.index("live"))
+        manager._on_category(None)
+        rows = [manager._list.GetString(index) for index in range(manager._list.GetCount())]
+        assert len(rows) == 3, rows
+        assert "Trigger from a script" in rows[0] and "You see *" in rows[0]
+        assert "Hotkey from a script" in rows[1] and "f2" in rows[1]
+        assert "Timer from a script" in rows[2] and "tick" in rows[2]
+
+        # Read-only: there is no file to create, edit or delete, but a switch is the point.
+        assert manager._buttons["new"].IsEnabled() is False
+        assert manager._buttons["edit"].IsEnabled() is False
+        assert manager._buttons["duplicate"].IsEnabled() is False
+        assert manager._buttons["delete"].IsEnabled() is False
+        assert manager._buttons["toggle"].IsEnabled() is True
+
+        manager._list.SetSelection(0)
+        manager._on_toggle(None)
+        assert engine.live_rules((user_scripts.SOURCE_PREFIX,))[0].enabled is False
+        rows = [manager._list.GetString(index) for index in range(manager._list.GetCount())]
+        assert rows[0].startswith("Disabled."), rows[0]
+
+        # The keyboard paths that would edit one do nothing, and leave the list as it was.
+        manager._on_edit(None)
+        manager._on_delete(None)
+        manager._on_duplicate(None)
+        manager._on_new(None)
+        assert manager._list.GetCount() == 3
+    finally:
+        manager.Destroy()
+
+
 def test_every_rule_editor_shows_whether_the_rule_is_enabled(frame, tmp_path):
     # The manager could switch a rule off, but the dialog is where a rule is written: "is this
     # one on?" belongs there, and a rule can be kept and parked.

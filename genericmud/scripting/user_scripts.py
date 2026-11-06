@@ -12,6 +12,9 @@ from genericmud.scripting.mushclient_compat import MushclientPack
 from genericmud.scripting.world_runtime import world_runtime
 
 SCRIPTS_DIRNAME = "scripts"
+# The engine source every rule a world's script registers is filed under, one generation per
+# reload: "user-script:3". The manager shows those rules, so the prefix is named here.
+SOURCE_PREFIX = "user-script:"
 DEFAULT_SCRIPT_NAME = "main.lua"
 _SCRIPT_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*\.lua", re.IGNORECASE)
 _WINDOWS_RESERVED = {

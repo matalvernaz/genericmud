@@ -474,7 +474,9 @@ class MudTable:
     def _lua_register(self, register: Callable[..., None], *, routable: bool = False):
         """Build a mud.trigger/mud.alias function that bridges a Lua callback.
 
-        With opts {regex=, priority=, channel=}; channel only applies to triggers.
+        With opts {regex=, priority=, label=, group=, channel=}; channel only applies to
+        triggers. ``label`` is MUSHclient's name for the rule -- what mud.set_enabled switches,
+        and what the manager reads out first -- and ``group`` lets one call switch a set of them.
         A nil callback registers a pure routing/policy rule (no script action).
         """
         lua = self._lua
@@ -486,6 +488,10 @@ class MudTable:
             kwargs: dict = {"regex": regex, "priority": priority}
             if routable and has_opts and opts["channel"] is not None:
                 kwargs["channel"] = opts["channel"]
+            if has_opts and opts["label"] is not None:
+                kwargs["name"] = str(opts["label"])
+            if has_opts and opts["group"] is not None:
+                kwargs["group"] = str(opts["group"])
 
             if callback is None:
                 register(pattern, None, **kwargs)
@@ -504,13 +510,18 @@ class MudTable:
         return factory
 
     def _lua_register_key(self):
+        """mud.key(combo, fn [, options]): a hotkey, with MUSHclient's group to switch it by."""
         api = self._api
 
-        def factory(key, callback):
+        def factory(key, callback, opts=None):
+            group = ""
+            if opts is not None and opts["group"] is not None:
+                group = str(opts["group"])
+
             def py_callback(ctx: MatchContext) -> None:
                 self._run_callback(callback, ctx)
 
-            api.add_key(key, py_callback)
+            api.add_key(key, py_callback, group=group)
 
         return factory
 

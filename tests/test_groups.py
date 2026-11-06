@@ -346,3 +346,108 @@ def test_a_timer_the_player_never_named_is_still_answered_for(tmp_path):
     assert engine.set_timer_enabled("timer 30s #1", False) is True
     user_rules.apply_engine_state(rules, engine)
     assert rules.timers[0].enabled is False
+
+
+# --- the rules a script made: the manager can list and switch them, not edit them --------------
+
+
+def test_the_engine_lists_what_a_script_registered():
+    engine = AutomationEngine(RecordingSink())
+    from genericmud.scripting import rule_scripts, user_scripts
+
+    source = f"{user_scripts.SOURCE_PREFIX}1"
+    api = ScriptApi(engine, source=source)
+    api.add_trigger("You see *", lambda _ctx: None)
+    api.add_alias("sh *", lambda _ctx: None, name="shoot")
+    api.add_key("f2", lambda _ctx: None)
+    api.add_named_timer("tick", 5, lambda: None, every=5)
+    api.add_data_watch("Char.Vitals.hp", lambda _name, _value: None)
+    engine.add_trigger("a pack's line", lambda _ctx: None, source="erion")
+
+    listed = engine.live_rules((user_scripts.SOURCE_PREFIX, rule_scripts.RULE_SOURCE))
+    assert [(rule.kind, rule.name) for rule in listed] == [
+        ("trigger", ""), ("alias", "shoot"), ("key", ""), ("timer", "tick"), ("data", ""),
+    ]
+    # The pattern as the script wrote it, not the wildcard translation the engine compiled.
+    assert listed[0].summary == "You see *"
+    assert listed[1].summary == "sh *"
+    assert listed[3].summary == "every 5 seconds"
+    assert listed[4].summary == "Char.Vitals.hp"
+    assert all(rule.enabled for rule in listed)
+
+
+def test_a_rule_from_a_rule_s_own_code_is_listed_too():
+    engine = AutomationEngine(RecordingSink())
+    from genericmud.scripting import rule_scripts, user_scripts
+
+    api = ScriptApi(engine, source=rule_scripts.RULE_SOURCE)
+    api.add_trigger("backup", lambda _ctx: None)
+    listed = engine.live_rules((user_scripts.SOURCE_PREFIX, rule_scripts.RULE_SOURCE))
+    assert [rule.summary for rule in listed] == ["backup"]
+
+
+def test_a_script_s_rule_can_be_switched_off_and_on_by_its_handle():
+    sink = RecordingSink()
+    engine = AutomationEngine(sink)
+    from genericmud.scripting import user_scripts
+
+    api = ScriptApi(engine, source=f"{user_scripts.SOURCE_PREFIX}1", base_dir=".")
+    api.add_trigger("You feel better", lambda _ctx: sink.send("fired"))
+    (rule,) = engine.live_rules((user_scripts.SOURCE_PREFIX,))
+    assert engine.set_live_enabled(rule.handle, False) is True
+    engine.process_line(Line("You feel better"))
+    assert sink.sent == []
+    assert engine.set_live_enabled(rule.handle, True) is True
+    engine.process_line(Line("You feel better"))
+    assert sink.sent == ["fired"]
+
+
+def test_every_kind_a_script_can_register_can_be_switched():
+    engine = AutomationEngine(RecordingSink())
+    from genericmud.scripting import user_scripts
+
+    api = ScriptApi(engine, source=f"{user_scripts.SOURCE_PREFIX}1")
+    api.add_alias("sh *", lambda _ctx: None)
+    api.add_key("f2", lambda _ctx: None)
+    api.add_named_timer("tick", 5, lambda: None, every=5)
+    api.add_data_watch("Char.Vitals.hp", lambda _name, _value: None)
+    for rule in engine.live_rules((user_scripts.SOURCE_PREFIX,)):
+        assert engine.set_live_enabled(rule.handle, False) is True, rule.kind
+        assert engine.live_rules((user_scripts.SOURCE_PREFIX,))[
+            [r.kind for r in engine.live_rules((user_scripts.SOURCE_PREFIX,))].index(rule.kind)
+        ].enabled is False, rule.kind
+
+
+def test_switching_a_rule_the_engine_no_longer_has_says_so():
+    engine = AutomationEngine(RecordingSink())
+    assert engine.set_live_enabled(object(), False) is False
+
+
+def test_a_script_can_name_and_group_the_rules_it_makes(tmp_path):
+    # What the manager shows as "from your scripts" only reads well if a script can say what its
+    # rules are called and which set they belong to, as MUSHclient's AddTriggerEx can.
+    pytest.importorskip("lupa")
+    from genericmud.scripting import user_scripts
+    from genericmud.scripting.lua_runtime import LuaPackRuntime
+
+    engine = AutomationEngine(RecordingSink())
+    runtime = LuaPackRuntime(
+        ScriptApi(engine, source=f"{user_scripts.SOURCE_PREFIX}1", base_dir=str(tmp_path))
+    )
+    runtime.run_source(
+        '''
+        mud.trigger("You feel better", function() end, {label="heal-watch", group="combat"})
+        mud.alias("sh *", function() end, {label="shoot", group="combat"})
+        mud.key("f2", function() end, {group="combat"})
+        '''
+    )
+    listed = engine.live_rules((user_scripts.SOURCE_PREFIX,))
+    assert [(rule.kind, rule.name, rule.group) for rule in listed] == [
+        ("trigger", "heal-watch", "combat"),
+        ("alias", "shoot", "combat"),
+        ("key", "", "combat"),
+    ]
+    # And they are switchable the ways a rule's name and group are meant to be.
+    assert engine.set_enabled("heal-watch", False) is True
+    assert engine.is_rule_enabled("trigger", "heal-watch") is False
+    assert engine.set_group_enabled("combat", False) == 3
