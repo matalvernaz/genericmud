@@ -3291,6 +3291,8 @@ class MushclientPack:
             if rule.kind == TRIGGER and rule.omit_from_output:
                 ctx.line.gagged = True
                 ctx.line.display_when_gagged = False
+            if rule.kind == TRIGGER and rule.omit_from_log:
+                ctx.line.omit_from_log = True
             if rule.one_shot:
                 self._retire_rule(rule)  # first, so its script can add the name again
             previous = self._current_plugin
