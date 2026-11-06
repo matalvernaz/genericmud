@@ -619,6 +619,12 @@ on, in MUSHclient's style. A rule with a label can be switched by a script with
 Automation Manager. The manager reads the label first, because it is what you called
 the rule.
 
+A switch a script makes shows where you edit the rule: open the manager after
+`mud.set_enabled` or `mud.set_group_enabled` and the item reads **Disabled.**, with its
+**Enabled** box clear — by label, by group, by a timer's name, or for a hotkey or MUD data
+rule through its group (a hotkey has no name; MUSHclient's accelerators do not either). That is the state the manager saves, so a rule a script parked stays
+parked, and a save from the manager won't quietly switch it back on.
+
 The world's **Log the notes automation writes** setting decides whether notes reach
 the log; clear it and notes behave like prints without rewriting a rule. Nothing here
 speaks: what you want to hear goes in **Speak this text**, because what belongs in the

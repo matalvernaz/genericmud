@@ -265,3 +265,84 @@ def test_the_list_says_which_group_a_hotkey_or_data_rule_is_in():
     assert "(group combat)" in data
     timer = _rule_summary("timer", UserTimer(every=5, send="look", group="combat"))
     assert "(group combat)" in timer
+
+
+# --- what a script switched shows where the rule is edited ----------------------------------
+
+
+def test_the_engine_answers_a_rules_live_state_by_name():
+    engine = AutomationEngine(RecordingSink())
+    api = ScriptApi(engine, source=user_rules.SOURCE)
+    api.add_trigger("backup", lambda _ctx: None, name="backup-watch", group="combat")
+    api.add_alias("sh *", lambda _ctx: None, name="shoot", group="combat")
+    api.add_named_timer("tick", 5, lambda: None, every=5)
+    assert engine.is_rule_enabled("trigger", "backup-watch") is True
+    assert engine.is_rule_enabled("timer", "tick") is True
+    assert engine.set_enabled("backup-watch", False) is True
+    assert engine.is_rule_enabled("trigger", "backup-watch") is False
+    assert engine.is_rule_enabled("alias", "shoot") is True  # the name, not the group, was used
+    engine.set_group_enabled("combat", False)
+    assert engine.is_rule_enabled("alias", "shoot") is False
+    assert engine.set_timer_enabled("tick", False) is True
+    assert engine.is_rule_enabled("timer", "tick") is False
+
+
+def test_a_rule_the_engine_never_had_answers_nothing():
+    # Disabled in the file, or a name that was never registered: the file copy stays the truth.
+    engine = AutomationEngine(RecordingSink())
+    assert engine.is_rule_enabled("trigger", "not-registered") is None
+    assert engine.is_rule_enabled("trigger", "") is None
+    assert engine.is_rule_enabled("nonsense", "x") is None
+
+
+def test_a_hotkey_and_a_data_rule_answer_by_their_own_binding():
+    engine = AutomationEngine(RecordingSink())
+    api = ScriptApi(engine, source=user_rules.SOURCE)
+    api.add_key("f2", lambda _ctx: None, group="combat")
+    api.add_data_watch("Char.Vitals.hp", lambda _n, _v: None, group="combat")
+    # A pack can bind the same combo; the user's binding is the one the manager shows.
+    engine.add_key("f2", lambda _ctx: None, source="pack")
+    assert engine.is_rule_enabled("key", "f2", source=user_rules.SOURCE) is True
+    assert engine.is_rule_enabled("data", "gmcp.Char.Vitals.hp", source=user_rules.SOURCE) is True
+    engine.set_group_enabled("combat", False)
+    assert engine.is_rule_enabled("key", "f2", source=user_rules.SOURCE) is False
+    assert engine.is_rule_enabled("data", "char.vitals.hp", source=user_rules.SOURCE) is False
+
+
+def test_the_model_takes_the_engines_word_for_each_rule(tmp_path):
+    engine = AutomationEngine(RecordingSink())
+    rules = UserRules(
+        triggers=[
+            UserTrigger(pattern="a", send="look", label="watched"),
+            UserTrigger(pattern="b", send="look"),  # unnamed: the file stays the truth
+        ],
+        aliases=[UserAlias(pattern="sh *", send="shoot ${1}", label="shoot", group="combat")],
+        timers=[UserTimer(label="tick", every=5, send="look")],
+        keys=[UserKey(key="f2", speak="health", group="combat")],
+        watches=[UserWatch(name="Char.Vitals.hp", speak="${value}", group="combat")],
+    )
+    api = ScriptApi(engine, source=user_rules.SOURCE, base_dir=str(tmp_path))
+    user_rules.register_rules(api, rules)
+    assert all(rule.enabled for rule in rules.triggers)
+    engine.set_enabled("watched", False)
+    engine.set_group_enabled("combat", False)
+    engine.set_timer_enabled("tick", False)
+    user_rules.apply_engine_state(rules, engine)
+    assert [rule.enabled for rule in rules.triggers] == [False, True]
+    assert rules.aliases[0].enabled is False
+    assert rules.timers[0].enabled is False
+    assert rules.keys[0].enabled is False
+    assert rules.watches[0].enabled is False
+
+
+def test_a_timer_the_player_never_named_is_still_answered_for(tmp_path):
+    # An unnamed timer is registered under a name made from its schedule, and a script can
+    # switch it by that name, so the manager has to be able to ask about the same name.
+    engine = AutomationEngine(RecordingSink())
+    rules = UserRules(timers=[UserTimer(every=30, send="look")])
+    api = ScriptApi(engine, source=user_rules.SOURCE, base_dir=str(tmp_path))
+    user_rules.register_rules(api, rules)
+    # The made-up name carries the timer's place, so two timers on one schedule stay apart.
+    assert engine.set_timer_enabled("timer 30s #1", False) is True
+    user_rules.apply_engine_state(rules, engine)
+    assert rules.timers[0].enabled is False

@@ -21,6 +21,7 @@ from genericmud.packs.user_rules import (
     UserTimer,
     UserTrigger,
     UserWatch,
+    engine_rule_state,
     load_rules,
     register_rules,
     save_rules,
@@ -289,6 +290,7 @@ class AutomationManagerDialog(wx.Dialog):
         }[kind]
 
     def _refresh(self, select: int | str | None = None, *, focus: bool = False) -> None:
+        self._sync_from_engine()  # a script may have switched something since the last look
         kind = self._kind()
         _kind, _label, description = self._CATEGORIES[self._category.GetSelection()]
         self._description.SetLabel(description)
@@ -383,7 +385,39 @@ class AutomationManagerDialog(wx.Dialog):
             return
         event.Skip()
 
-    def _save_and_reload_rules(self, select: int | None = None) -> bool:
+    def _sync_from_engine(self, *, except_rule=None) -> None:
+        """Take each rule's on/off state from the engine before showing or saving it.
+
+        A script's EnableTrigger, EnableGroup or EnableTimer switches the rule the client runs,
+        not the copy in the rules file, so the manager has to ask. ``except_rule`` is the one the
+        dialog has only now returned: its Enabled box is the player's decision of this moment, and
+        the engine's older state must not overwrite it.
+        """
+        app = getattr(self._panel, "app", None)
+        engine = getattr(app, "engine", None)
+        if engine is None:
+            return  # no live session (a test, or the manager before a world opens)
+        for kind, collection in (
+            ("trigger", self._rules.triggers), ("alias", self._rules.aliases),
+            ("timer", self._rules.timers), ("key", self._rules.keys),
+            ("data", self._rules.watches),
+        ):
+            for index, rule in enumerate(collection):
+                if rule is except_rule:
+                    continue
+                live = engine_rule_state(engine, kind, rule)
+                if live is not None and live != rule.enabled:
+                    collection[index] = replace(rule, enabled=live)
+
+    def _save_and_reload_rules(
+        self, select: int | None = None, *, just_edited=None
+    ) -> bool:
+        """Save the rules and reload them live.
+
+        ``just_edited`` is the rule the dialog has only now returned; every other rule takes its
+        on/off state from the engine first, so saving one rule cannot switch a script's decision
+        back on.
+        """
         if self._pack_dir is None:
             return False
         # A one-shot that has fired is not saved to run again, which is what MUSHclient does with
@@ -399,6 +433,7 @@ class AutomationManagerDialog(wx.Dialog):
             app = getattr(self._panel, "app", None)
             if removed and app is not None and app.diag is not None:
                 app.diag.event("user_rules.one_shots_spent", names=removed)
+        self._sync_from_engine(except_rule=just_edited)
         try:
             register_rules(
                 ScriptApi(
@@ -515,7 +550,7 @@ class AutomationManagerDialog(wx.Dialog):
             return
         items = self._collection(kind)
         items.append(result)
-        if self._save_and_reload_rules(len(items) - 1):
+        if self._save_and_reload_rules(len(items) - 1, just_edited=result):
             self._announce_rule_change(kind, result, f"{self._KIND_WORD[kind]} added.")
 
     def _on_edit(self, _event: wx.CommandEvent) -> None:
@@ -529,7 +564,7 @@ class AutomationManagerDialog(wx.Dialog):
         result = self._edit_rule(kind, items[index])
         if result is not None:
             items[index] = result
-            if self._save_and_reload_rules(index):
+            if self._save_and_reload_rules(index, just_edited=result):
                 self._announce_rule_change(kind, result, f"{self._KIND_WORD[kind]} updated.")
 
     def _on_duplicate(self, _event: wx.CommandEvent) -> None:
@@ -552,7 +587,7 @@ class AutomationManagerDialog(wx.Dialog):
         if result is None:
             return
         items.append(result)
-        if self._save_and_reload_rules(len(items) - 1):
+        if self._save_and_reload_rules(len(items) - 1, just_edited=result):
             self._announce_rule_change(kind, result, f"{self._KIND_WORD[kind]} duplicated.")
 
     def _on_toggle(self, _event: wx.CommandEvent) -> None:

@@ -22,7 +22,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, time, timedelta
 from pathlib import Path
 
-from genericmud.automation.engine import MatchContext
+from genericmud.automation.engine import AutomationEngine, MatchContext
 from genericmud.config.atomic import atomic_write_text
 from genericmud.model.buffer import Line
 from genericmud.render.ansi import strip_ansi
@@ -669,6 +669,44 @@ def _check_timer_offsets(rules: UserRules) -> None:
             )
 
 
+def engine_rule_state(
+    engine: AutomationEngine, kind: str, rule: object
+) -> bool | None:
+    """What the engine has for one rule of this world, or None if it has no such rule.
+
+    ``kind`` is the manager's word for it. A rule that is disabled in the file was never
+    registered, so it has no engine state and its file copy stays the truth.
+    """
+    if kind in ("trigger", "alias"):
+        key: object = getattr(rule, "label", "")
+    elif kind == "timer":
+        key = timer_name(rule)  # type: ignore[arg-type]
+    elif kind == "key":
+        key = getattr(rule, "key", "")
+    elif kind == "data":
+        key = getattr(rule, "name", "")
+    else:
+        return None
+    return engine.is_rule_enabled(kind, key, source=SOURCE)
+
+
+def apply_engine_state(rules: UserRules, engine: AutomationEngine) -> None:
+    """Take each rule's on/off state from the engine, where the engine has that rule.
+
+    A script's EnableTrigger, EnableGroup or EnableTimer switches the rule the client runs, not
+    the file the manager edits. Without this the manager would show a rule as on that a script
+    had switched off -- and the next save from it would switch the rule back on.
+    """
+    for kind, collection in (
+        ("trigger", rules.triggers), ("alias", rules.aliases), ("timer", rules.timers),
+        ("key", rules.keys), ("data", rules.watches),
+    ):
+        for rule in collection:
+            live = engine_rule_state(engine, kind, rule)
+            if live is not None and rule.enabled != live:
+                rule.enabled = live
+
+
 def register_rules(api: ScriptApi, rules: UserRules) -> None:
     """Register every rule on the engine under the ``user`` source.
 
@@ -870,8 +908,6 @@ def first_wait(interval: float, offset: object) -> float:
 def _register_timer(
     api: ScriptApi, t: UserTimer, *, now=datetime.now, place: int = 0
 ) -> None:
-
-
     """Schedule one timer under a name, so a label or a group can switch it later.
 
     A draft with no label still gets a name of its own (its place in the file), so every timer

@@ -201,7 +201,9 @@ for new rules.
 
 Choose Duplicate to start from a copy. Disable keeps an item saved without
 letting it run, and every editor has the same switch as the Enabled box at its top,
-so a rule can be parked while you work on it. Ctrl+1 through Ctrl+7 change categories,
+so a rule can be parked while you work on it. A switch a script makes shows here too:
+after mud.set_enabled or mud.set_group_enabled the item reads Disabled and its Enabled
+box is clear, and that is the state the manager saves. Ctrl+1 through Ctrl+7 change categories,
 Ctrl+N creates an item, Enter edits, and Delete deletes after confirmation. F2
 renames a script.
 
