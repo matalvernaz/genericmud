@@ -421,7 +421,7 @@ def test_the_automation_manager_refuses_a_hotkey_genericmud_already_uses(
 
 
 def test_a_pick_list_starts_on_the_packs_item_and_answers_its_index(frame):
-    from genericmud.ui.wx_app import PackQuestionDialog
+    from genericmud.ui.pack_dialogs import PackQuestionDialog
 
     request = {
         "kind": "choice", "title": "select monster", "prompt": "select monster",
@@ -442,7 +442,7 @@ def test_a_pick_list_starts_on_the_packs_item_and_answers_its_index(frame):
 def test_a_list_with_no_item_named_starts_with_nothing_selected(frame):
     # MUSHclient's listbox selects nothing without a default, and OK alone answers nil:
     # the mapper's "Choose exit to delete" deletes whatever comes back.
-    from genericmud.ui.wx_app import PackQuestionDialog
+    from genericmud.ui.pack_dialogs import PackQuestionDialog
 
     request = {"kind": "choice", "title": "", "prompt": "", "items": ["a", "b"], "selected": None}
     dialog = PackQuestionDialog(frame, request, "Miriani")
@@ -456,7 +456,7 @@ def test_a_list_with_no_item_named_starts_with_nothing_selected(frame):
 
 
 def test_a_several_item_list_ticks_the_defaults_and_answers_every_selected_index(frame):
-    from genericmud.ui.wx_app import PackQuestionDialog
+    from genericmud.ui.pack_dialogs import PackQuestionDialog
 
     request = {
         "kind": "choices", "title": "Food", "prompt": "Pick",
@@ -472,7 +472,7 @@ def test_a_several_item_list_ticks_the_defaults_and_answers_every_selected_index
 
 
 def test_a_text_question_fills_in_the_default_and_answers_what_was_typed(frame):
-    from genericmud.ui.wx_app import PackQuestionDialog
+    from genericmud.ui.pack_dialogs import PackQuestionDialog
 
     request = {"kind": "text", "title": "Who", "prompt": "Name & rank?", "default": "Bob",
                "multiline": False}
@@ -510,7 +510,7 @@ def test_a_msgbox_has_mushclients_buttons_default_and_escape(
     # Escape is Cancel where there is one and OK on a lone OK; on Yes/No and
     # Abort/Retry/Ignore it does nothing, as on Windows' own message boxes.
     from genericmud.scripting.api import MESSAGE_BUTTONS
-    from genericmud.ui.wx_app import PackMessageDialog
+    from genericmud.ui.pack_dialogs import PackMessageDialog
 
     request = {"kind": "message", "title": "Q", "prompt": "Sure & certain?", "buttons": buttons,
                "icon": "?", "default": default}
@@ -576,7 +576,7 @@ def test_a_packs_question_is_shown_on_the_ui_thread_and_answered_to_the_loop_thr
 ):
     import time
 
-    from genericmud.ui import wx_app
+    from genericmud.ui import pack_dialogs
 
     shown: list[str] = []
 
@@ -585,7 +585,7 @@ def test_a_packs_question_is_shown_on_the_ui_thread_and_answered_to_the_loop_thr
         dialog._control.SetSelection(1)
         return wx.ID_OK
 
-    monkeypatch.setattr(wx_app.PackQuestionDialog, "ShowModal", answer_fox)
+    monkeypatch.setattr(pack_dialogs.PackQuestionDialog, "ShowModal", answer_fox)
     panel, loop = _question_panel(frame, monkeypatch)
     try:
         request = {"kind": "choice", "title": "", "prompt": "Choose an item",
@@ -676,7 +676,7 @@ def test_a_question_on_screen_isnt_given_up_on_like_one_that_never_appeared(
 ):
     import time
 
-    from genericmud.ui import wx_app
+    from genericmud.ui import pack_dialogs, wx_app
 
     monkeypatch.setattr(wx_app, "_PACK_QUESTION_SHOW_TIMEOUT_S", 0.2)
 
@@ -685,7 +685,7 @@ def test_a_question_on_screen_isnt_given_up_on_like_one_that_never_appeared(
         dialog._control.SetSelection(0)
         return wx.ID_OK
 
-    monkeypatch.setattr(wx_app.PackQuestionDialog, "ShowModal", slow_reader)
+    monkeypatch.setattr(pack_dialogs.PackQuestionDialog, "ShowModal", slow_reader)
     panel, loop = _question_panel(frame, monkeypatch)
     try:
         request = {"kind": "choice", "title": "Gags", "prompt": "Gags",
@@ -728,7 +728,7 @@ def test_closing_the_tab_tears_the_session_down_even_if_a_question_wont_close(
 ):
     import asyncio
 
-    from genericmud.ui import wx_app
+    from genericmud.ui import pack_dialogs
 
     panel, loop = _question_panel(frame, monkeypatch)
     torn_down: list[bool] = []
@@ -739,7 +739,7 @@ def test_closing_the_tab_tears_the_session_down_even_if_a_question_wont_close(
 
     monkeypatch.setattr(panel, "_withdraw_question", broken)
     try:
-        panel._questions.append(wx_app._PackQuestion({"kind": "text"}))
+        panel._questions.append(pack_dialogs._PackQuestion({"kind": "text"}))
         panel.close()
         loop.run_until_complete(asyncio.sleep(0.01))
         assert torn_down == [True]
@@ -1821,10 +1821,10 @@ def test_a_new_world_starts_on_no_auto_connect(frame):
 
 
 def test_the_copy_box_opens_with_the_whole_line_selected_and_copies_a_part(frame):
-    from genericmud.ui import wx_app
+    from genericmud.ui import output_dialogs
 
     line = "Zugg tells you, the code is 4521"
-    dialog = wx_app.CopyLineDialog(frame, line)
+    dialog = output_dialogs.CopyLineDialog(frame, line)
     try:
         assert dialog._line.GetValue() == line
         assert dialog._line.GetStringSelection() == line  # Enter alone copies all of it
@@ -1851,13 +1851,13 @@ def test_the_copy_box_fills_the_clipboard_and_says_so(
     import asyncio
 
     from genericmud.bridge import protocol
-    from genericmud.ui import wx_app
+    from genericmud.ui import output_dialogs, wx_app
 
     async def no_session(_panel):
         return None
 
     monkeypatch.setattr(wx_app.SessionPanel, "_start", no_session)
-    monkeypatch.setattr(wx_app.CopyLineDialog, "ShowModal", lambda _self: answer)
+    monkeypatch.setattr(output_dialogs.CopyLineDialog, "ShowModal", lambda _self: answer)
     clipboard: list[str] = []
 
     def set_clipboard(text: str) -> bool:

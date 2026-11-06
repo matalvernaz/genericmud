@@ -162,7 +162,7 @@ def frame():
 
 
 def test_the_choose_dialog_lists_every_choice_numbered(frame):
-    from genericmud.ui.wx_app import ChooseDialog
+    from genericmud.ui.output_dialogs import ChooseDialog
 
     dialog = ChooseDialog(
         frame, "a sword", [("buy sword", "Buy it"), ("examine sword", "")]
@@ -178,7 +178,7 @@ def test_the_choose_dialog_lists_every_choice_numbered(frame):
 
 
 def test_a_number_key_picks_that_choice_and_closes(frame):
-    from genericmud.ui.wx_app import ChooseDialog
+    from genericmud.ui.output_dialogs import ChooseDialog
 
     dialog = ChooseDialog(frame, "a sword", [("buy", "Buy"), ("sell", "Sell")])
     ended: list[int] = []
@@ -192,7 +192,7 @@ def test_a_number_key_picks_that_choice_and_closes(frame):
 
 
 def test_a_number_past_the_end_of_the_list_is_just_a_key(frame):
-    from genericmud.ui.wx_app import ChooseDialog
+    from genericmud.ui.output_dialogs import ChooseDialog
 
     dialog = ChooseDialog(frame, "a sword", [("buy", "Buy")])
     ended: list[int] = []
@@ -253,7 +253,7 @@ def test_an_empty_entry_keeps_every_later_caption_on_its_own_command():
 
 
 def test_with_ten_choices_or_more_a_number_key_is_just_a_key(frame):
-    from genericmud.ui.wx_app import ChooseDialog
+    from genericmud.ui.output_dialogs import ChooseDialog
 
     choices = [(f"cmd {number}", "") for number in range(1, 13)]
     dialog = ChooseDialog(frame, "a big menu", choices)
