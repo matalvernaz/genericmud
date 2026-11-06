@@ -29,7 +29,6 @@ class WorldFilesMixin:
     _map_unsaved is shared: walking counts new rooms; world_files resets it after saving.
     """
 
-
     def user_rules_dir(self) -> Path | None:
         """This world's user-pack dir (rules, sounds, and scripts); None headless."""
         if self.packs is None or not self.name:
@@ -148,8 +147,6 @@ class WorldFilesMixin:
                 channel=SYSTEM_CHANNEL, interrupt=False,
             )
         return True
-
-
 
     def _map_path(self) -> Path | None:
         """This world's map file, or None for a session with no name to file it under."""

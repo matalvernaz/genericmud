@@ -78,7 +78,6 @@ class ServerMediaMixin:
     Calls: nothing outside.
     """
 
-
     def _start_media(
         self, name: str, url: str, channel: str, play: Callable[[str], None]
     ) -> None:

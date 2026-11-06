@@ -139,8 +139,8 @@ class EngineApp(
         self._suppress_reconnect = suppress_reconnect or (lambda: None)
         self._schedule = schedule or _default_schedule
         self._diag = diag
-        # Native (wx) injects a pygame backend; otherwise sounds post to the renderer (which
-        # nothing consumes in native mode -- so a "post" backend there is candidate A for silence).
+        # The native window injects BASS, with pygame as a fallback. Without a native backend,
+        # sounds go to the web renderer; the native window does not consume those messages.
         self._diag_backend_kind = "native" if sound_backend is not None else "post"
         self.sound = SoundBus(sound_backend or _PostSoundBackend(self._post))
         # Server media (MSP U=, GMCP Client.Media) resolves to files on disk and downloads into a

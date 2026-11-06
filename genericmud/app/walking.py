@@ -127,7 +127,6 @@ class WalkingMixin:
             self.nav.record(direction)
         return True
 
-
     def _goto(self, query: str) -> None:
         """Walk to a mapped room named by ``query``, step by step so it can halt."""
         if not query:

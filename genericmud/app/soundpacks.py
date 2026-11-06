@@ -61,7 +61,6 @@ class SoundpacksMixin:
                 )
             return None
 
-
     def activate_packs(self, world: str) -> ActivationResult | None:
         """Load the packs enabled for ``world`` and announce the outcome aloud.
 
