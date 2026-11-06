@@ -136,7 +136,7 @@ _MASTER_HANDLE = "0"  # VIPMud handle 0 == all cues / master volume
 _MAX_EXEC_DEPTH = 20  # bare-text alias expansion recursion cap (self-invoking alias)
 _VIPMUD_VERSION = "200000"  # %Version: VIPMud 2.0.0 as xyyzzz
 # VIPMud key names ("Alt-Shift-PageUp", "control-f11") -> the combo the window builds
-# (wx_app._key_combo: ctrl, alt, shift in that order, then the key, joined with "+").
+# (keyboard._key_combo: ctrl, alt, shift in that order, then the key, joined with "+").
 _KEY_MODIFIERS = {"ctrl": "ctrl", "control": "ctrl", "alt": "alt", "shift": "shift"}
 _KEY_MODIFIER_ORDER = ("ctrl", "alt", "shift")
 _KEY_NAMES = {

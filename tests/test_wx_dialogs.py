@@ -378,7 +378,7 @@ def test_disconnecting_at_a_password_prompt_makes_typing_ordinary_again(frame, m
 )
 def test_a_hotkey_on_a_key_genericmud_keeps_says_why_it_would_never_run(frame, combo, reason):
     from genericmud.config.keymap import load_keymap
-    from genericmud.ui.wx_app import _hotkey_taken
+    from genericmud.ui.keyboard import _hotkey_taken
 
     message = _hotkey_taken(combo, load_keymap("vipmud"))
     assert message is not None and message.startswith(reason)
