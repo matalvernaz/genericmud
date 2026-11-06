@@ -150,7 +150,7 @@ class SoundBus:
         self.flushes = 0
 
     def set_backend(self, backend: SoundBackend) -> None:
-        """Swap the playback backend (e.g. EngineApp injects the renderer poster)."""
+        """Swap playback backends; renderer_backend.py posts sound requests to the web window."""
         self._backend = backend
 
     # --- policy ---

@@ -172,7 +172,6 @@ class KeyActionsMixin:
             self._toggle_log()
         elif namespace == "diag" and argument == "where":
             self._diag_where()
-        # "soundpack:toggle" and other namespaces are wired as features land.
 
     def _copy_review_line(self) -> None:
         """Offer the reviewed line for copying, all of it or any part (Ctrl+Shift+C).

@@ -35,7 +35,7 @@ from pathlib import Path
 from genericmud.safepath import sanitize_component, world_component
 
 # (folder under the config dir, suffix after the world's name) for each kind of per-world
-# data. Keep in step with EngineApp.user_rules_dir, _map_path and _pack_vars_path.
+# data. Keep in step with user_rules_dir, _map_path and _pack_vars_path in app/world_files.py.
 WORLD_FILE_ROOTS = (("userpacks", ""), ("maps", ".json"), ("state", "-vars.json"))
 # Appended to a shared folder once every world that used it has its own copy. world_component
 # never keeps "~", so no world can be filed under the retired name and adopt it.
@@ -47,8 +47,8 @@ def migrate_world_files(config: Path, world_names: Iterable[str]) -> list[str]:
     """Move or copy saved worlds' files to their current names; one line per change.
 
     Never raises. A move or copy that fails is reported and leaves the files where they
-    were, where the session's own fallback (``EngineApp._world_path``) can still find a
-    single owner's folder, and the next launch tries again.
+    were, where the session's own fallback (``app/world_files.py``: ``_world_path``) can still
+    find a single owner's folder, and the next launch tries again.
     """
     names = list(dict.fromkeys(world_names))
     filed_now = {world_component(name).casefold() for name in names}

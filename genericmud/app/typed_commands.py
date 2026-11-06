@@ -37,7 +37,6 @@ class TypedCommandsMixin:
     _mxp_login_armed is shared: autologin arms it; typed input disarms it.
     """
 
-
     def on_ws_message(self, message: dict) -> None:
         kind = message.get("type")
         if kind == protocol.INPUT:
@@ -168,7 +167,6 @@ class TypedCommandsMixin:
         treated as game input (aliases still expand); a leading '/' goes to the MUD literally.
         """
         self._dispatch_command(text, allow_client=False)
-
 
     def _client_command(self, text: str) -> bool:
         """Handle "/alias", "/trigger", "/to", ...; False = not one (send to the MUD)."""

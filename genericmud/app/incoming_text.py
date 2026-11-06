@@ -113,7 +113,6 @@ class IncomingTextMixin:
     session_log (_log).
     """
 
-
     def on_telnet_event(self, event: T.Event) -> None:
         if isinstance(event, T.DataReceived):
             self._feed_text(self._decode_server_bytes(event.data))
