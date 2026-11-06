@@ -533,11 +533,19 @@ automation and from the saved rules when they are next saved, which is what MUSH
 a one-shot timer. It has a **Label** and a **Group**
 like triggers and aliases, so a script switches it by name or with its group.
 
+An interval timer can also take an **offset**: the number of seconds *before* its interval
+is up that it should fire. Two timers on the same interval with one offset between them take
+turns instead of both going off at once: one set for 120 seconds fires at 120, 240, 360, and
+one set for 120 with an offset of 60 fires at 60, 180, 300. The offset only moves the first
+fire; the gap after that is still the interval. It means nothing for a daily timer, whose
+wait comes from the clock.
+
 Timers are named things in the engine, which is what makes that possible, and the names
 are MUSHclient's:
 
 ```lua
 mud.add_timer("tick", 5, function() mud.command("look") end, {every=5, group="combat"})
+mud.add_timer("pose", 15, function() mud.command("pose") end, {every=15, offset=7.5})
 mud.enable_timer("tick", false)
 mud.delete_timer("tick")
 ```

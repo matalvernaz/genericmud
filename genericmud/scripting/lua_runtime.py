@@ -430,12 +430,15 @@ class MudTable:
 
         Lua has no keyword arguments and ``repeat`` is a reserved word there, so the options
         table is read here: ``mud.add_timer("tick", 5, fn, {every=5, group="combat"})``.
+        ``offset`` is MUSHclient's head start inside the interval: with it, the first fire comes
+        that much sooner, so two timers on one interval can take turns.
         """
 
         def add(name, delay, callback, options=None):
             every = None
             group = ""
             enabled = True
+            offset = 0.0
             if options is not None:
                 value = options["every"] if options["every"] is not None else options["repeat"]
                 if value is not None:
@@ -444,13 +447,21 @@ class MudTable:
                     group = str(options["group"])
                 if options["enabled"] is not None:
                     enabled = bool(options["enabled"])
+                if options["offset"] is not None:
+                    offset = float(options["offset"])
+
             def fire() -> None:
                 # Under the guard, like mud.timer's callback: a Lua error is reported to the
                 # player and the timer survives it, instead of dying into the crash log.
                 self._run_callback(callback, None)
 
             return self._api.add_named_timer(
-                str(name), float(delay), fire, every=every, group=group, enabled=enabled
+                str(name),
+                max(float(delay) - offset, 0.0),
+                fire,
+                every=every,
+                group=group,
+                enabled=enabled,
             )
 
         return add

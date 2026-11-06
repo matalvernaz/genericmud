@@ -146,14 +146,19 @@ class UserTimer:
     """Something to do on a clock rather than on a line (MUSHclient's timer).
 
     Two shapes, as MUSHclient has them: every so often (``every`` seconds), or once a day at a
-    time (``at``, "HH:MM:SS"). ``one_shot`` does it once and stops. What it does is the same
-    question every other rule answers -- a text and a send-to target -- so a timer can send to
-    the MUD, put something in your command box, write a note, or run Lua.
+    time (``at``, "HH:MM:SS"). ``one_shot`` does it once and stops, and ``offset`` makes an
+    interval timer fire early within its interval. What it does is the same question every other
+    rule answers -- a text and a send-to target -- so a timer can send to the MUD, put something
+    in your command box, write a note, store a value, or run Lua.
     """
 
     label: str = ""  # MUSHclient's timer name: the handle a script switches it by
     enabled: bool = True
     every: float = 0.0  # seconds between fires; 0 means "not an interval timer"
+    # MUSHclient's offset: fire this many seconds *before* the interval is up, so two timers on
+    # the same interval take turns instead of both going off at once. It only shifts the wait
+    # before the first fire; the gap between fires is ``every`` either way.
+    offset: float = 0.0
     at: str = ""  # "HH:MM:SS" for a daily timer; "" means "not a daily one"
     one_shot: bool = False
     send: str = ""
@@ -590,6 +595,14 @@ def extra_words_pattern(shortcut: str) -> str:
     return re.escape(shortcut) + r"[ \t]+(.*\S)[ \t]*\Z"
 
 
+def _seconds(value: object) -> float:
+    """A saved number of seconds, whatever JSON handed back; 0 when it is not one."""
+    try:
+        return float(value)  # type: ignore[arg-type]  # a field read back from a file
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _rule_name(rule: object) -> str:
     """What to call a rule in a spoken complaint: its label, else what it matches or when."""
     label = str(getattr(rule, "label", "") or "").strip()
@@ -628,6 +641,28 @@ def _check_variable_targets(rules: UserRules) -> None:
             )
 
 
+def _check_timer_offsets(rules: UserRules) -> None:
+    """Refuse an offset that is not a head start inside its own interval.
+
+    The offset is subtracted from the wait before the first fire, so an offset at or past the
+    interval asks for a fire before the timer starts. Said rather than clamped: the number is
+    the player's, and a quiet clamp would hide the typo that made it wrong. A time of day has no
+    interval to be inside -- its wait comes from the clock -- and keeps its offset unused.
+    """
+    for timer in rules.timers:
+        if not timer.enabled or not str(timer.send).strip():
+            continue  # only what will actually be scheduled
+        offset = _seconds(timer.offset)
+        interval = _seconds(timer.every)
+        if offset < 0:
+            raise ValueError(f"the timer {_rule_name(timer)} has a negative offset")
+        if offset and interval > 0 and offset >= interval:
+            raise ValueError(
+                f"the timer {_rule_name(timer)}: the offset ({offset:g} seconds) has to be "
+                f"less than the interval ({interval:g} seconds)"
+            )
+
+
 def register_rules(api: ScriptApi, rules: UserRules) -> None:
     """Register every rule on the engine under the ``user`` source.
 
@@ -636,6 +671,7 @@ def register_rules(api: ScriptApi, rules: UserRules) -> None:
     first when reloading.
     """
     _check_variable_targets(rules)
+    _check_timer_offsets(rules)
     for channel in rules.channels:
         if channel.enabled and channel.name:
             api.set_channel(
@@ -814,9 +850,22 @@ def timer_name(t: UserTimer, place: int = 0) -> str:
     return f"timer {t.at or f'{float(t.every):g}s'} #{place + 1}"
 
 
+def first_wait(interval: float, offset: object) -> float:
+    """How long an interval timer waits before its first fire.
+
+    MUSHclient's offset is a head start *inside* the interval, so the first fire comes that much
+    before the interval would be up: "every 120 seconds, offset 60" fires after 60, then 120, 120.
+    That is what lets two timers on one interval take turns. The interval itself is unchanged,
+    which is why a time of day has no use for it: its wait comes from the clock, not from a start.
+    """
+    return max(interval - _seconds(offset), 0.0)
+
+
 def _register_timer(
     api: ScriptApi, t: UserTimer, *, now=datetime.now, place: int = 0
 ) -> None:
+
+
     """Schedule one timer under a name, so a label or a group can switch it later.
 
     A draft with no label still gets a name of its own (its place in the file), so every timer
@@ -841,16 +890,18 @@ def _register_timer(
 
     # A timer that names a time of day has no fixed period -- its wait is "until the next
     # 03:00" -- so it asks the clock each time; an interval timer just repeats.
-    daily = at is not None and not t.one_shot
-    every = None if t.one_shot or at is not None else float(t.every)
-    delay = next_daily_wait(at, now=now())[1] if at is not None else float(t.every)
+    repeating_daily = at is not None and not t.one_shot
+    repeat = None if t.one_shot or at is not None else float(t.every)
+    delay = (
+        next_daily_wait(at, now=now())[1] if at is not None else first_wait(t.every, t.offset)
+    )
     name = timer_name(t, place)
     api.add_named_timer(
         name,
         delay,
         fire,
-        every=every,
-        next_delay=(lambda: next_daily_wait(at, now=now())[1]) if daily else None,
+        every=repeat,
+        next_delay=(lambda: next_daily_wait(at, now=now())[1]) if repeating_daily else None,
         group=t.group.strip(),
         enabled=t.enabled,
     )

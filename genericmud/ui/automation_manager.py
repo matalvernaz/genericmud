@@ -86,6 +86,10 @@ def _rule_summary(kind: str, rule) -> str:
             if rule.every > 0 and not rule.at.strip()
             else f"each day at {rule.at or '?'}"
         )
+        if getattr(rule, "offset", 0) and rule.every > 0 and not rule.at.strip():
+            # Saying it matters: two timers on one interval take turns, and the list is where
+            # you see which one goes first.
+            when += f", offset {rule.offset:g} seconds"
         once = ", once only" if rule.one_shot else ""
         # "every 30 seconds: look" already reads as what happens; only a variable target needs
         # saying, because "every 30 seconds: ${1}" would not tell you where it went.

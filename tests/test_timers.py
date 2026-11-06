@@ -172,6 +172,78 @@ def test_a_timer_with_no_shape_is_not_scheduled(tmp_path):
     assert scheduled == []
 
 
+# --- offsets: firing early within the interval, so two timers take turns ----------------
+
+
+def test_an_offset_makes_the_first_fire_come_early(tmp_path):
+    _sink, _engine, scheduled = _scheduled(
+        tmp_path, UserTimer(every=120, offset=60, send="look")
+    )
+    assert [delay for delay, _callback in scheduled] == [60]
+
+
+def test_an_offset_leaves_the_interval_between_fires_alone(tmp_path):
+    # "every 120, offset 60" fires after 60, then 120 later: it is the phase that moves.
+    sink, _engine, scheduled = _scheduled(
+        tmp_path, UserTimer(every=120, offset=60, send="look")
+    )
+    _fire(sink, 0)
+    assert [delay for delay, _callback in scheduled] == [60, 120]
+
+
+def test_two_timers_on_one_interval_take_turns_with_offsets(tmp_path):
+    # MUSHclient's own example: the same interval twice, one of them offset, so the two
+    # messages are not shown in one breath.
+    _sink, _engine, scheduled = _scheduled(
+        tmp_path,
+        UserTimer(every=120, send="pose looks around", label="a"),
+        UserTimer(every=120, offset=60, send="pose scratches", label="b"),
+    )
+    assert sorted(delay for delay, _callback in scheduled) == [60, 120]
+
+
+def test_no_offset_is_the_whole_interval_as_before(tmp_path):
+    _sink, _engine, scheduled = _scheduled(tmp_path, UserTimer(every=30, send="look"))
+    assert [delay for delay, _callback in scheduled] == [30]
+
+
+def test_an_offset_is_ignored_by_a_daily_timer(tmp_path):
+    # A time of day has no interval to be inside: its wait comes from the clock.
+    _sink, _engine, scheduled = _scheduled(
+        tmp_path, UserTimer(at="03:00", offset=60, send="look")
+    )
+    assert len(scheduled) == 1
+    delay, _callback = scheduled[0]
+    assert 0 < delay <= 86400
+
+
+def test_an_offset_past_the_interval_is_refused(tmp_path):
+    # It would ask for a fire before the timer starts, so it is said rather than clamped.
+    with pytest.raises(ValueError, match="less than the interval"):
+        _scheduled(tmp_path, UserTimer(every=60, offset=60, send="look"))
+
+
+def test_a_negative_offset_is_refused(tmp_path):
+    with pytest.raises(ValueError, match="negative offset"):
+        _scheduled(tmp_path, UserTimer(every=60, offset=-1, send="look"))
+
+
+def test_a_disabled_timer_may_have_a_offset_it_will_not_use(tmp_path):
+    # Same rule as a draft with no variable name: only what will be scheduled is checked.
+    _sink, _engine, scheduled = _scheduled(
+        tmp_path, UserTimer(every=60, offset=90, send="look", enabled=False)
+    )
+    assert scheduled == []
+
+
+def test_the_offset_survives_a_saved_rules_file(tmp_path):
+    from genericmud.packs.user_rules import rules_path
+
+    save_rules(tmp_path, UserRules(timers=[UserTimer(every=120, offset=45, send="look")]))
+    assert "offset" in rules_path(tmp_path).read_text(encoding="utf-8")
+    assert load_rules(tmp_path).timers[0].offset == 45
+
+
 # --- daily timers --------------------------------------------------------------------
 
 
@@ -261,6 +333,12 @@ def test_a_timer_reads_out_in_the_list():
     assert daily == "Timer: each day at 03:00, once only: backup"
     named = _rule_summary("timer", UserTimer(label="tick", every=5, send="look"))
     assert named.startswith("tick: Timer:")
+    # The offset is said, because it is how you tell which of two timers goes first.
+    offset = _rule_summary("timer", UserTimer(every=120, offset=60, send="look"))
+    assert offset == "Timer: every 120 seconds, offset 60 seconds: look"
+    # A daily timer keeps its offset unused, so the list must not claim it fires early.
+    daily_offset = _rule_summary("timer", UserTimer(at="03:00", offset=60, send="look"))
+    assert daily_offset == "Timer: each day at 03:00: look"
 
 
 def test_the_timer_editor_round_trips(tmp_path):
@@ -281,6 +359,8 @@ def test_the_timer_editor_round_trips(tmp_path):
         assert dialog._kind.GetSelection() == 0  # every so often
         result = dialog.result()
         assert (result.label, result.every, result.send_to) == ("tick", 15, "command")
+        dialog._offset.SetValue("5")
+        assert dialog.result().offset == 5
         dialog._kind.SetSelection(1)
         dialog._at.SetValue("03:30")
         assert dialog.result().at == "03:30"
@@ -589,3 +669,18 @@ def test_the_engine_remembers_a_spent_one_shot_and_forgets_it_on_reload(tmp_path
     assert engine.spent_one_shots == {"once": "user"}
     engine.remove_source("user")  # the manager has saved by now
     assert engine.spent_one_shots == {}
+def test_lua_takes_the_offset_too(tmp_path):
+    # The same head start the editor offers: the first fire comes offset seconds sooner.
+    pytest.importorskip("lupa")
+    from genericmud.scripting.lua_runtime import LuaPackRuntime
+
+    sink = RecordingSink()
+    engine = AutomationEngine(sink)
+    runtime = LuaPackRuntime(ScriptApi(engine, source="probe"))
+    runtime.run_source(
+        'mud.add_timer("lua-offset", 120, function() end, {every=120, offset=60})'
+    )
+    timer = engine.named_timer("lua-offset")
+    assert timer is not None
+    assert timer.delay == 60  # the wait before the first fire
+    assert timer.every == 120  # the interval itself is untouched

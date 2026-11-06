@@ -651,6 +651,11 @@ class TimerEditorDialog(_RuleEditorBase):
         self._every.SetName("Every this many seconds")
         self._every_row = grid.GetItemCount()
         grid.Add(self._every, 1, wx.EXPAND)
+        grid.Add(wx.StaticText(self, label="Offset in seconds, be&fore the interval is up:"))
+        grid.Add(wx.StaticText(self, label=""))
+        self._offset = wx.TextCtrl(self, value=str(timer.offset or ""))
+        self._offset.SetName("Offset in seconds, before the interval is up")
+        grid.Add(self._offset, 1, wx.EXPAND)
         grid.Add(wx.StaticText(self, label="At this &time each day (HH:MM:SS):"))
         grid.Add(wx.StaticText(self, label=""))
         self._at = wx.TextCtrl(self, value=timer.at)
@@ -681,6 +686,7 @@ class TimerEditorDialog(_RuleEditorBase):
             # One shape or the other, never both: a daily timer that keeps a number in the Every
             # box would fire on that interval, which is not what "Once a day" says.
             every=0.0 if daily else self._number(self._every.GetValue()),
+            offset=self._number(self._offset.GetValue()),
             at=self._at.GetValue().strip() if daily else "",
             one_shot=self._one_shot.GetValue(),
             send=self._send.GetValue().strip(),
