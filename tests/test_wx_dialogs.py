@@ -45,7 +45,7 @@ def _accept(dialog) -> None:
 @pytest.mark.parametrize("interval", [1, 5, 300])
 def test_connection_settings_dialog_uses_named_native_controls(frame, enabled, interval):
     from genericmud.config.ui_prefs import UiPrefs
-    from genericmud.ui.wx_app import ConnectionSettingsDialog
+    from genericmud.ui.connect_dialog import ConnectionSettingsDialog
 
     prefs = UiPrefs(auto_reconnect=enabled, reconnect_interval=interval)
     dialog = ConnectionSettingsDialog(frame, prefs)
@@ -75,7 +75,7 @@ def test_connection_settings_dialog_uses_named_native_controls(frame, enabled, i
 
 
 def test_world_dialog_offers_every_encoding_and_starts_on_automatic(frame):
-    from genericmud.ui.wx_app import WorldDialog
+    from genericmud.ui.world_dialog import WorldDialog
 
     dialog = WorldDialog(frame)
     try:
@@ -87,7 +87,7 @@ def test_world_dialog_offers_every_encoding_and_starts_on_automatic(frame):
 
 
 def test_world_dialog_round_trips_the_encoding(frame):
-    from genericmud.ui.wx_app import WorldDialog
+    from genericmud.ui.world_dialog import WorldDialog
 
     dialog = WorldDialog(frame, World("Bylins", "bylins.example", 4000, encoding="koi8-r"))
     try:
@@ -101,7 +101,7 @@ def test_world_dialog_round_trips_the_encoding(frame):
 
 def test_world_dialog_label_precedes_the_encoding_choice(frame):
     # NVDA names a control from the StaticText created immediately before it.
-    from genericmud.ui.wx_app import WorldDialog
+    from genericmud.ui.world_dialog import WorldDialog
 
     dialog = WorldDialog(frame)
     try:
@@ -114,7 +114,7 @@ def test_world_dialog_label_precedes_the_encoding_choice(frame):
 
 
 def test_connect_dialog_names_a_non_automatic_encoding(frame):
-    from genericmud.ui.wx_app import ConnectDialog
+    from genericmud.ui.connect_dialog import ConnectDialog
 
     dialog = ConnectDialog(
         frame,
@@ -749,7 +749,7 @@ def test_closing_the_tab_tears_the_session_down_even_if_a_question_wont_close(
 
 
 def test_world_dialog_round_trips_command_stacking_and_logging(frame):
-    from genericmud.ui.wx_app import WorldDialog
+    from genericmud.ui.world_dialog import WorldDialog
 
     world = World(
         "Chat", "chatmud.com", 7777, command_stacking=False, command_separator="|",
@@ -769,11 +769,11 @@ def test_world_dialog_round_trips_command_stacking_and_logging(frame):
 
 
 def test_world_dialog_refuses_a_separator_that_cant_work(frame, monkeypatch):
-    from genericmud.ui import wx_app
+    from genericmud.ui import world_dialog
 
     told: list[str] = []
     monkeypatch.setattr(wx, "MessageBox", lambda text, *_args: told.append(text))
-    dialog = wx_app.WorldDialog(frame, World("A", "a.example", 23))
+    dialog = world_dialog.WorldDialog(frame, World("A", "a.example", 23))
     try:
         dialog._separator.SetValue("/")
         _accept(dialog)
@@ -1621,7 +1621,7 @@ def test_genericmud_is_in_front_while_it_is_the_active_program(frame, tmp_path, 
 def test_the_sounds_folder_says_what_blank_means(frame):
     # After installing a soundpack the box was blank and nothing said why, which read as
     # "this world has no sounds". Blank means the pack plays its own.
-    from genericmud.ui.wx_app import WorldDialog
+    from genericmud.ui.world_dialog import WorldDialog
 
     dialog = WorldDialog(frame)
     try:
@@ -1637,7 +1637,7 @@ def test_the_sounds_folder_says_what_blank_means(frame):
 def test_the_world_dialog_prefills_saves_and_moves_a_stored_login(frame, tmp_path):
     from genericmud.config.worlds import World
     from genericmud.session.credentials import PlaintextCredentialStore
-    from genericmud.ui.wx_app import WorldDialog
+    from genericmud.ui.world_dialog import WorldDialog
 
     store = PlaintextCredentialStore(tmp_path / "c.json")
     store.set("Old", "hero", "secret")
@@ -1660,7 +1660,7 @@ def test_a_soundpack_world_on_another_server_gets_no_saved_login(frame, tmp_path
     # must not be handed that login, and renaming it must not take the original's login away.
     from genericmud.config.worlds import World
     from genericmud.session.credentials import PlaintextCredentialStore
-    from genericmud.ui.wx_app import WorldDialog
+    from genericmud.ui.world_dialog import WorldDialog
 
     store = PlaintextCredentialStore(tmp_path / "c.json")
     store.set("Erion", "hero", "secret")
@@ -1683,7 +1683,7 @@ def test_a_soundpack_world_on_another_server_gets_no_saved_login(frame, tmp_path
 
 def test_a_login_the_store_refuses_keeps_the_dialog_open_and_says_why(frame, monkeypatch):
     from genericmud.config.worlds import World
-    from genericmud.ui.wx_app import WorldDialog
+    from genericmud.ui.world_dialog import WorldDialog
 
     class LockedStore:
         def get(self, world):
@@ -1712,7 +1712,7 @@ def test_a_login_the_store_refuses_keeps_the_dialog_open_and_says_why(frame, mon
 
 def test_a_world_dialog_note_comes_first_and_labels_no_control(frame):
     # NVDA reads a dialog's text that labels no control as the dialog opens.
-    from genericmud.ui.wx_app import WorldDialog
+    from genericmud.ui.world_dialog import WorldDialog
 
     dialog = WorldDialog(frame, note="The pack is in. Press Enter & connect.")
     plain = WorldDialog(frame)
@@ -1769,7 +1769,7 @@ def test_installing_a_pack_with_its_own_sounds_says_the_folder_can_stay_blank(
 
 def test_revealing_the_password_keeps_what_was_typed(frame, tmp_path):
     from genericmud.config.worlds import World
-    from genericmud.ui.wx_app import WorldDialog
+    from genericmud.ui.world_dialog import WorldDialog
 
     dialog = WorldDialog(frame, World("W", "h.example", 4000))
     try:
@@ -1791,7 +1791,7 @@ def test_revealing_the_password_keeps_what_was_typed(frame, tmp_path):
 def test_clearing_both_login_fields_forgets_the_stored_login(frame, tmp_path):
     from genericmud.config.worlds import World
     from genericmud.session.credentials import PlaintextCredentialStore
-    from genericmud.ui.wx_app import WorldDialog
+    from genericmud.ui.world_dialog import WorldDialog
 
     store = PlaintextCredentialStore(tmp_path / "c.json")
     store.set("Gone", "hero", "secret")
@@ -1810,7 +1810,7 @@ def test_clearing_both_login_fields_forgets_the_stored_login(frame, tmp_path):
 def test_a_new_world_starts_on_no_auto_connect(frame):
     # With the login boxes empty there is nothing to send, so a new world must not offer to
     # send one; Automatic is a deliberate switch once a login has been stored.
-    from genericmud.ui.wx_app import WorldDialog
+    from genericmud.ui.world_dialog import WorldDialog
 
     dialog = WorldDialog(frame)
     try:

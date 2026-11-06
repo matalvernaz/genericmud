@@ -30,7 +30,7 @@ def frame():
 
 
 def _dialog(frame, *args, **kwargs):
-    from genericmud.ui.wx_app import WorldDialog
+    from genericmud.ui.world_dialog import WorldDialog
 
     return WorldDialog(frame, *args, **kwargs)
 
@@ -98,7 +98,7 @@ def _frame_shape(monkeypatch):
 
 def test_the_new_world_dialog_offers_three_ways_to_press_ok(frame):
     # One control holding all three, so nothing is hidden and nothing has to be remembered.
-    from genericmud.ui.wx_app import _OK_CHOICES
+    from genericmud.ui.world_dialog import _OK_CHOICES
 
     dialog = _dialog(frame, show_connect=True)
     try:
@@ -273,7 +273,7 @@ def test_cancelling_says_nothing_and_saves_nothing(monkeypatch):
 
 
 def test_the_saved_world_list_opens_on_the_world_it_is_given(frame):
-    from genericmud.ui.wx_app import ConnectDialog
+    from genericmud.ui.connect_dialog import ConnectDialog
 
     worlds = [World("Aard", "a.example", 4000), World("Pen", "p.example", 4000)]
     dialog = ConnectDialog(frame, worlds, preselect="Pen")
@@ -284,7 +284,7 @@ def test_the_saved_world_list_opens_on_the_world_it_is_given(frame):
 
 
 def test_a_preselect_that_is_not_there_picks_the_first_row(frame):
-    from genericmud.ui.wx_app import ConnectDialog
+    from genericmud.ui.connect_dialog import ConnectDialog
 
     dialog = ConnectDialog(
         frame, [World("Aard", "a.example", 4000)], preselect="Not There"
@@ -298,7 +298,7 @@ def test_a_preselect_that_is_not_there_picks_the_first_row(frame):
 def test_saving_without_connecting_returns_to_the_list_with_it_picked(monkeypatch):
     # The list is where the reader was, so that is where they should land, with the new world
     # under the cursor and one Enter away from connecting.
-    from genericmud.ui import wx_app
+    from genericmud.ui import connect_dialog, wx_app
 
     frame = _frame_shape(monkeypatch)
     _FakeWorldDialog.connect = False
@@ -319,7 +319,7 @@ def test_saving_without_connecting_returns_to_the_list_with_it_picked(monkeypatc
         def Destroy(self):
             pass
 
-    FakeConnectDialog.answers = [wx_app._ID_NEW_WORLD, wx.ID_CANCEL]
+    FakeConnectDialog.answers = [connect_dialog._ID_NEW_WORLD, wx.ID_CANCEL]
     monkeypatch.setattr(wx_app, "ConnectDialog", FakeConnectDialog)
 
     frame._on_connect(None)
@@ -332,7 +332,7 @@ def test_saving_without_connecting_returns_to_the_list_with_it_picked(monkeypatc
 def test_editing_a_world_returns_to_the_list_with_it_still_picked(monkeypatch):
     # After an edit the reader goes back to the list, and should land where they were: on the
     # world they edited, under its new name if they renamed it, not at the top of the list.
-    from genericmud.ui import wx_app
+    from genericmud.ui import connect_dialog, wx_app
 
     frame = _frame_shape(monkeypatch)
     seen: list[object] = []
@@ -354,7 +354,9 @@ def test_editing_a_world_returns_to_the_list_with_it_still_picked(monkeypatch):
             pass
 
     renamed = World("Penultimate Destination", "pen.example", 9500)
-    FakeConnectDialog.answers = [wx_app._ID_EDIT_WORLD, wx_app._ID_EDIT_WORLD, wx.ID_CANCEL]
+    FakeConnectDialog.answers = [
+        connect_dialog._ID_EDIT_WORLD, connect_dialog._ID_EDIT_WORLD, wx.ID_CANCEL
+    ]
     results = [renamed, None]  # renamed the first time, cancelled the second
     monkeypatch.setattr(wx_app, "ConnectDialog", FakeConnectDialog)
     frame._edit_saved_world = lambda world: results.pop(0)

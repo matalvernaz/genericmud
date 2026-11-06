@@ -210,7 +210,7 @@ def window():
 
 
 def _dialog(window, *names: str):
-    from genericmud.ui.wx_app import ConnectDialog
+    from genericmud.ui.connect_dialog import ConnectDialog
 
     return ConnectDialog(window, [World(name, "h.example", 4000) for name in names])
 
@@ -261,9 +261,9 @@ def test_the_delete_key_removes_the_picked_world(window):
         assert dialog._choice.GetSelection() == 0
         dialog._on_choice_key(_KeyEvent(wx.WXK_DELETE))
         # The accelerator and the button both end the dialog with the delete result.
-        from genericmud.ui import wx_app
+        from genericmud.ui import connect_dialog
 
-        assert ended[0] == wx_app._ID_DELETE_WORLD
+        assert ended[0] == connect_dialog._ID_DELETE_WORLD
     finally:
         dialog.Destroy()
 
@@ -334,7 +334,7 @@ def test_the_mac_delete_key_removes_the_picked_world(window, monkeypatch):
     # On a Mac keyboard the key labelled "delete" arrives as Backspace; the forward delete the
     # README's "Delete key" means elsewhere needs fn there.
     wx = pytest.importorskip("wx")
-    from genericmud.ui import wx_app
+    from genericmud.ui import connect_dialog
 
     dialog = _dialog(window, "Pen")
     ended: list[int] = []
@@ -342,7 +342,7 @@ def test_the_mac_delete_key_removes_the_picked_world(window, monkeypatch):
     try:
         monkeypatch.setattr(sys, "platform", "darwin")
         dialog._on_choice_key(_KeyEvent(wx.WXK_BACK))
-        assert ended == [wx_app._ID_DELETE_WORLD]
+        assert ended == [connect_dialog._ID_DELETE_WORLD]
     finally:
         dialog.Destroy()
 
