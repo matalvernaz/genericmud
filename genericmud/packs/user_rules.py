@@ -35,6 +35,9 @@ SOURCE = "user"  # registration source: remove_source(SOURCE) clears rules for r
 DEFAULT_ORDER = 100
 RULES_FILENAME = "rules.json"
 SOUNDS_DIRNAME = "sounds"  # picked sound files are copied here (keeps the pack portable)
+# The order a rule has when the player has not put it in one. Lower numbers are tried first, and
+# equal numbers fall back to the pattern text, so this is the value that means "no order set",
+# and the manager's list says nothing about a rule left at it.
 
 _CAPTURE_RE = re.compile(r"%(\d)")
 _GAG_CHOICES = ("none", "speech", "line")

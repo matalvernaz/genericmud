@@ -609,7 +609,8 @@ rules always did. **Keep checking the rules after this one** is on for a trigger
 alias: your first matching alias has always taken the command on its own, and clearing the box
 makes a trigger the last one heard about the line. A player trigger that stops the search
 never stops a soundpack's triggers; MUSHclient draws the same line between one plugin and the
-next.
+next. The manager's list says a rule's order beside its kind when you have set one, so two
+rules can be compared without opening them.
 
 **A Group** is on everything that can run: rules sharing a name switch together, so
 `mud.set_group_enabled("combat", false)` turns all of them off in one call -- MUSHclient's

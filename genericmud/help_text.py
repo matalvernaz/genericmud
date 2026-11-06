@@ -166,7 +166,8 @@ text. A rule you have not ordered sits above a soundpack's rules, as your rules 
 did. Keep checking the rules after this one is on for a trigger and off for an alias,
 since your first matching alias has always taken the command alone; clearing it makes a
 trigger the last one heard about the line. A player trigger that stops the search never
-silences a soundpack.
+silences a soundpack. The manager's list says a rule's order beside its kind when you have
+set one, so two rules can be compared without opening them.
 
 A timer (Timers in the Automation Manager) acts on a clock rather than on a line:
 every so often, or once a day at a time such as 03:00. What it does is the same
