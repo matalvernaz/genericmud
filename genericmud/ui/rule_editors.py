@@ -218,6 +218,14 @@ class TriggerEditorDialog(_RuleEditorBase):
         outer_gag = self._gag
         grid.Add(wx.StaticText(self, label=""))
         grid.Add(outer_gag, 1, wx.EXPAND)
+        # Separate from the line handling above on purpose: what is worth reading now is not
+        # always worth keeping in the file, and what is worth keeping is not always worth
+        # hearing. A repeating notice is the case this exists for.
+        self._omit_log = wx.CheckBox(self, label="Lea&ve this line out of the session log")
+        self._omit_log.SetName("Leave this line out of the session log")
+        self._omit_log.SetValue(trigger.omit_log)
+        grid.Add(wx.StaticText(self, label=""))
+        grid.Add(self._omit_log)
         self._channel = self._text(
             grid, "Route to &channel (optional, e.g. chat):", trigger.channel
         )
@@ -249,6 +257,7 @@ class TriggerEditorDialog(_RuleEditorBase):
             speak=self._speak.GetValue().strip(),
             send=self._send.GetValue().strip(),
             gag=("none", "speech", "line")[self._gag.GetSelection()],
+            omit_log=self._omit_log.GetValue(),
             channel=self._channel.GetValue().strip(),
             stop_channel=self._stop_channel.GetValue().strip(),
             match=match,

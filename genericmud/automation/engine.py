@@ -177,6 +177,7 @@ class _Rule:
     enabled: bool = True
     gag: bool = False
     gag_but_display: bool = False
+    omit_from_log: bool = False
     keep_evaluating: bool = True
     source: str = ""
     channel: str | None = None
@@ -328,6 +329,7 @@ class AutomationEngine:
         name: str = "",
         gag: bool = False,
         gag_but_display: bool = False,
+        omit_from_log: bool = False,
         keep_evaluating: bool = True,
         source: str = "",
         channel: str | None = None,
@@ -342,6 +344,7 @@ class AutomationEngine:
             True,
             gag,
             gag_but_display,
+            omit_from_log,
             keep_evaluating,
             source,
             channel,
@@ -674,6 +677,8 @@ class AutomationEngine:
             if rule.gag or rule.gag_but_display:
                 line.gagged = True
                 line.display_when_gagged = rule.gag_but_display
+            if rule.omit_from_log:
+                line.omit_from_log = True
             if rule.callback is not None:
                 rule.callback(MatchContext(line, _wildcards(match), _named(match), self))
             if not rule.keep_evaluating:
