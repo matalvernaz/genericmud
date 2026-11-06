@@ -11,7 +11,7 @@ import asyncio
 import pytest
 
 from genericmud.app import EngineApp
-from genericmud.app.engine_app import INTERACTIVE_SOURCE
+from genericmud.app.typed_commands import INTERACTIVE_SOURCE
 from genericmud.automation.engine import AutomationEngine, EngineSink
 from genericmud.model.buffer import Line
 from genericmud.navigation import _MAX_SPEEDWALK_STEPS, expand_speedwalk
