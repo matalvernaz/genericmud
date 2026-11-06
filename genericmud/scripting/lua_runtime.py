@@ -348,6 +348,7 @@ class LuaPackRuntime:
         mud.timer = self._lua_timer()
         mud.on_data = self._lua_on_data()
         mud.set_channel = self._lua_set_channel()
+        mud.set_enabled = api.set_enabled  # MUSHclient's EnableTrigger, by label
         self._lua.globals().mud = mud
 
     def _run_callback(self, callback, ctx: MatchContext | None, *args: object):
@@ -521,6 +522,35 @@ class LuaPackRuntime:
             )
 
         return factory
+
+    def function(self, name: str):
+        """A Lua function this script's source defined, or None (MUSHclient's named routine)."""
+        try:
+            value = self._lua.globals()[name]
+        except Exception:  # noqa: BLE001 - a name that is not there is simply not there
+            return None
+        return value if value is not None and callable(value) else None
+
+    def set_match(self, line: str, wildcards) -> None:
+        """Offer the match to code that runs next: globals ``line`` and ``wildcards``.
+
+        A called function gets them as arguments; code a rule runs inline has nowhere else to
+        read them from, and "the line that matched" is the first thing such code wants.
+        """
+        values = self._lua.globals()
+        values.line = str(line)
+        values.wildcards = self.table_of(wildcards)
+
+    def table_of(self, values):
+        """Values as a 1-based Lua table, the shape a ``mud`` callback's captures take.
+
+        Built by hand rather than with ``table_from``: its arguments differ across lupa
+        versions, and a captured line is not worth a version fight.
+        """
+        table = self._lua.table()
+        for position, value in enumerate(values, start=1):
+            table[position] = value
+        return table
 
     def run_source(self, code: str):
         return self._guard.run_strict(self._lua.execute, code)
