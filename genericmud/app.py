@@ -1736,7 +1736,9 @@ class EngineApp:
             if name.strip().upper() in ("SSL", "TLS"):
                 advertised = str(value).strip()
                 break
-        port = int(advertised) if advertised.isdigit() else 0
+        # isdecimal, not isdigit: "²" is a digit that int() refuses, and so is a number longer
+        # than Python will convert. Either would stop this MSSP reply half handled.
+        port = int(advertised) if advertised.isdecimal() and len(advertised) <= 5 else 0
         plausible = port in _ALLOWED_LOW_PORTS or 1024 <= port <= 65535
         if not plausible or port == self._world_port:
             if advertised and self._diag is not None:

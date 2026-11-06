@@ -1255,19 +1255,32 @@ class SessionPanel(wx.Panel):
         if self.app is not None:
             self.app.on_focus_changed(focused)
 
-    def use_secure_port(self, port: int) -> bool:  # UI thread
+    def use_secure_port(self, port: int) -> bool:  # loop thread
         """Move this world to the encrypted port the MUD advertised, save it, and reconnect.
 
         The engine asks and the window acts, because the world file and the connection live
         here. Saving the change is the point rather than a side effect: the next session is
         encrypted too, without anyone having to remember a port number.
+
+        The engine asks from its own thread, where no window may be touched (saving can put
+        up a message box), so the work is handed to the window's thread.
         """
-        if port <= 0 or (self.world.tls and self.world.port == port):
+        if not self._alive or port <= 0 or (self.world.tls and self.world.port == port):
             return False
+        wx.CallAfter(self._take_secure_port, port)
+        return True
+
+    def _take_secure_port(self, port: int) -> None:  # UI thread
+        if not self._alive:
+            return
         self.world = replace(self.world, port=port, tls=True)
+        # Saved again only if it is in the saved list: a world the player chose not to keep
+        # stays unkept, and this tab still switches.
+        name = self.world.name.casefold()
+        kept = any(saved.name.casefold() == name for saved in load_worlds())
         frame = wx.GetTopLevelParent(self)
         save = getattr(frame, "_save_world", None)
-        if save is not None:
+        if kept and save is not None:
             # `replacing` is its own name: editing the world, not clobbering a different one.
             save(self.world, replacing=self.world.name)
         # The engine's own picture of this link decides whether to offer again: without telling
@@ -1279,7 +1292,6 @@ class SessionPanel(wx.Panel):
         # up, which is exactly what a /secure from a live session is. So the live link goes
         # first, and the new port is taken on the loop thread once it has gone.
         self._loop.call_soon_threadsafe(lambda: asyncio.create_task(self._switch_secure_port()))
-        return True
 
     async def _switch_secure_port(self) -> None:  # loop thread
         """Close the live link and open it again on the world's new port.
@@ -1297,6 +1309,14 @@ class SessionPanel(wx.Panel):
             await asyncio.sleep(0.025)
         self._reconnecting = False
         await self._reconnect()
+        if not self._alive or not self._connection.connected:
+            return  # the reconnect said what went wrong itself
+        # The switch was said before the link dropped, and the disconnect and reconnect lines
+        # that follow cut it off mid-word. Queued after them, this is what is left to hear.
+        text = f"{self.world.name} is on port {self.world.port} now, encrypted."
+        self._post(protocol.echo(f"* {text}"))
+        if self._voice is not None:
+            self._voice.speak(text, channel="system", interrupt=False)
 
     def apply_world_settings(self, world: World) -> None:  # UI thread
         """Take a world's edited stacking, logging, echo, login, MXP and sound downloads now. How
