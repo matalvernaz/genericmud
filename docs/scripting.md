@@ -77,7 +77,10 @@ an alias for `sh *`, or one from a soundpack, still comes first. Lua's
 1. Show **Triggers** and choose **New**.
 2. Enter the text to watch for. **The line contains this text** is usually the
    right match choice. Wildcards, exact whole lines, and regular expressions
-   are also available.
+   are also available. **Ignore capitals** is ticked on a new rule, so a rule
+   written `brady` finds "Brady pages:" too; clear it when the capitals are the
+   point. A rule you saved before this version keeps matching capitals exactly
+   until you tick the box, the way MUSHclient and VIPMud match.
 3. Fill in any actions you need, in the order the editor asks for them: commands
    and where they go, spoken text, speech interruption, hiding the line,
    **Leave this line out of the session log**, routing it to a channel, and a

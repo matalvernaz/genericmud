@@ -98,6 +98,11 @@ class UserTrigger:
     channel: str = ""  # route the line to this channel ("" = leave on main)
     stop_channel: str = ""  # stop this user cue channel when fired ("" = none)
     match: str = ""  # one of MATCH_CHOICES; "" = legacy file (the regex flag decides)
+    # MUD text is capitalised however its author felt: "Brady pages" arrives as "Brady pages",
+    # "Pages", "PAGES". A rule written to catch one of those should catch them all, so case is
+    # ignored unless this is cleared -- the opposite of MUSHclient's default, and the useful way
+    # round for someone who cannot glance at the line to see why a rule did not fire.
+    ignore_case: bool = True
     interrupt: bool = False  # cut current speech the moment this fires
     # MUSHclient's trigger name: the handle a script turns it off and on with, and what the
     # manager reads out first. Empty means no handle; the manager can still disable it.
@@ -136,6 +141,7 @@ class UserAlias:
     # Off for an alias, which is how this client has always behaved: your first matching alias
     # takes the command, and a later one does not send it a second time.
     keep_evaluating: bool = False
+    ignore_case: bool = True  # as for triggers: what you type is not always spelled one way
     enabled: bool = True
 
 
@@ -232,17 +238,26 @@ class UserRules:
         if not isinstance(data, dict):
             raise ValueError("rules file is not a JSON object")
 
-        def build(kind, items):
+        def build(kind, items, *, missing=None):
             fields = {f for f in kind.__dataclass_fields__}
             out = []
             for item in items or []:
                 if isinstance(item, dict):
-                    out.append(kind(**{k: v for k, v in item.items() if k in fields}))
+                    values = {k: v for k, v in item.items() if k in fields}
+                    out.append(kind(**{**(missing or {}), **values}))
             return out
 
+        # A trigger or alias saved before the Ignore capitals box existed keeps matching capitals
+        # exactly as it did. MUSHclient and VIPMud both match exactly unless asked otherwise, so
+        # that is what those rules were written for, and a name trigger is where the change would
+        # bite: a player called Shadow would start firing it on "the shadow of the tower".
+        # This is filled in here rather than in the dataclass, because a rule made in the editor
+        # opens ticked, and the dataclass default is what the editor starts from.
+        before_the_box = {"ignore_case": False}
+
         return cls(
-            triggers=build(UserTrigger, data.get("triggers")),
-            aliases=build(UserAlias, data.get("aliases")),
+            triggers=build(UserTrigger, data.get("triggers"), missing=before_the_box),
+            aliases=build(UserAlias, data.get("aliases"), missing=before_the_box),
             keys=build(UserKey, data.get("keys")),
             timers=build(UserTimer, data.get("timers")),
             channels=build(UserChannel, data.get("channels")),
@@ -864,6 +879,7 @@ def _register_trigger(api: ScriptApi, t: UserTrigger, *, place: int = 0) -> None
         source=SOURCE,
         name=t.label.strip(),
         group=t.group.strip(),
+        ignore_case=t.ignore_case,
     )
     if rule is not None:
         rule.enabled = t.enabled
@@ -1066,6 +1082,7 @@ def _register_alias(api: ScriptApi, a: UserAlias, *, place: int = 0) -> None:
         priority=DEFAULT_ORDER - int(a.order),
         tiebreak=f"{a.pattern}\x00{place:04d}",
         player=True,  # ahead of a soundpack's alias at the same priority
+        ignore_case=a.ignore_case,
         # An alias that stops stops the whole search, pack aliases included, which is what this
         # client did before orders existed: your first matching alias takes the command.
         stop_scope=None,

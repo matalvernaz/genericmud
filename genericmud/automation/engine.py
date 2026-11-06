@@ -152,7 +152,9 @@ def wildcard_regex(pattern: str) -> str:
     return "".join(out)
 
 
-def compile_pattern(pattern: str, regex: bool, *, whole: bool = False) -> re.Pattern[str]:
+def compile_pattern(
+    pattern: str, regex: bool, *, whole: bool = False, ignore_case: bool = False
+) -> re.Pattern[str]:
     """Compile a trigger/alias pattern.
 
     ``regex=True`` is used verbatim. Otherwise it's a wildcard pattern (see
@@ -161,12 +163,13 @@ def compile_pattern(pattern: str, regex: bool, *, whole: bool = False) -> re.Pat
     that happens to start with sc ("scan"), and "combo *" still takes the rest as its
     capture.
     """
+    flags = _matcher.IGNORECASE if ignore_case else 0
     if regex:
-        return _matcher.compile(pattern)
+        return _matcher.compile(pattern, flags)
     body = wildcard_regex(pattern)
     if whole:
         body += r"\Z"
-    return _matcher.compile(body)
+    return _matcher.compile(body, flags)
 
 
 @dataclass
@@ -557,9 +560,10 @@ class AutomationEngine:
         tiebreak: str = "",
         group: str = "",
         player: bool = False,
+        ignore_case: bool = False,
     ) -> _Rule:
         rule = _Rule(
-            compile_pattern(pattern, regex),
+            compile_pattern(pattern, regex, ignore_case=ignore_case),
             callback,
             priority,
             name,
@@ -596,14 +600,17 @@ class AutomationEngine:
         fallback: bool = False,
         group: str = "",
         player: bool = False,
+        ignore_case: bool = False,
     ) -> _Rule:
         # process_input anchors every alias at the start; a wildcard alias is anchored at the
         # end too, so it has to be the whole command. Regex aliases keep whatever their
         # author wrote.
-        rule = _Rule(compile_pattern(pattern, regex, whole=True), callback, priority, name, True,
-                     source=source, keep_evaluating=keep_evaluating, tiebreak=tiebreak,
-                     stop_scope=stop_scope, consumes=consumes, fallback=fallback,
-                     group=group, text=pattern, player=player)
+        rule = _Rule(
+            compile_pattern(pattern, regex, whole=True, ignore_case=ignore_case),
+            callback, priority, name, True,
+            source=source, keep_evaluating=keep_evaluating, tiebreak=tiebreak,
+            stop_scope=stop_scope, consumes=consumes, fallback=fallback,
+            group=group, text=pattern, player=player)
         self._aliases.append(rule)
         self._aliases.sort(key=_rule_order)
         return rule

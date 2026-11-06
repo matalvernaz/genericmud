@@ -928,3 +928,30 @@ def test_the_manager_gives_each_control_a_letter_of_its_own_in_every_category(
                 }[kind]
     finally:
         manager.Destroy()
+
+
+# --- ignore capitals ----------------------------------------------------------------------
+
+
+def test_both_editors_carry_the_ignore_capitals_box(frame, tmp_path):
+    # A new rule opens ticked, since the useful default is the one that matches; clearing the box
+    # is what the rule is then saved with, so the engine's pattern is the one the player chose.
+    from genericmud.packs.user_rules import UserAlias, UserTrigger
+    from genericmud.ui.rule_editors import AliasEditorDialog, TriggerEditorDialog
+
+    for dialog in (
+        TriggerEditorDialog(frame, tmp_path, UserTrigger(), variables=_no_variables),
+        AliasEditorDialog(frame, UserAlias(), variables=_no_variables),
+    ):
+        name = type(dialog).__name__
+        try:
+            assert dialog._ignore_case.GetValue() is True, name
+            assert dialog._ignore_case.GetName() == "Ignore capitals when matching", name
+            assert _stop(_tab_stops(dialog), dialog._ignore_case)[1] == (
+                "Ignore capitals when matching (an&y capitals match)"
+            ), name
+            assert dialog.result().ignore_case is True, name
+            dialog._ignore_case.SetValue(False)
+            assert dialog.result().ignore_case is False, name
+        finally:
+            dialog.Destroy()

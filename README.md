@@ -523,6 +523,15 @@ needs come after those, and the sound fields last. An alias replaces a shortcut 
 `sh goblin` sends `shoot goblin`. A hotkey runs commands when you press a chosen
 key. These editors use ordinary fields; no code is required.
 
+**Ignore capitals** is ticked on a new trigger and a new alias, so `brady` finds
+"Brady pages:" and `shout *` takes "Shout hello". MUD text is capitalised however
+its author felt, and a rule that misses because of a capital is one you cannot see
+failing. Clear it when the capitals are the point -- matching a name as the MUD
+spells it, say. A rule you saved before this version keeps matching capitals
+exactly, the way MUSHclient and VIPMud match, until you tick the box for it: that is
+what such a rule was written for, and a name trigger is where changing it behind
+your back would bite.
+
 An alias with no `*` in it takes the words after it only when nothing else wants
 the command: an alias written with a `*` (`sh *` sending `shoot at ${1}`), one
 written as a regular expression, or a soundpack's own alias comes first. When

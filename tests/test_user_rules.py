@@ -232,7 +232,11 @@ def test_legacy_escaped_unicode_rules_still_load(tmp_path):
         encoding="utf-8",
     )
 
-    assert load_rules(tmp_path) == UserRules(aliases=[UserAlias(pattern="x", send="я")])
+    # ignore_case=False because the file predates that key, and a rule from before the box keeps
+    # matching capitals exactly; the unicode is what this test is about.
+    assert load_rules(tmp_path) == UserRules(
+        aliases=[UserAlias(pattern="x", send="я", ignore_case=False)]
+    )
 
 
 def test_disabled_automation_is_saved_but_not_registered(tmp_path):
@@ -444,3 +448,119 @@ def test_alias_without_a_wildcard_is_the_whole_command(tmp_path):
     assert engine.process_input("laugh") == ["laugh"]
     assert engine.process_input("k") == []
     assert sink.sent == ["kill rat"]
+
+# --- capitals ---------------------------------------------------------------
+
+
+def _speech(sink) -> list[str]:
+    return list(sink.spoken)
+
+
+def test_a_trigger_finds_its_text_whatever_the_capitals(tmp_path):
+    # MUD text is capitalised however its author felt, and a rule that misses "Brady pages:"
+    # because it was written "brady" is a rule the reader quietly stops trusting.
+    rules = UserRules(triggers=[UserTrigger(pattern="brady", speak="a page from Brady")])
+    sink, engine = _register(rules, tmp_path)
+    engine.process_line(Line("Brady pages: Well that sounds positive."))
+    assert _speech(sink)
+
+
+def test_capitals_can_be_made_to_matter_again(tmp_path):
+    rules = UserRules(
+        triggers=[UserTrigger(pattern="brady", speak="a page", ignore_case=False)]
+    )
+    sink, engine = _register(rules, tmp_path)
+    engine.process_line(Line("Brady pages: Well that sounds positive."))
+    assert _speech(sink) == []
+    engine.process_line(Line("brady pages: lower case"))
+    assert _speech(sink)
+
+
+def test_an_alias_takes_the_command_whatever_its_capitals(tmp_path):
+    rules = UserRules(aliases=[UserAlias(pattern="shout *", send="yell %1")])
+    sink, engine = _register(rules, tmp_path)
+    engine.process_input("Shout hello")
+    # The alias runs its own send; nothing is left for the MUD to receive as typed.
+    assert sink.sent == ["yell hello"]
+
+
+def test_an_alias_can_be_made_to_care_about_capitals(tmp_path):
+    rules = UserRules(
+        aliases=[UserAlias(pattern="shout *", send="yell %1", ignore_case=False)]
+    )
+    sink, engine = _register(rules, tmp_path)
+    assert engine.process_input("Shout hello") == ["Shout hello"]  # no alias took it
+    assert sink.sent == []
+    assert engine.process_input("shout hello") == []
+    assert sink.sent == ["yell hello"]
+
+
+def test_the_setting_survives_a_saved_rules_file(tmp_path):
+    from genericmud.packs.user_rules import rules_path
+
+    save_rules(
+        tmp_path,
+        UserRules(
+            triggers=[UserTrigger(pattern="a", ignore_case=False), UserTrigger(pattern="b")],
+            aliases=[UserAlias(pattern="c", ignore_case=False)],
+        ),
+    )
+    loaded = load_rules(tmp_path)
+    assert [t.ignore_case for t in loaded.triggers] == [False, True]
+    assert [a.ignore_case for a in loaded.aliases] == [False]
+    assert rules_path(tmp_path).is_file()
+
+
+def test_a_rules_file_from_before_the_box_keeps_matching_capitals_exactly(tmp_path):
+    # MUSHclient and VIPMud both match capitals exactly unless asked otherwise, so a rule saved
+    # before the box existed was written for exactly that. A name trigger is where it would bite:
+    # a player called Shadow would start hearing their trigger in every room description.
+    import json
+
+    from genericmud.packs.user_rules import rules_path
+
+    rules_path(tmp_path).write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "triggers": [{"pattern": "shadow"}],
+                "aliases": [{"pattern": "sc"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    loaded = load_rules(tmp_path)
+    assert loaded.triggers[0].ignore_case is False
+    assert loaded.aliases[0].ignore_case is False
+
+
+def test_a_rule_made_in_the_editor_still_opens_ignoring_capitals():
+    # The other half: only a missing key in a file means cleared. A rule the editor makes starts
+    # from the dataclass, which is ticked.
+    from genericmud.packs.user_rules import UserAlias, UserTrigger
+
+    assert UserTrigger().ignore_case is True
+    assert UserAlias().ignore_case is True
+
+
+def test_a_regular_expression_rule_can_ignore_capitals_too(tmp_path):
+    # A regex goes through its own branch of compile_pattern, so the flag has to reach both.
+    rules = UserRules(
+        triggers=[UserTrigger(pattern=r"^brady pages:", regex=True, speak="a page from Brady")]
+    )
+    sink, engine = _register(rules, tmp_path)
+    engine.process_line(Line("Brady pages: Well that sounds positive."))
+    assert _speech(sink)
+
+
+def test_capitals_matter_in_a_regular_expression_when_the_box_is_cleared(tmp_path):
+    rules = UserRules(
+        triggers=[
+            UserTrigger(pattern=r"^brady pages:", regex=True, speak="a page", ignore_case=False)
+        ]
+    )
+    sink, engine = _register(rules, tmp_path)
+    engine.process_line(Line("Brady pages: Well that sounds positive."))
+    assert _speech(sink) == []
+    engine.process_line(Line("brady pages: lower case"))
+    assert _speech(sink)

@@ -143,10 +143,17 @@ An alias with no * in it also takes whatever you type after it, when no other
 alias wants the command: an alias sh sending shoot turns sh goblin into shoot
 goblin. The words go on the end of the last command, unless a command has ${1}
 in it to say where they belong.
+An alias has the same Ignore capitals box a trigger does, so it is worth clearing
+when the capitals in what you type are the point: a rule written brady finds
+Brady as well, where one written Brady with the box cleared does not.
 
 Make a trigger without code:
 Show Triggers and choose New. Enter the text to watch for. The line contains
-this text is usually the right match choice. "Send it to" says where the response
+this text is usually the right match choice. "Ignore capitals" is ticked on a new
+rule, so a rule written brady finds Brady pages: clear it only when the capitals
+are the point. A rule you saved before this version keeps matching capitals
+exactly until you tick the box for it, which is how MUSHclient and VIPMud match.
+"Send it to" says where the response
 goes: the MUD, your command box (unsent, to finish yourself), the output as a note
 (always kept in the log), the output as a print (never kept in the log), the log alone,
 this client again, a script -- a function name, or Lua code such as
