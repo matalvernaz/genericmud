@@ -222,6 +222,8 @@ Enter executes the logical line at the start of the selection and leaves an empt
 tail, copying an older line to the bottom. Shift+Enter executes the current line,
 or only the selected text, without changing the document or selection. An explicit
 selection spanning several lines sends its nonblank lines as separate commands.
+Executing an older row keeps drafts separate, including pasted text ending with a tab.
+Moving rows ends word completion so it cannot reuse text from another draft.
 Adjacent identical completed lines are reduced to one, including manually typed
 repetitions, once there are three line separators; very short buffers keep duplicates.
 

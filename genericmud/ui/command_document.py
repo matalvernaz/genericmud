@@ -18,7 +18,7 @@ def submit_command(text: str, position: int) -> str:
     start, end = line_bounds(text, position)
     command = text[start:end]
     if position < len(text):
-        separator = "" if ord(text[-1]) < 32 else "\n"
+        separator = "" if text.endswith("\n") else "\n"
         result = text + separator + command + "\n"
     else:
         result = text + "\n"

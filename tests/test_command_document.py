@@ -13,6 +13,7 @@ from genericmud.ui.command_document import (
     ("p\na\nb|", "p\na\nb\n"),
     ("p\na|\nb\n", "p\na\nb\na\n"),
     ("p\na|\ndraft", "p\na\ndraft\na\n"),
+    ("north|\nsay hello\t", "north\nsay hello\t\nnorth\n"),
     ("p\na2|\nb\n", "p\na2\nb\na2\n"),
     ("p\na|\n", "p\na\n"),
     ("a|\n", "a\na\n"),  # the short-buffer exception is intentional
