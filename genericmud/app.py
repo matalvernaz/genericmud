@@ -3058,7 +3058,11 @@ class EngineApp:
         if message.startswith(("connection lost", "connection unavailable")):
             # Keep one outage notice across sockets that repeatedly open and immediately
             # close. A changed interval is still worth reporting, even during recovery.
-            status = message.partition(";")[2] or message
+            # The reason a connect failed rides after the colon ("connection unavailable:
+            # connection refused; ..."), and a new one is worth saying. Whether the link was
+            # lost or never came up is not news on its own.
+            head, _, tail = message.partition(";")
+            status = f"{head.partition(': ')[2]};{tail}"
             quiet = status == self._recovery_status
             self._recovery_status = status
             self._reconnect_notice_token += 1

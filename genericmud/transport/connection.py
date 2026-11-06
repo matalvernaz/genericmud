@@ -485,10 +485,11 @@ class MudConnection:
         host, port, tls, ssl_context = self._target
         attempt = 1
         reason = "connection unavailable" if self._read_task is None else "connection lost"
-        if self._reconnect_detail:
+        detail = self._reconnect_detail
+        if detail:
             # A typo in the host or a refused certificate would otherwise retry for ever
             # with nobody told why.
-            reason = f"{reason}: {self._reconnect_detail}"
+            reason = f"{reason}: {detail}"
         last_delay = None
         while not self._closing and not asyncio.current_task().cancelling():
             delay = self.reconnect_policy.delay_for(attempt)
@@ -505,8 +506,16 @@ class MudConnection:
                 return
             try:
                 await self.connect(host, port, tls=tls, ssl_context=ssl_context)
-            except OSError:
+            except OSError as error:
                 attempt += 1
+                # A reason other than the one last said is news too: a MUD that comes back up
+                # refusing connections, or a host name that stops resolving. The next round's
+                # status says it; the same reason again says nothing.
+                failure = str(error) or type(error).__name__
+                if failure != detail:
+                    detail = failure
+                    reason = f"connection unavailable: {detail}"
+                    last_delay = None
                 continue
             if self._closing or not self.connected or asyncio.current_task().cancelling():
                 # A cancelled handshake may still return; connect() drops its late socket.

@@ -1417,9 +1417,9 @@ class SessionPanel(wx.Panel):
     def reconnect(self) -> None:
         """Reconnect this session in place, keeping its tab, scrollback and loaded packs.
 
-        Two paths lead here with no connection and no way back otherwise: a deliberate
-        disconnect (which cancels auto-reconnect on purpose) and the backoff loop giving
-        up. Opening the world again from Ctrl+O is not a substitute -- it builds a second
+        It is the way back after a deliberate disconnect (which stops the retries on purpose),
+        with automatic reconnection switched off in Connection settings, and after a protocol
+        error. Opening the world again from Ctrl+O is not a substitute -- it builds a second
         tab and abandons this one.
         """
         self._loop.call_soon_threadsafe(lambda: asyncio.create_task(self._reconnect()))
