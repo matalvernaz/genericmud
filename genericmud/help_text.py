@@ -43,7 +43,7 @@ three line separators exist; very short buffers keep duplicates.
 Escape inserts a blank row; in the first row it splits at the caret.
 Ordinary Backspace at the start preserves the row boundary; Delete and selected
 text deletion remain native. There is no Line Entry Mode Off setting yet.
-Returning from Output or pressing Ctrl+Enter goes to the existing tail.
+Returning from Output, typing there, or pressing Ctrl+Enter goes to the existing tail.
 Ctrl+R recalls earlier rows by prefix, including drafts. Pack/user keys still win.
 On macOS, use Command+R and Command+Enter for those editable-mode shortcuts.
 Ctrl+Enter does not toggle autoretype in editable mode; it keeps its saved value.

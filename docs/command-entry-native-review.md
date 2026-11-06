@@ -164,3 +164,27 @@ explicit opt-in with GITHUB_ACTIONS set also skipped before importing wx. These 
   cancellation, especially Enter during composition; Standard regressions with NVDA.
 
 PR #74 remains draft pending the Windows/screen-reader and IME checks above.
+
+## GTK X11 follow-up after porting to the split window files
+
+The simulator smoke test was run under an isolated Xvfb display with wxPython 4.2.3,
+wxWidgets 3.2.7 GTK3 and Python 3.13.5. It uses the recording fake engine and never
+connects to a MUD. Enter, Shift+Enter, navigation, selection, deletion and Tab passed,
+but typing from Output failed: GTK delivered KEY_DOWN and KEY_UP without EVT_CHAR.
+Its read-only text view consumed printable keys in native input-method handling.
+This also affected Standard mode before this contribution.
+
+The GTK-only fix converts the native GDK keyval to a character, reuses the existing
+Output character handler, and consumes that KEY_DOWN to prevent duplicate input.
+It preserves keyboard layout and case rather than treating wx's uppercased keycode
+as typed text. Other platforms keep their existing character-event path.
+
+After the fix, the genuine OS-input scenarios passed, including lowercase and
+Shift-uppercase typing into the editable tail, Standard selection replacement,
+Ctrl+R cycling and Ctrl+Enter from Output. A separate regression covers lowercase,
+uppercase, space, legacy Cyrillic, CJK and non-BMP keyvals, dead keys and modified
+shortcuts. Six character-forwarding cases failed before the fix and passed after it.
+
+These are X11 simulator results, not Orca, hardware-keyboard, Wayland or IME validation.
+Native input-method composition in the command field is unchanged; starting a
+composition while Output has focus is not established by these tests.
