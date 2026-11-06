@@ -553,7 +553,9 @@ mud.delete_timer("tick")
 ```
 
 **Send it to** sits beside the response text and says where it goes, the way
-MUSHclient's "send to" does. One text, one destination:
+MUSHclient's "send to" does. Every kind of rule that can act has one -- a trigger, an
+alias, a hotkey, a timer, a MUD data rule -- so pressing a key can write a note or store
+a value, not only send a command. One text, one destination:
 
 | Send it to | What happens |
 |---|---|

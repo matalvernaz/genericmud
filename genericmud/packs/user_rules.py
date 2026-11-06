@@ -117,6 +117,7 @@ class UserAlias:
     pattern: str = ""  # what the user types; * ? wildcards unless regex
     regex: bool = False
     send: str = ""  # what to do with the typed command; capture/variable templates allowed
+    interrupt: bool = False  # cut current speech the moment this fires, as a trigger can
     send_to: str = "world"  # where that text goes, as for triggers (SEND_TO_CHOICES)
     variable: str = ""  # as for triggers: the name a variable target stores under
     speak: str = ""  # optional speech, same templates; can read a value with no commands
@@ -131,6 +132,10 @@ class UserAlias:
 class UserKey:
     key: str = ""  # keymap combo, e.g. "ctrl+h", "alt+shift+f2"
     send: str = ""
+    # As for triggers: a key's text goes where the rule says. A hotkey that writes a note, stores
+    # a value or runs Lua is the same question every other rule answers.
+    send_to: str = "world"
+    variable: str = ""  # as for triggers: the name a variable target stores under
     speak: str = ""  # e.g. "${mud:Char.Vitals.hp} health": a key that reads a value
     sound: str = ""  # pack-relative one-shot cue
     group: str = ""  # as for triggers: switched together with the rest of its group
@@ -160,6 +165,7 @@ class UserTimer:
     send: str = ""
     send_to: str = "world"
     variable: str = ""  # as for triggers: the name a variable target stores under
+    interrupt: bool = False  # cut current speech the moment this fires, as a trigger can
     # MUSHclient's ActiveWhenClosed: keep the clock through a disconnect. What it can then do is
     # the local half of a rule -- speak, note, log, store a value, run a script -- since there is
     # no MUD to send to. Everything else pauses, and comes back when the world does.
@@ -187,6 +193,8 @@ class UserWatch:
     only_changes: bool = True
     sound: str = ""  # pack-relative one-shot cue
     group: str = ""  # as for triggers: switched together with the rest of its group
+    send_to: str = "world"  # where "send" goes, as for triggers (SEND_TO_CHOICES)
+    variable: str = ""  # as for triggers: the name a variable target stores under
     volume: int = 100  # 0..100
     pan: int = 0  # -100 (left) .. 100 (right)
     speak: str = ""  # ${value} and ${name}, plus ${mud:x} and ${script:x}
@@ -406,6 +414,7 @@ def deliver(
     ctx: MatchContext | None = None,
     *,
     variable: str = "",
+    log: bool = True,
 ) -> None:
     """Put the expanded text where the rule says (MUSHclient's "send to" targets).
 
@@ -419,10 +428,13 @@ def deliver(
         api.type_text("\n".join(lines))
     elif kind == "output":
         for line in lines:
-            api.note(line)
+            # A note is part of the record; a print is not. That is the whole difference, and
+            # a rule can ask for either.
+            api.note(line) if log else api.print(line)
     elif kind == "log":
         for line in lines:
-            api.log_line(line)
+            if log:
+                api.log_line(line)
     elif kind == "variable":
         name = variable.strip()
         if not name:
@@ -441,8 +453,8 @@ def deliver(
     elif kind == "execute":
         # MUSHclient's "execute": hand it back to the client as if it had been typed, so an
         # alias takes it first and only what falls through reaches the MUD. Its "send to
-        # script" is a different thing -- calling a named routine in a script -- and this
-        # client's scripts are hook files with no named entry points yet, so that one waits.
+        # script" is a different thing -- calling a named routine in a script, or running the
+        # text as Lua -- and that is the "script" target above.
         api.execute("\n".join(lines))
     else:
         for line in lines:
@@ -755,6 +767,8 @@ def _register_timer(api: ScriptApi, t: UserTimer, *, clock=clock_seconds) -> Non
         return  # neither shape: nothing to schedule
 
     def fire() -> None:
+        if t.interrupt:
+            api.stop_speech()  # an alert that takes over, as a trigger's can
         parts = _response_parts(t.send, t.send_to)
         if not parts:
             return
@@ -763,7 +777,9 @@ def _register_timer(api: ScriptApi, t: UserTimer, *, clock=clock_seconds) -> Non
             # speak, note, log, store a value or run a script; commands have nowhere to go, and
             # saying so every few seconds would be worse than the silence.
             return
-        deliver(api, list(parts), t.send_to, variable=t.variable)
+        # "Leave what it writes out of the session log": the note still shows, the file
+        # stays untouched, which is the same distinction print and note have everywhere else.
+        deliver(api, list(parts), t.send_to, variable=t.variable, log=not t.omit_log)
 
     # A timer that names a time of day has no fixed period -- its wait is "until the next
     # 03:00" -- so it asks the clock each time; an interval timer just repeats.
@@ -792,9 +808,11 @@ def _register_alias(api: ScriptApi, a: UserAlias) -> None:
     )
 
     def fire(ctx: MatchContext) -> None:
+        if a.interrupt:
+            api.stop_speech()
         sent = send_commands(ctx)
         if a.speak and sent:
-            api.speak(_speech(api, a.speak, ctx))
+            api.speak(_speech(api, a.speak, ctx), interrupt=a.interrupt)
 
     api.add_alias(
         a.pattern,
@@ -857,7 +875,9 @@ def data_text(value: object) -> str:
 
 
 def _register_watch(api: ScriptApi, w: UserWatch) -> None:
-    _, send_commands = _command_action(api, w.send)
+    _, send_commands = _command_action(
+        api, w.send, send_to=w.send_to, variable=w.variable
+    )
 
     def fire(name: str, value: object) -> None:
         text = data_text(value)
@@ -883,13 +903,13 @@ def _register_watch(api: ScriptApi, w: UserWatch) -> None:
 
 
 def _register_key(api: ScriptApi, k: UserKey) -> None:
-    _, send_commands = _command_action(api, k.send)
+    _, send_commands = _command_action(api, k.send, send_to=k.send_to, variable=k.variable)
 
     def fire(_ctx: MatchContext) -> None:
         if k.sound:
             api.play(k.sound, channel="user-key")
         if k.speak:
             api.speak(_speech(api, k.speak), channel=_KEY_REPLY_CHANNEL, interrupt=True)
-        send_commands()
+        send_commands()  # to the target the rule names: the MUD unless it says otherwise
 
     api.add_key(k.key, fire, group=k.group.strip())

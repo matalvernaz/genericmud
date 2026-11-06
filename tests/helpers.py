@@ -17,6 +17,7 @@ class RecordingSink(EngineSink):
     sent: list[str] = field(default_factory=list)
     packets: list[bytes] = field(default_factory=list)
     echoed: list[tuple[str, str]] = field(default_factory=list)
+    echo_flags: list[bool] = field(default_factory=list)  # each echoed line's `log` flag
     filed: list[tuple[str, str]] = field(default_factory=list)
     typed: list[str] = field(default_factory=list)  # put in the command box, unsent
     logged: list[str] = field(default_factory=list)  # written to the log without being shown
@@ -43,6 +44,7 @@ class RecordingSink(EngineSink):
 
     def echo(self, text: str, channel: str = "main", *, log: bool = False) -> None:
         self.echoed.append((text, channel))
+        self.echo_flags.append(log)
 
     def type_text(self, text: str) -> None:
         self.typed.append(text)

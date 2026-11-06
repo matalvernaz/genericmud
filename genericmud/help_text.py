@@ -189,9 +189,11 @@ and put its reference in the speech or the commands. Most recent first puts what
 the MUD sent last at the top, with how long ago; Watch this makes a MUD data rule.
 
 A MUD data rule (MUD data in the Automation Manager) acts when the MUD sends a
-value such as Char.Vitals.hp: a sound, speech, commands. ${value} is the new
-value, so speaking ${value} health reads your health. Only when it changes is on
-for new rules.
+value such as Char.Vitals.hp: a sound, speech, commands, and anything else its Send it
+to box says, up to a note, a stored value or a script. ${value} is the new value, so
+speaking ${value} health reads your health. Only when it changes is on for new rules.
+A hotkey's Send it to box works the same way, so a key can write a note or store a value
+instead of sending a command.
 
 From your scripts lists the rules your Lua made with mud.trigger, mud.alias,
 mud.key, mud.timer, mud.add_timer or mud.on_data: what each one is, what it matches,
