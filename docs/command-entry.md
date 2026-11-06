@@ -109,7 +109,10 @@ wrapping; VIPMud's exact wrapped-line behavior remains outside the compatibility
 
 Cocoa selection uses UTF-16 positions in the tested wx build while GetRange reads
 code points. The optional editor converts those positions explicitly, and other
-ports map through native range APIs to account for CRLF. A first-row Escape request
+ports map through native range APIs to account for CRLF. Windows caret positions
+land after a complete native CRLF, not between its two characters. Windows
+range reads normalize a lone CR as a newline too; caret mapping chooses the complete
+delimiter when both positions read the same. A first-row Escape request
 inside a CRLF is normalized to a valid caret rather than deliberately splitting a
 native separator. Other native editing/undo details can vary by platform.
 
