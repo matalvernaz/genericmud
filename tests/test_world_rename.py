@@ -62,7 +62,7 @@ def _frame(panels: list[_Panel], saved: list[World]):
 def dialog(monkeypatch):
     """Replace the real dialog: records what it was asked for, and answers as the test says."""
     wx = pytest.importorskip("wx")
-    from genericmud.ui import main_window
+    from genericmud.ui import saved_worlds
 
     class FakeDialog:
         asked: list[dict] = []
@@ -84,7 +84,7 @@ def dialog(monkeypatch):
     FakeDialog.asked = []
     FakeDialog.edited = None
     FakeDialog.answer = wx.ID_OK
-    monkeypatch.setattr(main_window, "WorldDialog", FakeDialog)
+    monkeypatch.setattr(saved_worlds, "WorldDialog", FakeDialog)
     return FakeDialog
 
 
@@ -127,9 +127,9 @@ def test_a_rename_carries_the_map_rules_and_variables_to_the_new_name(
 ):
     pytest.importorskip("wx")
     from genericmud.safepath import world_component
-    from genericmud.ui import main_window
+    from genericmud.ui import saved_worlds
 
-    monkeypatch.setattr(main_window, "config_dir", lambda: tmp_path)
+    monkeypatch.setattr(saved_worlds, "config_dir", lambda: tmp_path)
     old = World("Penultimate", "pen.example", 9500)
     panel = _Panel(old, _Connection(connected=False))
     frame = _frame([panel], [old])
@@ -152,9 +152,9 @@ def test_a_file_already_filed_under_the_new_name_is_never_overwritten(
 ):
     pytest.importorskip("wx")
     from genericmud.safepath import world_component
-    from genericmud.ui import main_window
+    from genericmud.ui import saved_worlds
 
-    monkeypatch.setattr(main_window, "config_dir", lambda: tmp_path)
+    monkeypatch.setattr(saved_worlds, "config_dir", lambda: tmp_path)
     old = World("Penultimate", "pen.example", 9500)
     frame = _frame([_Panel(old, _Connection())], [old])
     dialog.edited = World("Arrived", "pen.example", 9500)
@@ -176,9 +176,9 @@ def test_a_rename_with_no_files_to_carry_says_nothing_about_files(
     dialog, monkeypatch, tmp_path
 ):
     pytest.importorskip("wx")
-    from genericmud.ui import main_window
+    from genericmud.ui import saved_worlds
 
-    monkeypatch.setattr(main_window, "config_dir", lambda: tmp_path)
+    monkeypatch.setattr(saved_worlds, "config_dir", lambda: tmp_path)
     old = World("Penultimate", "pen.example", 9500)
     frame = _frame([_Panel(old, _Connection())], [old])
     dialog.edited = World("Penultimate Destination", "pen.example", 9500)
@@ -347,10 +347,10 @@ def test_the_dialog_keeps_the_name_it_has_when_the_rule_refuses_it(window, monke
 
 def test_renaming_onto_another_worlds_name_is_refused(monkeypatch):
     # Logins are kept by world name, so this would replace that world and take its login with it.
-    from genericmud.ui import main_window
+    from genericmud.ui import saved_worlds
 
     worlds = [World("Penultimate", "pen.example", 9500), World("Aardwolf", "aard.example", 4000)]
-    monkeypatch.setattr(main_window, "load_worlds", lambda: list(worlds))
+    monkeypatch.setattr(saved_worlds, "load_worlds", lambda: list(worlds))
     frame = _frame([], worlds)
 
     refusal = frame._rename_problem("Penultimate", "Aardwolf")
@@ -359,10 +359,10 @@ def test_renaming_onto_another_worlds_name_is_refused(monkeypatch):
 
 
 def test_its_own_name_is_no_clash_and_a_free_one_is_fine(monkeypatch):
-    from genericmud.ui import main_window
+    from genericmud.ui import saved_worlds
 
     worlds = [World("Penultimate", "pen.example", 9500)]
-    monkeypatch.setattr(main_window, "load_worlds", lambda: list(worlds))
+    monkeypatch.setattr(saved_worlds, "load_worlds", lambda: list(worlds))
     frame = _frame([], worlds)
 
     assert frame._rename_problem("Penultimate", "Penultimate") == ""
@@ -446,9 +446,9 @@ def test_a_log_stopped_by_hand_stays_stopped_through_a_rename(tmp_path):
 
 def test_a_rename_with_no_tab_open_says_nothing_about_a_tab(dialog, monkeypatch, tmp_path):
     pytest.importorskip("wx")
-    from genericmud.ui import main_window
+    from genericmud.ui import saved_worlds
 
-    monkeypatch.setattr(main_window, "config_dir", lambda: tmp_path)
+    monkeypatch.setattr(saved_worlds, "config_dir", lambda: tmp_path)
     old = World("Penultimate", "pen.example", 9500)
     frame = _frame([], [old])
     dialog.edited = World("Penultimate Destination", "pen.example", 9500)
@@ -464,9 +464,9 @@ def test_a_change_of_case_carries_the_files_too(dialog, monkeypatch, tmp_path):
     import os
 
     pytest.importorskip("wx")
-    from genericmud.ui import main_window
+    from genericmud.ui import saved_worlds
 
-    monkeypatch.setattr(main_window, "config_dir", lambda: tmp_path)
+    monkeypatch.setattr(saved_worlds, "config_dir", lambda: tmp_path)
     old = World("penultimate", "pen.example", 9500)
     panel = _Panel(old, _Connection(connected=False))
     frame = _frame([panel], [old])

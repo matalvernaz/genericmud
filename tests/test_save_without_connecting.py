@@ -71,7 +71,7 @@ class _FakeWorldDialog:
 
 def _frame_shape(monkeypatch):
     """A frame-shaped stub: records what is saved, connected and said."""
-    from genericmud.ui import main_window
+    from genericmud.ui import main_window, saved_worlds
 
     frame = main_window.GenericMudFrame.__new__(main_window.GenericMudFrame)
     frame._credentials = None
@@ -88,7 +88,7 @@ def _frame_shape(monkeypatch):
     frame._save_world = _save_world
     frame.open_session = frame.opened.append
     frame._apply_to_open_tabs = lambda *_args: None
-    monkeypatch.setattr(main_window, "WorldDialog", _FakeWorldDialog)
+    monkeypatch.setattr(saved_worlds, "WorldDialog", _FakeWorldDialog)
     _FakeWorldDialog.save = True
     _FakeWorldDialog.connect = True
     _FakeWorldDialog.world = World("Penultimate", "pen.example", 9500)
@@ -205,14 +205,14 @@ def test_the_soundpack_setup_dialog_keeps_its_single_save_box(frame):
 
 
 def test_saving_without_connecting_keeps_the_world_and_opens_no_tab(monkeypatch):
-    from genericmud.ui import main_window
+    from genericmud.ui import saved_worlds
 
     frame = _frame_shape(monkeypatch)
     _FakeWorldDialog.connect = False
 
     done = frame._show_world_dialog(show_connect=True)
 
-    assert done.outcome == main_window._SAVED
+    assert done.outcome == saved_worlds._SAVED
     assert [world.name for world in frame.saved] == ["Penultimate"]
     assert frame.opened == []  # no tab: the whole point
     assert any("Penultimate saved" in said for said in frame.said)
@@ -221,13 +221,13 @@ def test_saving_without_connecting_keeps_the_world_and_opens_no_tab(monkeypatch)
 
 
 def test_connecting_as_usual_still_saves_and_opens_a_tab(monkeypatch):
-    from genericmud.ui import main_window
+    from genericmud.ui import saved_worlds
 
     frame = _frame_shape(monkeypatch)
 
     done = frame._show_world_dialog(show_connect=True)
 
-    assert done.outcome == main_window._CONNECTED
+    assert done.outcome == saved_worlds._CONNECTED
     assert [world.name for world in frame.saved] == ["Penultimate"]
     assert [world.name for world in frame.opened] == ["Penultimate"]
     assert not any("Control O" in said for said in frame.said)
@@ -235,14 +235,14 @@ def test_connecting_as_usual_still_saves_and_opens_a_tab(monkeypatch):
 
 def test_connecting_without_saving_opens_a_tab_and_leaves_the_list_alone(monkeypatch):
     # The third choice: try a MUD without adding it to the saved worlds.
-    from genericmud.ui import main_window
+    from genericmud.ui import saved_worlds
 
     frame = _frame_shape(monkeypatch)
     _FakeWorldDialog.save = False
 
     done = frame._show_world_dialog(show_connect=True)
 
-    assert done.outcome == main_window._CONNECTED
+    assert done.outcome == saved_worlds._CONNECTED
     assert frame.saved == []
     assert [world.name for world in frame.opened] == ["Penultimate"]
 
@@ -258,7 +258,7 @@ def test_the_menu_new_world_offers_the_choice(monkeypatch):
 
 
 def test_cancelling_says_nothing_and_saves_nothing(monkeypatch):
-    from genericmud.ui import main_window
+    from genericmud.ui import saved_worlds
 
     frame = _frame_shape(monkeypatch)
     _FakeWorldDialog.ShowModal = lambda _self: wx.ID_CANCEL
@@ -267,7 +267,7 @@ def test_cancelling_says_nothing_and_saves_nothing(monkeypatch):
     finally:
         _FakeWorldDialog.ShowModal = lambda _self: wx.ID_OK
 
-    assert done.outcome == main_window._CANCELLED
+    assert done.outcome == saved_worlds._CANCELLED
     assert done.world is None
     assert frame.saved == [] and frame.opened == [] and frame.said == []
 
@@ -298,7 +298,7 @@ def test_a_preselect_that_is_not_there_picks_the_first_row(frame):
 def test_saving_without_connecting_returns_to_the_list_with_it_picked(monkeypatch):
     # The list is where the reader was, so that is where they should land, with the new world
     # under the cursor and one Enter away from connecting.
-    from genericmud.ui import connect_dialog, main_window
+    from genericmud.ui import connect_dialog, saved_worlds
 
     frame = _frame_shape(monkeypatch)
     _FakeWorldDialog.connect = False
@@ -320,7 +320,7 @@ def test_saving_without_connecting_returns_to_the_list_with_it_picked(monkeypatc
             pass
 
     FakeConnectDialog.answers = [connect_dialog._ID_NEW_WORLD, wx.ID_CANCEL]
-    monkeypatch.setattr(main_window, "ConnectDialog", FakeConnectDialog)
+    monkeypatch.setattr(saved_worlds, "ConnectDialog", FakeConnectDialog)
 
     frame._on_connect(None)
 
@@ -332,7 +332,7 @@ def test_saving_without_connecting_returns_to_the_list_with_it_picked(monkeypatc
 def test_editing_a_world_returns_to_the_list_with_it_still_picked(monkeypatch):
     # After an edit the reader goes back to the list, and should land where they were: on the
     # world they edited, under its new name if they renamed it, not at the top of the list.
-    from genericmud.ui import connect_dialog, main_window
+    from genericmud.ui import connect_dialog, saved_worlds
 
     frame = _frame_shape(monkeypatch)
     seen: list[object] = []
@@ -358,7 +358,7 @@ def test_editing_a_world_returns_to_the_list_with_it_still_picked(monkeypatch):
         connect_dialog._ID_EDIT_WORLD, connect_dialog._ID_EDIT_WORLD, wx.ID_CANCEL
     ]
     results = [renamed, None]  # renamed the first time, cancelled the second
-    monkeypatch.setattr(main_window, "ConnectDialog", FakeConnectDialog)
+    monkeypatch.setattr(saved_worlds, "ConnectDialog", FakeConnectDialog)
     frame._edit_saved_world = lambda world: results.pop(0)
 
     frame._on_connect(None)
