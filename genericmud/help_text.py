@@ -100,11 +100,12 @@ how much you've mapped.
 
 Automation and sounds:
 Ctrl+B opens the Automation Manager. Its Show box contains Triggers, Aliases,
-Hotkeys, Channels, Scripts, and MUD data. A trigger watches text from the MUD. An alias
-replaces a shortcut you type. A hotkey reacts to a chosen key combination.
-Each can send one command or several commands, one per line, without writing
-code. The Scripts category has the Lua editor for decisions, timers, saved
-values, and reusable automation. Ctrl+Shift+B browses ready-made soundpacks.
+Hotkeys, Channels, Scripts, MUD data, and Timers. A trigger watches text from the MUD. An alias
+replaces a shortcut you type. A hotkey reacts to a chosen key combination. A timer
+acts on a clock. Each can send one command or several commands, one per line,
+without writing code. The Scripts category has the Lua editor for decisions,
+timers, saved values, and reusable automation. Ctrl+Shift+B browses ready-made
+soundpacks.
 
 Sharing:
 File menu, Export This World saves your whole setup — connection, triggers,
@@ -120,8 +121,9 @@ Automation and Lua scripting
 Start here:
 Connect to the saved world you want to change, or delete it from the same dialog.
 Press Ctrl+B or open the Automation menu and choose Manage automation. In the Show
-box, choose Triggers, Aliases, Hotkeys, Channels, or Scripts. They are categories in
-one manager.
+box, choose Triggers, Aliases, Hotkeys, Channels, Scripts, MUD data, Timers,
+or From your scripts.
+They are categories in one manager.
 
 Make an alias without code:
 Show Aliases and choose New. In When I type, enter combo *. In Commands to send,
@@ -140,8 +142,33 @@ in it to say where they belong.
 
 Make a trigger without code:
 Show Triggers and choose New. Enter the text to watch for. The line contains
-this text is usually the right match choice. Add any commands, spoken text,
-sound, line handling, or channel routing you need, then choose OK.
+this text is usually the right match choice. "Send it to" says where the response
+goes: the MUD, your command box (unsent, to finish yourself), the output as a note,
+the log alone, this client again, a script -- a function name, or Lua code such as
+mud.set_enabled("combat", false) -- or a script variable, which stores the text under
+a name you give it so ${script:name} can read it later. Add any spoken text, sound,
+line handling, or channel routing you need, then choose OK. Leave this line out of the
+session log is separate from hiding it: the line still works as it did, it just never
+reaches the file, which is how a repeating notice stops filling the record.
+
+A trigger or alias can have a name, a group, and an order. The Label is the name a
+script turns that one rule off and on by, with mud.set_enabled. The Group switches every
+rule that shares it together, with mud.set_group_enabled, which is how all the combat
+rules go off in one call; every kind of rule takes one, so a hotkey, a timer and a MUD
+data rule can be in the same group as the triggers. Order decides which is tried first
+when several match: the lower number first, and equal numbers fall back to the pattern
+text. Keep checking the rules after this one is on by default -- every matching rule acts
+-- and clearing it makes that rule the last one heard about the line. A player rule that
+stops the search never silences a soundpack.
+
+A timer (Timers in the Automation Manager) acts on a clock rather than on a line:
+every so often, or once a day at a time such as 03:00. What it does is the same
+question the other rules answer, so it can send commands, fill your command box, write
+a note, store a value, or run Lua. Do it once only makes it a one-shot. An offset is
+how many seconds before its interval is up it fires, so two timers on the same interval
+take turns. Keep running while the world is disconnected lets it keep its clock while
+nothing is connected: then it can still speak, note, log, store a value or run a
+script, but commands have nowhere to go.
 
 Trigger, alias, and hotkey command fields accept one command per line. ${1}
 means the first matched part. ${script:attack} reads a value saved by a script.
@@ -162,13 +189,35 @@ and put its reference in the speech or the commands. Most recent first puts what
 the MUD sent last at the top, with how long ago; Watch this makes a MUD data rule.
 
 A MUD data rule (MUD data in the Automation Manager) acts when the MUD sends a
-value such as Char.Vitals.hp: a sound, speech, commands. ${value} is the new
-value, so speaking ${value} health reads your health. Only when it changes is on
-for new rules.
+value such as Char.Vitals.hp: a sound, speech, commands, and anything else its Send it
+to box says, up to a note, a stored value or a script. ${value} is the new value, so
+speaking ${value} health reads your health. Only when it changes is on for new rules.
+A hotkey's Send it to box works the same way, so a key can write a note or store a value
+instead of sending a command.
+
+From your scripts lists the rules your Lua made with mud.trigger, mud.alias,
+mud.key, mud.timer, mud.add_timer or mud.on_data: what each one is, what it matches,
+and whether it is on. It can be read and switched off, never edited, because the
+script's own text is the only copy of a rule it made.
 
 Choose Duplicate to start from a copy. Disable keeps an item saved without
-letting it run. Ctrl+1 through Ctrl+5 change categories, Ctrl+N creates an item,
-Enter edits, and Delete deletes after confirmation. F2 renames a script.
+letting it run, and every editor has the same switch as the Enabled box at its top,
+so a rule can be parked while you work on it. A switch a script makes shows here too:
+after mud.set_enabled or mud.set_group_enabled the item reads Disabled and its Enabled
+box is clear, and that is the state the manager saves. Ctrl+1 through Ctrl+8 change
+categories, Ctrl+N creates an item, Enter edits, and Delete deletes after confirmation.
+F2 renames a script.
+
+MUSHclient's own names work too:
+Your world's scripts, and the code a rule sends to a script, run in Lua 5.1 with
+MUSHclient's function names beside mud.*: Send, Note, print, GetVariable and
+SetVariable (the same values mud.get_var and mud.set_var use), DoAfter, AddTrigger,
+AddAlias, AddTimer, EnableTrigger, PlaySound, the world table, and the constants such
+code tests. That is so something written for MUSHclient works here as it stands, and
+so its documentation is a usable reference. mud.* is still the shorter way, and the
+only one that speaks, follows the data the MUD sends, and reaches your other sessions.
+A soundpack keeps its own space: it never sees mud.*, and your scripts never see a
+pack's variables.
 
 Open the Lua editor:
 Show Scripts and choose New. Enter a name such as 10-combat.lua. Choose Save
@@ -355,7 +404,8 @@ Ctrl+B            Open the Automation Manager
 Ctrl+Shift+V      List the MUD's variables and script values
 Ctrl+Shift+B      Browse soundpacks online
 Automation Manager:
-Ctrl+1 to 5       Show triggers, aliases, hotkeys, channels, or scripts
+Ctrl+1 to 8       Show triggers, aliases, hotkeys, channels, scripts, MUD data,
+                  timers, or the rules your scripts made
 Ctrl+N            Create an item in the category being shown
 Enter / Delete    Edit / delete the selected item
 F2                Rename the selected script
