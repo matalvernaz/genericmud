@@ -12,6 +12,7 @@ once and expects to survive a restart:
 * ``numpad_compass`` -- numpad walks (8/2/4/6 + diagonals, 5/0 look, . scan,
   minus up, plus down). Off for NVDA desktop-layout users who keep the numpad
   for object review.
+* ``editable_command_buffer`` -- experimental native multiline entry for new sessions.
 * ``autoretype`` -- Enter on an empty input resends the last command.
 * ``follow_mode`` -- speech interrupts on room movement, not on every line.
 * ``interrupt_mode`` -- every incoming line interrupts instead of queueing.
@@ -37,6 +38,7 @@ class UiPrefs:
     background_silence: bool = False
     silence_other_worlds: bool = True
     numpad_compass: bool = True
+    editable_command_buffer: bool = False
     autoretype: bool = False
     follow_mode: bool = False
     interrupt_mode: bool = False
