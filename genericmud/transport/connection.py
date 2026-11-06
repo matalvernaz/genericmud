@@ -141,6 +141,8 @@ class MudConnection:
         self._read_task: asyncio.Task[None] | None = None
         self._handshakes: set[asyncio.Task] = set()  # connect() callers waiting on the network
         self._reconnect_task: asyncio.Task[None] | None = None  # the backoff loop, once started
+        # Why the attempt that handed over to the backoff loop failed, said in its first status.
+        self._reconnect_detail = ""
         self._remote_enabled: set[int] = set()
         self._local_enabled: set[int] = set()
         self._ttype_cycle = 0  # position in TTYPE_CYCLE; per-connection, reset in connect()
@@ -449,14 +451,19 @@ class MudConnection:
         else:
             self.start_reconnect()
 
-    def start_reconnect(self) -> bool:
-        """Start one recovery task for this target, unless stopped or already busy."""
+    def start_reconnect(self, detail: str = "") -> bool:
+        """Start one recovery task for this target, unless stopped or already busy.
+
+        ``detail`` is why the connect that came before failed. The loop's first status carries
+        it, because that status is what is spoken: said separately, it would be cut off by it.
+        """
         if (self._target is None or not self._should_reconnect()
                 or self.connected or self.connecting):
             return False
         if (self._read_task is not None and not self._read_task.done()
                 and self._read_task is not asyncio.current_task()):
             return False
+        self._reconnect_detail = detail
         task = asyncio.create_task(self._reconnect_loop())
         self._reconnect_task = task
         task.add_done_callback(self._reconnect_finished)
@@ -478,6 +485,10 @@ class MudConnection:
         host, port, tls, ssl_context = self._target
         attempt = 1
         reason = "connection unavailable" if self._read_task is None else "connection lost"
+        if self._reconnect_detail:
+            # A typo in the host or a refused certificate would otherwise retry for ever
+            # with nobody told why.
+            reason = f"{reason}: {self._reconnect_detail}"
         last_delay = None
         while not self._closing and not asyncio.current_task().cancelling():
             delay = self.reconnect_policy.delay_for(attempt)

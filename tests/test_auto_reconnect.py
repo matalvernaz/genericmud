@@ -425,3 +425,25 @@ async def test_switching_off_does_not_cancel_the_initial_one_shot_attempt(monkey
         assert conn._reconnect_task is None
     finally:
         await conn.close()
+
+
+async def test_the_first_status_says_why_the_connect_failed(monkeypatch):
+    # A typo in the host or a refused certificate now retries for ever, so the reason has to
+    # be said: the first status is the line that is spoken, and it carries it.
+    async def open_connection(host, port, ssl=None):
+        raise OSError("[Errno -2] Name or service not known")
+
+    conn, sleeps, statuses = setup(monkeypatch, open_connection)
+    with pytest.raises(OSError) as failure:
+        await conn.connect("mud.exampel", 23)
+    assert conn.start_reconnect(detail=str(failure.value))
+    try:
+        wake = await sleeps.next(5)
+        assert statuses == [
+            "connection unavailable: [Errno -2] Name or service not known; reconnecting every 5s"
+        ]
+        wake.set_result(None)
+        await sleeps.next(5)  # the next attempt failed the same way, and said nothing more
+        assert len(statuses) == 1
+    finally:
+        await conn.close()

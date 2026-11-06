@@ -1388,7 +1388,7 @@ def test_the_window_tells_packs_the_mud_connected_only_once_it_has(frame, monkey
         def configure_reconnect(self, enabled, interval) -> None:
             self.auto_reconnect = enabled
 
-        def start_reconnect(self) -> bool:
+        def start_reconnect(self, detail: str = "") -> bool:
             return False  # this test exercises one-shot startup, not automatic recovery
 
         def suppress_reconnect(self, *_args) -> None:
@@ -1898,3 +1898,39 @@ def test_watch_this_makes_a_rule_for_a_mud_value_but_not_a_script_one(frame):
         assert not dialog._watch.IsEnabled()
     finally:
         dialog.Destroy()
+
+
+def test_typing_while_it_retries_by_itself_says_still_connecting_instead_of_asking(
+    frame, monkeypatch
+):
+    # Automatic reconnection keeps trying for as long as the MUD is down. "Reconnect now?"
+    # during that time could only ever be answered with "Still connecting", so it is said
+    # straight away, and what was typed stays in the box for when the link is back.
+    import asyncio
+
+    from genericmud.transport.connection import MudConnection
+    from genericmud.ui import wx_app
+
+    asked: list[str] = []
+    monkeypatch.setattr(
+        wx_app.SessionPanel, "_prompt_reconnect",
+        lambda panel: asked.append(panel.input.GetValue()),
+    )
+    panel, loop = _question_panel(frame, monkeypatch)
+    posted: list[dict] = []
+    panel._post = posted.append
+    panel.app = object()  # _reconnect only needs there to be one
+    panel._connection = MudConnection()
+    panel._connection._reconnect_task = loop.create_future()  # the retries are running
+    panel._connect_finished = True
+    try:
+        panel.input.SetValue("look")
+        panel._on_send(None)
+        loop.run_until_complete(asyncio.sleep(0.01))  # the loop's turn
+        assert asked == []
+        assert [message.get("text") for message in posted] == ["* Still connecting to Test"]
+        assert panel.input.GetValue() == "look"
+    finally:
+        panel.app = None
+        panel._connection._reconnect_task = None
+        _close_question_panel(panel, loop)
