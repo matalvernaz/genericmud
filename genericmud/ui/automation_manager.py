@@ -91,6 +91,10 @@ def _rule_summary(kind: str, rule) -> str:
             # you see which one goes first.
             when += f", offset {rule.offset:g} seconds"
         once = ", once only" if rule.one_shot else ""
+        if getattr(rule, "run_disconnected", False):
+            # Worth hearing in the list: it is the difference between a timer that quietly
+            # waits for the world and one that speaks while nothing is coming back.
+            once += ", runs while disconnected"
         # "every 30 seconds: look" already reads as what happens; only a variable target needs
         # saying, because "every 30 seconds: ${1}" would not tell you where it went.
         doing = (

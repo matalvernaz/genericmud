@@ -170,7 +170,9 @@ question the other rules answer, so it can send commands, fill your command box,
 a note, store a value, or run Lua. Do it once only makes it a one-shot: it runs once
 and is then removed, here and from the saved rules the next time they are saved. An
 offset is how many seconds before its interval is up it fires, so two timers on the
-same interval take turns.
+same interval take turns. Keep running while the world is disconnected lets it keep its
+clock while nothing is connected: then it can still note, log, store a value or run a
+script, which is how it speaks, but commands have nowhere to go.
 
 Trigger, alias, and hotkey command fields accept one command per line. ${1}
 means the first matched part. ${script:attack} reads a value saved by a script.

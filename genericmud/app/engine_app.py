@@ -482,6 +482,10 @@ class EngineApp(
         auto-login stranded at the login screen.
         """
         self.engine.connected = True
+        # The timers that paused on the disconnect start again, each with its wait from now: a
+        # world's rules are registered once per session, so without this a dropped link would
+        # silently cost the player every timer rule until the rules were reloaded.
+        self.engine.resume_timers()
         # An offer belongs to the connection that made it: a reconnect asks the MUD again,
         # because a game can move its port and a stale offer would point at nothing.
         self._secure_port = None
@@ -557,7 +561,11 @@ class EngineApp(
             # Also mark the engine disconnected: packs read IsConnected(), and the
             # OnPluginTick chain pauses so a tick can't restart music after quit.
             self.engine.connected = False
-            self.engine.cancel_timers()  # a pending #alarm must not fire into a dead session
+            # Not a blanket cancel any more: a timer asked to keep its clock through a disconnect
+            # goes on, and the rest pause here and come back in after_reconnect(). What is still
+            # dropped is the anonymous work -- a one-shot mud.timer, a pending #alarm, a sound
+            # still downloading -- which has nothing to resume into.
+            self.engine.suspend_timers()
             self._pack_timers_cancelled = True
             self.sound.flush()
             if message.startswith("protocol error"):

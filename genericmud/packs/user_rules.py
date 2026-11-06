@@ -164,6 +164,10 @@ class UserTimer:
     send: str = ""
     send_to: str = "world"
     variable: str = ""  # as for triggers: the name a variable target stores under
+    # MUSHclient's ActiveWhenClosed: keep the clock through a disconnect. What it can then do is
+    # the local half of a rule -- speak, note, log, store a value, run a script -- since there is
+    # no MUD to send to. Everything else pauses, and comes back when the world does.
+    run_disconnected: bool = False
     omit_log: bool = False  # leave whatever it writes out of the session log
     group: str = ""  # as for triggers: switched together with the rest of its group
 
@@ -885,8 +889,14 @@ def _register_timer(
 
     def fire() -> None:
         parts = _response_parts(t.send, t.send_to)
-        if parts:
-            deliver(api, list(parts), t.send_to, variable=t.variable)
+        if not parts:
+            return
+        if send_to_kind(t.send_to) == "world" and not api.is_connected():
+            # Nothing to send to. A timer that runs while the world is disconnected can still
+            # speak, note, log, store a value or run a script; commands have nowhere to go, and
+            # saying so every few seconds would be worse than the silence.
+            return
+        deliver(api, list(parts), t.send_to, variable=t.variable)
 
     # A timer that names a time of day has no fixed period -- its wait is "until the next
     # 03:00" -- so it asks the clock each time; an interval timer just repeats.
@@ -904,6 +914,7 @@ def _register_timer(
         next_delay=(lambda: next_daily_wait(at, now=now())[1]) if repeating_daily else None,
         group=t.group.strip(),
         enabled=t.enabled,
+        while_disconnected=bool(t.run_disconnected),
     )
 
 

@@ -2566,7 +2566,9 @@ class MushclientPack:
             if not state["one_shot"] and self._timer_is_current(key, state, generation):
                 self._schedule_timer(key, state)
 
-        self._api.add_timer(state["interval"], fire)
+        self._api.add_timer(
+            state["interval"], fire, while_disconnected=bool(state["active_closed"])
+        )
 
     def _run_timer(self, state: dict) -> None:
         state["fired"] += 1

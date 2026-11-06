@@ -668,6 +668,13 @@ class TimerEditorDialog(_RuleEditorBase):
         self._one_shot.SetValue(timer.one_shot)
         grid.Add(wx.StaticText(self, label=""))
         grid.Add(self._one_shot)
+        self._run_disconnected = wx.CheckBox(
+            self, label="Keep &running while the world is disconnected"
+        )
+        self._run_disconnected.SetName("Keep running while the world is disconnected")
+        self._run_disconnected.SetValue(timer.run_disconnected)
+        grid.Add(wx.StaticText(self, label=""))
+        grid.Add(self._run_disconnected)
         self._send = self._command_text(grid, timer.send, captures=False)
         self._send_to = self._send_to_choice(grid, timer.send_to)
         self._variable = self._variable_name(grid, timer.variable)
@@ -689,6 +696,7 @@ class TimerEditorDialog(_RuleEditorBase):
             offset=self._number(self._offset.GetValue()),
             at=self._at.GetValue().strip() if daily else "",
             one_shot=self._one_shot.GetValue(),
+            run_disconnected=self._run_disconnected.GetValue(),
             send=self._send.GetValue().strip(),
             send_to=SEND_TO_CHOICES[self._send_to.GetSelection()],
             group=self._group.GetValue().strip(),

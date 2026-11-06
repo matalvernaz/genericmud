@@ -431,7 +431,8 @@ class MudTable:
         Lua has no keyword arguments and ``repeat`` is a reserved word there, so the options
         table is read here: ``mud.add_timer("tick", 5, fn, {every=5, group="combat"})``.
         ``offset`` is MUSHclient's head start inside the interval: with it, the first fire comes
-        that much sooner, so two timers on one interval can take turns.
+        that much sooner, so two timers on one interval can take turns. ``while_disconnected``
+        is its ActiveWhenClosed: the timer keeps its clock through a dropped connection.
         """
 
         def add(name, delay, callback, options=None):
@@ -439,6 +440,7 @@ class MudTable:
             group = ""
             enabled = True
             offset = 0.0
+            while_disconnected = False
             if options is not None:
                 value = options["every"] if options["every"] is not None else options["repeat"]
                 if value is not None:
@@ -449,6 +451,8 @@ class MudTable:
                     enabled = bool(options["enabled"])
                 if options["offset"] is not None:
                     offset = float(options["offset"])
+                if options["while_disconnected"] is not None:
+                    while_disconnected = bool(options["while_disconnected"])
 
             def fire() -> None:
                 # Under the guard, like mud.timer's callback: a Lua error is reported to the
@@ -462,6 +466,7 @@ class MudTable:
                 every=every,
                 group=group,
                 enabled=enabled,
+                while_disconnected=while_disconnected,
             )
 
         return add

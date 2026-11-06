@@ -593,6 +593,7 @@ class ScriptApi:
         next_delay: Callable[[], float] | None = None,
         group: str = "",
         enabled: bool = True,
+        while_disconnected: bool = False,
     ) -> object:
         """A timer with a name (MUSHclient's AddTimer): findable, switchable, cancellable."""
         return self._engine.add_named_timer(
@@ -604,6 +605,7 @@ class ScriptApi:
             group=str(group),
             source=self._source,
             enabled=enabled,
+            while_disconnected=while_disconnected,
         )
 
     def remove_named_timer(self, name: str) -> bool:
@@ -614,7 +616,15 @@ class ScriptApi:
         """MUSHclient's EnableTimer."""
         return self._engine.set_timer_enabled(str(name), bool(enabled))
 
-    def add_timer(self, delay: float, callback: Callable[[], None]) -> None:
+    def add_timer(
+        self, delay: float, callback: Callable[[], None], *, while_disconnected: bool = False
+    ) -> None:
+        """Run ``callback`` after ``delay`` seconds, once.
+
+        ``while_disconnected`` keeps it through a dropped connection (MUSHclient's
+        ActiveWhenClosed, for the packs that flag a timer with it); everything else goes when
+        the world does.
+        """
         if self._active_timers >= _MAX_ACTIVE_TIMERS:
             # Refuse: too many pending timers would starve the event loop (UI freeze). A
             # repeating timer refused here never fires again, so leave a trace of it once.
@@ -645,7 +655,8 @@ class ScriptApi:
         # (a fired one is discarded above), rather than letting it run after the tab closes.
         handle_box.append(
             self._engine.schedule_timer(
-                max(delay, _MIN_TIMER_DELAY), wrapped, source=self._source, on_cancel=release
+                max(delay, _MIN_TIMER_DELAY), wrapped, source=self._source, on_cancel=release,
+                while_disconnected=while_disconnected,
             )
         )
 
