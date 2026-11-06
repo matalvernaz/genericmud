@@ -502,12 +502,15 @@ off its own map — some clan halls and quest rooms are deliberately unmapped.
 ## Automation: triggers, aliases, hotkeys, channels, and scripts
 
 **Ctrl+B** opens one Automation Manager for the current world. Choose
-**Triggers**, **Aliases**, **Hotkeys**, **Channels**, **Scripts** or **MUD data**
-from the **Show** box. There is no separate simple or advanced builder.
+**Triggers**, **Aliases**, **Hotkeys**, **Channels**, **Scripts**, **MUD data** or
+**Timers** from the **Show** box. There is no separate simple or advanced builder.
 
 A trigger reacts to text from the MUD. It can play a sound, speak something
 shorter, send commands, hide the matched line, interrupt speech, or route the
-line to a chat channel. An alias replaces a shortcut you type: `sh` can send
+line to a chat channel. **Leave this line out of the session log** is separate from hiding
+it: what is worth reading now is not always worth keeping for months, and what is worth
+keeping is not always worth hearing, so a line can be shown and not written down, or
+written down and not shown. An alias replaces a shortcut you type: `sh` can send
 `shoot`, and whatever you type after the shortcut goes along with it, so
 `sh goblin` sends `shoot goblin`. A hotkey runs commands when you press a chosen
 key. These editors use ordinary fields; no code is required.
@@ -518,6 +521,106 @@ written as a regular expression, or a soundpack's own alias comes first. When
 the alias sends several commands, the extra words go on the end of the last one,
 unless a command says where they belong with `${1}`, as in `give ${1} to bob`.
 The shortcut has to be a word of its own, so `sh` never takes `shout`.
+
+A **timer** fires every so often (`every 30 seconds`) or once a day at a time
+(`03:00`), and answers the same question the other rules do: a text and a **Send it to**
+target. **Do it once only** makes it a one-shot. It has a **Label** and a **Group**
+like triggers and aliases, so a script switches it by name or with its group.
+
+An interval timer can also take an **offset**: the number of seconds *before* its interval
+is up that it should fire. Two timers on the same interval with one offset between them take
+turns instead of both going off at once: one set for 120 seconds fires at 120, 240, 360, and
+one set for 120 with an offset of 60 fires at 60, 180, 300. The offset only moves the first
+fire; the gap after that is still the interval. It means nothing for a daily timer, whose
+wait comes from the clock.
+
+A timer that should keep going while the world is down says so with **Keep running while the
+world is disconnected**. It keeps its clock through the disconnect, and what it does then is
+the local half of a rule: a note, a log line, a value stored, or a script run. Commands have
+nowhere to go and are dropped, so the flag belongs on an alert -- "still down, ten minutes
+now" -- and not on a fight. Every other timer waits for the world to come back and carries on
+from that moment when it does.
+
+Timers are named things in the engine, which is what makes that possible, and the names
+are MUSHclient's:
+
+```lua
+mud.add_timer("tick", 5, function() mud.command("look") end, {every=5, group="combat"})
+mud.add_timer("pose", 15, function() mud.command("pose") end, {every=15, offset=7.5})
+mud.enable_timer("tick", false)
+mud.delete_timer("tick")
+```
+
+**Send it to** sits beside the response text and says where it goes, the way
+MUSHclient's "send to" does. One text, one destination:
+
+| Send it to | What happens |
+|---|---|
+| The MUD | the commands are sent, as before |
+| My command box, unsent | the text lands in your command box to finish and send yourself -- a trailing space is kept, so `reply ${1} ` waits for the message |
+| The output, as a note | shown in the window and kept in the session log |
+| The session log only | written down, never shown |
+| This client again | run as if you had typed it, so your own aliases see it first and only what falls through reaches the MUD |
+| A script variable | stored under the name you give it, so `${script:name}` can read it later |
+
+The variable target is how a rule remembers something without a line of Lua: a trigger on
+`* pages: *` sending `${1}` to a variable called `pager` keeps the pager's name, and an alias
+answering `page back` with `reply ${script:pager}` uses it. Its text is one value, so it is not
+split into commands -- a semicolon in it stays a semicolon.
+
+**A script** is the target that opens everything else up. Its text is read two ways:
+
+- if it names a function your scripts define, that function is **called** with the
+  matched line and the captures -- `on_backup(line, wildcards)` -- which is
+  MUSHclient's "send to script";
+- otherwise it is **run as Lua** against the same `mud` table your scripts use, so a
+  rule can say its piece without a script file: `mud.set_enabled("backup-watch", false)`,
+  `mud.timer(5, function() mud.command("look") end)`.
+
+Code a rule runs inline is given `line` (what matched) and `wildcards` (the captures,
+`wildcards[1]` first) as globals; a called function receives them as arguments. Errors
+are spoken once and written to the diagnostics rather than swallowed. Every rule of a
+world shares one Lua space for this, and a rule can call any function of any of that
+world's scripts.
+
+That space carries MUSHclient's own names as well -- `Send`, `Note`, `GetVariable`,
+`DoAfter`, `AddTrigger` and the rest, along with the `world` table and its constants --
+so code written for MUSHclient works as it stands, whether you learned from its
+documentation or brought something you made in it. It is the same space, not a second
+one: the same scripts, the same rules, the same values. The [automation and Lua
+guide](docs/scripting.md) lists what is there and what is deliberately not. A soundpack
+is a space of its own: a pack never sees `mud.*`, and your scripts never see a pack's
+variables or triggers.
+
+**Order** decides which rule is tried first when several match: lower numbers first, and
+rules sharing a number fall back to their pattern text, so the order never depends on which
+file they came from. **Keep checking the rules after this one** is on by default -- every
+matching rule acts -- and clearing it makes that rule the last one heard about the line. A
+player rule that stops the search never stops a soundpack's rules; MUSHclient draws the same
+line between one plugin and the next.
+
+**A Group** is on everything that can run: rules sharing a name switch together, so
+`mud.set_group_enabled("combat", false)` turns all of them off in one call -- MUSHclient's
+EnableGroup. Triggers, aliases, hotkeys, timers and MUD data rules all take one, so "combat"
+can mean the whole set and not just the triggers. A group nothing belongs to is not an
+error; it is a group waiting for its first rule.
+
+Triggers and aliases take a **Label** too: the name a script uses to turn *that* rule off and
+on, in MUSHclient's style. A rule with a label can be switched by a script with
+`mud.set_enabled("watch-backups", false)`; one without can only be switched in the
+Automation Manager. The manager reads the label first, because it is what you called
+the rule.
+
+A switch a script makes shows where you edit the rule: open the manager after
+`mud.set_enabled` or `mud.set_group_enabled` and the item reads **Disabled.**, with its
+**Enabled** box clear — by label, by group, by a timer's name, or for a hotkey or MUD data
+rule through its group (a hotkey has no name; MUSHclient's accelerators do not either). That is the state the manager saves, so a rule a script parked stays
+parked, and a save from the manager won't quietly switch it back on.
+
+The world's **Log the notes automation writes** setting decides whether notes reach
+the log; clear it and notes behave like prints without rewriting a rule. Nothing here
+speaks: what you want to hear goes in **Speak this text**, because what belongs in the
+record and what belongs in your ears are different needs.
 
 Each trigger, alias, or hotkey can send one command or a sequence. Put one
 command on each line. The whole sequence is filled in before its first command
@@ -566,8 +669,9 @@ and **Insert a variable into the commands** open the same list; choose a value
 and press **Insert** to put its reference where the cursor was in that field.
 
 Use **Duplicate** to start from an existing item. **Disable** keeps a trigger,
-alias, hotkey, or channel saved without letting it run. Changes work on the next
-matching line.
+alias, hotkey, timer, MUD data rule or channel saved without letting it run. The same
+switch is the **Enabled** box at the top of every one of those editors, so a rule can be
+parked while you edit it. Changes work on the next matching line.
 
 Choose **Scripts** in the same manager when the automation needs decisions,
 timers, reusable functions, or other Lua code. Scripts are sandboxed, load
@@ -744,7 +848,7 @@ View, **Alt+H** Help.
 | Ctrl+Shift+B | Browse soundpacks online |
 | Ctrl+B | Open the Automation Manager |
 | Ctrl+Shift+V | List the values the MUD has sent and scripts have saved |
-| Ctrl+1..6 in Automation Manager | Show triggers / aliases / hotkeys / channels / scripts / MUD data |
+| Ctrl+1..7 in Automation Manager | Show triggers / aliases / hotkeys / channels / scripts / MUD data / timers |
 | Ctrl+N in Automation Manager | Create an item in the category being shown |
 | Enter / Delete in an automation list | Edit / delete the selected item |
 | Enter / F5 in the variables list | Copy the reference / refresh the values |

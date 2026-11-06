@@ -22,6 +22,7 @@ class AppSink(EngineSink):
         self, *, send, post, schedule, voice: VoiceRouter, buffer: Buffer, sound: SoundBus,
         diag: DiagnosticLog | None = None, send_raw=None, ask=None, simulate=None,
         save_state=None, window=None, update_packs=None, check_pack_updates=None,
+        log_note=None, log_line=None,
     ) -> None:
         self._send = send
         self._send_raw = send_raw
@@ -37,6 +38,8 @@ class AppSink(EngineSink):
         self._update_packs = update_packs
         self._check_pack_updates = check_pack_updates
         self._window = window
+        self._log_note = log_note
+        self._log_line = log_line
         self.cues = 0  # play/music calls reaching the bus -- 0 means no cue ever fired
 
     def send(self, text: str) -> None:
@@ -51,9 +54,17 @@ class AppSink(EngineSink):
             return
         self._send_raw(data)
 
-    def echo(self, text: str, channel: str = "main") -> None:
+    def echo(self, text: str, channel: str = "main", *, log: bool = False) -> None:
         self._buffer.append(Line(text, channel=channel))
         self._post(protocol.echo(text, channel))
+        if log:
+            self._log_note(text)  # the world's "log notes" setting decides whether it lands
+
+    def type_text(self, text: str) -> None:
+        self._post(protocol.input_text(text))
+
+    def log_line(self, text: str) -> None:
+        self._log_line(text)
 
     def file_line(self, text: str, channel: str) -> None:
         self._buffer.append(Line(text, channel=channel))

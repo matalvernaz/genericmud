@@ -17,11 +17,14 @@ from genericmud.packs.user_rules import (
     UserChannel,
     UserKey,
     UserRules,
+    UserTimer,
     UserTrigger,
     UserWatch,
+    engine_rule_state,
     load_rules,
     register_rules,
     save_rules,
+    send_to_kind,
 )
 from genericmud.scripting import user_scripts
 from genericmud.scripting.api import ScriptApi
@@ -32,15 +35,30 @@ from genericmud.ui.rule_editors import (
     ChannelEditorDialog,
     DataRuleEditorDialog,
     KeyEditorDialog,
+    TimerEditorDialog,
     TriggerEditorDialog,
 )
 from genericmud.ui.session_panel import SessionPanel
+
+
+def _sends(rule, commands: str) -> str:
+    """One rule's response text in the words its destination deserves, for the manager list."""
+    if not commands:
+        return ""
+    if send_to_kind(getattr(rule, "send_to", "world")) == "variable":
+        name = str(getattr(rule, "variable", "") or "").strip() or "(no variable name)"
+        return f"store {commands} in variable {name}"
+    return f"send {commands}"
 
 
 def _rule_summary(kind: str, rule) -> str:
     """One spoken line per rule for the manager list."""
     # Plain words, no arrow/dash glyphs: these lines are read by a screen reader.
     status = "Disabled. " if not rule.enabled else ""
+    # The label first when it has one: it is what the player named the rule, and what a script
+    # refers to it by, so it is the thing they are looking for in the list.
+    named = f"{rule.label}: " if getattr(rule, "label", "") else ""
+    grouped = f" (group {rule.group})" if getattr(rule, "group", "") else ""
     commands = "; ".join(
         line.strip() for line in rule.send.splitlines() if line.strip()
     ) if hasattr(rule, "send") else ""
@@ -50,19 +68,49 @@ def _rule_summary(kind: str, rule) -> str:
         actions = [part for part in (
             f"sound {Path(rule.sound).name}" if rule.sound else "",
             f"speak {rule.speak}" if rule.speak else "",
-            f"send {commands}" if commands else "",
+            _sends(rule, commands),
             "interrupts speech" if rule.interrupt else "",
             {"speech": "silence line", "line": "remove line"}.get(rule.gag, ""),
             f"channel {rule.channel}" if rule.channel else "",
         ) if part]
         how = rule.match_kind()
         label = f"{rule.pattern}" if how == "wildcard" else f"{rule.pattern} ({how})"
-        return f"{status}Trigger: {label}: {'; '.join(actions) or 'no action'}"
+        return (
+            f"{status}{named}Trigger{grouped}: {label}: "
+            f"{'; '.join(actions) or 'no action'}"
+        )
+    if kind == "timer":
+        when = (
+            f"every {rule.every:g} seconds"
+            if rule.every > 0 and not rule.at.strip()
+            else f"each day at {rule.at or '?'}"
+        )
+        if getattr(rule, "offset", 0) and rule.every > 0 and not rule.at.strip():
+            # Saying it matters: two timers on one interval take turns, and the list is where
+            # you see which one goes first.
+            when += f", offset {rule.offset:g} seconds"
+        once = ", once only" if rule.one_shot else ""
+        if getattr(rule, "run_disconnected", False):
+            # Worth hearing in the list: it is the difference between a timer that quietly
+            # waits for the world and one that speaks while nothing is coming back.
+            once += ", runs while disconnected"
+        # "every 30 seconds: look" already reads as what happens; only a variable target needs
+        # saying, because "every 30 seconds: ${1}" would not tell you where it went.
+        doing = (
+            _sends(rule, commands)
+            if send_to_kind(getattr(rule, "send_to", "world")) == "variable"
+            else commands
+        )
+        return f"{status}{named}Timer{grouped}: {when}{once}: {doing or 'nothing'}"
+
     if kind == "alias":
-        return f"{status}Alias: {rule.pattern} sends {commands or 'nothing'}"
+        return (
+            f"{status}{named}Alias{grouped}: {rule.pattern} "
+            f"{_sends(rule, commands) or 'sends nothing'}"
+        )
     if kind == "key":
         action = commands or rule.speak or rule.sound or "nothing"
-        return f"{status}Hotkey: {rule.key} runs {action}"
+        return f"{status}Hotkey{grouped}: {rule.key} runs {action}"
     if kind == "data":
         actions = [part for part in (
             f"sound {Path(rule.sound).name}" if rule.sound else "",
@@ -71,7 +119,10 @@ def _rule_summary(kind: str, rule) -> str:
             "interrupts speech" if rule.interrupt else "",
         ) if part]
         when = "when it changes" if rule.only_changes else "every time"
-        return f"{status}MUD data: {rule.name}, {when}: {'; '.join(actions) or 'no action'}"
+        return (
+            f"{status}MUD data{grouped}: {rule.name}, {when}: "
+            f"{'; '.join(actions) or 'no action'}"
+        )
     return (
         f"{status}Channel: {rule.name}"
         f" ({'speaks' if rule.speak else 'silent'},"
@@ -114,25 +165,32 @@ class AutomationManagerDialog(wx.Dialog):
             "such as your health. It can play a sound, speak, or send commands. The MUD "
             "variables list (Ctrl+Shift+V) shows what this MUD sends.",
         ),
+        (
+            "timer", "Timers — when a clock reaches a time",
+            "A timer fires every so often, or once a day at a time. What it does is the "
+            "same question every rule answers: send to the MUD, fill your command box, "
+            "write a note, or run a script.",
+        ),
     )
     _CATEGORY_WORDS = {
-        "trigger": "Triggers", "alias": "Aliases", "key": "Hotkeys",
+        "trigger": "Triggers", "alias": "Aliases", "key": "Hotkeys", "timer": "Timers",
         "channel": "Channels", "script": "Scripts", "data": "MUD data",
     }
     _KIND_WORD = {
-        "trigger": "Trigger", "alias": "Alias", "key": "Hotkey", "channel": "Channel",
-        "data": "MUD data rule",
+        "trigger": "Trigger", "alias": "Alias", "key": "Hotkey", "timer": "Timer",
+        "channel": "Channel", "data": "MUD data rule",
     }
     _RULE_TYPES = {
-        "trigger": UserTrigger, "alias": UserAlias,
-        "key": UserKey, "channel": UserChannel, "data": UserWatch,
+        "trigger": UserTrigger, "alias": UserAlias, "key": UserKey, "timer": UserTimer,
+        "channel": UserChannel, "data": UserWatch,
     }
     _RULE_COLLECTIONS = {
-        "trigger": "triggers", "alias": "aliases", "key": "keys", "channel": "channels",
-        "data": "watches",
+        "trigger": "triggers", "alias": "aliases", "key": "keys", "timer": "timers",
+        "channel": "channels", "data": "watches",
     }
     _REQUIRED_FIELD = {
         "trigger": ("pattern", "text to match"),
+        "timer": ("send", "something for it to do"),
         "alias": ("pattern", "the shortcut you will type"),
         "key": ("key", "a key combination"),
         "channel": ("name", "a name"),
@@ -225,11 +283,12 @@ class AutomationManagerDialog(wx.Dialog):
     def _collection(self, kind: str) -> list:
         return {
             "trigger": self._rules.triggers, "alias": self._rules.aliases,
-            "key": self._rules.keys, "channel": self._rules.channels,
-            "data": self._rules.watches,
+            "key": self._rules.keys, "timer": self._rules.timers,
+            "channel": self._rules.channels, "data": self._rules.watches,
         }[kind]
 
     def _refresh(self, select: int | str | None = None, *, focus: bool = False) -> None:
+        self._sync_from_engine()  # a script may have switched something since the last look
         kind = self._kind()
         _kind, _label, description = self._CATEGORIES[self._category.GetSelection()]
         self._description.SetLabel(description)
@@ -324,9 +383,42 @@ class AutomationManagerDialog(wx.Dialog):
             return
         event.Skip()
 
-    def _save_and_reload_rules(self, select: int | None = None) -> bool:
+    def _sync_from_engine(self, *, except_rule=None) -> None:
+        """Take each rule's on/off state from the engine before showing or saving it.
+
+        A script's EnableTrigger, EnableGroup or EnableTimer switches the rule the client runs,
+        not the copy in the rules file, so the manager has to ask. ``except_rule`` is the one the
+        dialog has only now returned: its Enabled box is the player's decision of this moment, and
+        the engine's older state must not overwrite it.
+        """
+        app = getattr(self._panel, "app", None)
+        engine = getattr(app, "engine", None)
+        if engine is None:
+            return  # no live session (a test, or the manager before a world opens)
+        for kind, collection in (
+            ("trigger", self._rules.triggers), ("alias", self._rules.aliases),
+            ("timer", self._rules.timers), ("key", self._rules.keys),
+            ("data", self._rules.watches),
+        ):
+            for index, rule in enumerate(collection):
+                if rule is except_rule:
+                    continue
+                live = engine_rule_state(engine, kind, rule)
+                if live is not None and live != rule.enabled:
+                    collection[index] = replace(rule, enabled=live)
+
+    def _save_and_reload_rules(
+        self, select: int | None = None, *, just_edited=None
+    ) -> bool:
+        """Save the rules and reload them live.
+
+        ``just_edited`` is the rule the dialog has only now returned; every other rule takes its
+        on/off state from the engine first, so saving one rule cannot switch a script's decision
+        back on.
+        """
         if self._pack_dir is None:
             return False
+        self._sync_from_engine(except_rule=just_edited)
         try:
             register_rules(
                 ScriptApi(
@@ -359,6 +451,8 @@ class AutomationManagerDialog(wx.Dialog):
             dialog = KeyEditorDialog(self, self._pack_dir, rule, variables=variables)
         elif kind == "data":
             dialog = DataRuleEditorDialog(self, self._pack_dir, rule, variables=variables)
+        elif kind == "timer":
+            dialog = TimerEditorDialog(self, rule)
         else:
             dialog = ChannelEditorDialog(self, rule)
         try:
@@ -436,7 +530,7 @@ class AutomationManagerDialog(wx.Dialog):
             return
         items = self._collection(kind)
         items.append(result)
-        if self._save_and_reload_rules(len(items) - 1):
+        if self._save_and_reload_rules(len(items) - 1, just_edited=result):
             self._announce_rule_change(kind, result, f"{self._KIND_WORD[kind]} added.")
 
     def _on_edit(self, _event: wx.CommandEvent) -> None:
@@ -450,7 +544,7 @@ class AutomationManagerDialog(wx.Dialog):
         result = self._edit_rule(kind, items[index])
         if result is not None:
             items[index] = result
-            if self._save_and_reload_rules(index):
+            if self._save_and_reload_rules(index, just_edited=result):
                 self._announce_rule_change(kind, result, f"{self._KIND_WORD[kind]} updated.")
 
     def _on_duplicate(self, _event: wx.CommandEvent) -> None:
@@ -473,7 +567,7 @@ class AutomationManagerDialog(wx.Dialog):
         if result is None:
             return
         items.append(result)
-        if self._save_and_reload_rules(len(items) - 1):
+        if self._save_and_reload_rules(len(items) - 1, just_edited=result):
             self._announce_rule_change(kind, result, f"{self._KIND_WORD[kind]} duplicated.")
 
     def _on_toggle(self, _event: wx.CommandEvent) -> None:

@@ -262,6 +262,146 @@ def test_rule_editors_offer_variables_only_with_a_live_session(frame, tmp_path):
             without.Destroy()
 
 
+def test_the_manager_shows_a_rule_a_script_switched_off(frame, tmp_path):
+    # MUSHclient's dialogs show the state the engine holds: EnableTrigger, EnableGroup and
+    # EnableTimer switch the rule the client runs, so the manager has to ask rather than trust
+    # the copy of the rules file it loaded.
+    import types
+    from dataclasses import replace
+
+    from genericmud.automation.engine import AutomationEngine
+    from genericmud.config.keymap import load_keymap
+    from genericmud.config.worlds import World
+    from genericmud.packs import user_rules
+    from genericmud.packs.user_rules import UserRules, UserTrigger, load_rules, save_rules
+    from genericmud.scripting.api import ScriptApi
+    from genericmud.ui import automation_manager
+
+    engine = AutomationEngine()
+    rules = UserRules(
+        triggers=[
+            UserTrigger(pattern="backup", send="look", label="watched"),
+            UserTrigger(pattern="other", send="score"),
+        ]
+    )
+    save_rules(tmp_path, rules)
+    user_rules.register_rules(
+        ScriptApi(engine, source=user_rules.SOURCE, base_dir=str(tmp_path)), rules
+    )
+    engine.set_enabled("watched", False)  # what mud.set_enabled does
+
+    def reloaded() -> None:
+        return None
+
+    panel = types.SimpleNamespace(
+        world=World("Test", "mud.example", 4000),
+        app=types.SimpleNamespace(
+            user_rules_dir=lambda: tmp_path, engine=engine, reload_user_rules=reloaded
+        ),
+        variable_snapshot=None,
+        _keymap=load_keymap("vipmud"),
+        _loop=types.SimpleNamespace(call_soon_threadsafe=lambda _fn, *_args: None),
+    )
+    manager = automation_manager.AutomationManagerDialog(frame, panel)
+    try:
+        rows = [manager._list.GetString(index) for index in range(manager._list.GetCount())]
+        assert rows[0].startswith("Disabled."), rows  # the script switched it off
+        assert manager._collection("trigger")[0].enabled is False
+
+        # Saving another rule must not switch the script's decision back on.
+        edited = replace(manager._collection("trigger")[1], send="score twice")
+        manager._collection("trigger")[1] = edited
+        assert manager._save_and_reload_rules(1, just_edited=edited)
+        assert [rule.enabled for rule in load_rules(tmp_path).triggers] == [False, True]
+
+        # And the rule the player just ticked on keeps the player's answer, not the engine's.
+        turned_on = replace(manager._collection("trigger")[0], enabled=True)
+        manager._collection("trigger")[0] = turned_on
+        assert manager._save_and_reload_rules(0, just_edited=turned_on)
+        assert load_rules(tmp_path).triggers[0].enabled is True
+    finally:
+        manager.Destroy()
+
+
+def test_every_rule_editor_shows_whether_the_rule_is_enabled(frame, tmp_path):
+    # The manager could switch a rule off, but the dialog is where a rule is written: "is this
+    # one on?" belongs there, and a rule can be kept and parked.
+    from genericmud.packs.user_rules import (
+        UserAlias,
+        UserChannel,
+        UserKey,
+        UserTimer,
+        UserTrigger,
+        UserWatch,
+    )
+    from genericmud.ui import rule_editors
+
+    makers = {
+        "trigger": lambda rule: rule_editors.TriggerEditorDialog(frame, tmp_path, rule),
+        "alias": lambda rule: rule_editors.AliasEditorDialog(frame, rule),
+        "hotkey": lambda rule: rule_editors.KeyEditorDialog(frame, tmp_path, rule),
+        "data": lambda rule: rule_editors.DataRuleEditorDialog(frame, tmp_path, rule),
+        "timer": lambda rule: rule_editors.TimerEditorDialog(frame, rule),
+        "channel": lambda rule: rule_editors.ChannelEditorDialog(frame, rule),
+    }
+    rules = {
+        "trigger": UserTrigger(pattern="backup", send="look", enabled=False),
+        "alias": UserAlias(pattern="sh", send="shoot", enabled=False),
+        "hotkey": UserKey(key="f2", speak="health", enabled=False),
+        "data": UserWatch(name="Char.Vitals.hp", speak="${value}", enabled=False),
+        "timer": UserTimer(label="tick", every=5, send="look", enabled=False),
+        "channel": UserChannel(name="chat", enabled=False),
+    }
+    for kind, make in makers.items():
+        dialog = make(rules[kind])
+        try:
+            assert dialog._enabled.GetLabel() == "&Enabled", kind
+            assert dialog._enabled.GetValue() is False, kind
+            assert dialog.result().enabled is False, kind
+            dialog._enabled.SetValue(True)
+            assert dialog.result().enabled is True, kind
+        finally:
+            dialog.Destroy()
+
+
+def test_a_hotkey_and_a_data_rule_keep_their_group(frame, tmp_path):
+    from genericmud.packs.user_rules import UserKey, UserWatch
+    from genericmud.ui.rule_editors import DataRuleEditorDialog, KeyEditorDialog
+
+    hotkey = KeyEditorDialog(
+        frame, tmp_path, UserKey(key="f2", speak="health", group="combat")
+    )
+    try:
+        assert hotkey._group.GetValue() == "combat"
+        assert hotkey.result().group == "combat"
+        hotkey._group.SetValue("movement")
+        assert hotkey.result().group == "movement"
+    finally:
+        hotkey.Destroy()
+
+    rule = UserWatch(name="Char.Vitals.hp", speak="${value}", group="combat")
+    data = DataRuleEditorDialog(frame, tmp_path, rule)
+    try:
+        assert data._group.GetValue() == "combat"
+        assert data.result().group == "combat"
+    finally:
+        data.Destroy()
+
+
+def test_a_rule_editor_keeps_the_variable_its_target_stores_under(frame, tmp_path):
+    from genericmud.packs.user_rules import UserTrigger
+    from genericmud.ui.rule_editors import TriggerEditorDialog
+
+    rule = UserTrigger(pattern="backup", send="${1}", send_to="variable", variable="pager")
+    dialog = TriggerEditorDialog(frame, tmp_path, rule)
+    try:
+        assert dialog._variable.GetValue() == "pager"
+        result = dialog.result()
+        assert (result.send_to, result.variable) == ("variable", "pager")
+    finally:
+        dialog.Destroy()
+
+
 def test_inserting_a_variable_puts_its_reference_at_the_caret(frame, tmp_path, monkeypatch):
     from genericmud.packs.user_rules import UserKey
     from genericmud.ui import rule_editors, variables_dialog
