@@ -22,9 +22,10 @@ from genericmud.voice.router import VoiceRouter
 from tests.helpers import RecordingBackend
 
 wx = pytest.importorskip("wx", reason="native key routing requires wxPython")
+automation_manager = importlib.import_module("genericmud.ui.automation_manager")
 keyboard = importlib.import_module("genericmud.ui.keyboard")
+rule_editors = importlib.import_module("genericmud.ui.rule_editors")
 session_panel = importlib.import_module("genericmud.ui.session_panel")
-wx_app = importlib.import_module("genericmud.ui.wx_app")
 
 NUMPAD_CASES = [
     *((getattr(wx, f"WXK_NUMPAD{n}"), f"numpad{n}") for n in range(10)),
@@ -153,7 +154,7 @@ def test_compass_toggle_takes_effect_immediately(handler):
 @pytest.mark.parametrize("code,name", NUMPAD_CASES)
 def test_key_capture_names_numpad_without_consulting_compass(code, name):
     values = []
-    wx_app._KeyCaptureCtrl._on_key(SimpleNamespace(SetValue=values.append), KeyEvent(code))
+    rule_editors._KeyCaptureCtrl._on_key(SimpleNamespace(SetValue=values.append), KeyEvent(code))
     assert values == [name]
 
 
@@ -163,7 +164,7 @@ def test_key_capture_names_numpad_without_consulting_compass(code, name):
 def test_key_capture_preserves_dialog_navigation(code, modifiers):
     values = []
     event = KeyEvent(code, **modifiers)
-    wx_app._KeyCaptureCtrl._on_key(SimpleNamespace(SetValue=values.append), event)
+    rule_editors._KeyCaptureCtrl._on_key(SimpleNamespace(SetValue=values.append), event)
     assert event.skipped
     assert values == []
 
@@ -182,7 +183,7 @@ def test_modified_numpad_matches_capture_and_dispatch_conventions(
     panel = PanelHarness(compass=compass, bindings=[(combo, "custom command")])
     event = KeyEvent(wx.WXK_NUMPAD_ADD, **modifiers)
     captured = []
-    wx_app._KeyCaptureCtrl._on_key(SimpleNamespace(SetValue=captured.append), event)
+    rule_editors._KeyCaptureCtrl._on_key(SimpleNamespace(SetValue=captured.append), event)
     assert captured == ([combo] if prefix else [])
 
     getattr(panel, handler)(event)
@@ -242,7 +243,7 @@ def test_saved_hotkey_explains_compass_only_when_it_blocks_use(
     tmp_path, action, combo, compass, enabled, hint,
 ):
     # Use the real manager handlers, validation and persistence without opening a dialog.
-    manager_type = wx_app.AutomationManagerDialog
+    manager_type = automation_manager.AutomationManagerDialog
     rule = UserKey(key=combo, send="look", enabled=enabled)
     original = replace(rule, enabled=not enabled) if action == "toggle" else rule
     spoken = []
