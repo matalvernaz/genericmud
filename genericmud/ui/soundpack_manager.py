@@ -283,7 +283,7 @@ class PackManagerDialog(wx.Dialog):
                                  trace="".join(traceback.format_exception(outcome)))
             wx.MessageBox(f"Update failed: {outcome}", "Update", wx.OK | wx.ICON_ERROR)
         elif isinstance(outcome, GitUpdateResult):
-            wx.MessageBox(_git_update_message(outcome), "Update", wx.OK | wx.ICON_INFORMATION)
+            wx.MessageBox(describe_update(outcome), "Update", wx.OK | wx.ICON_INFORMATION)
         else:
             if self._diag is not None:
                 self._diag.event("update.done", id=pack_id, dialect=outcome.manifest.dialect)
@@ -291,8 +291,3 @@ class PackManagerDialog(wx.Dialog):
                 f"Updated {pack_id}. Reconnect to apply.", "Update", wx.OK | wx.ICON_INFORMATION,
             )
         self._refresh_packs()
-
-
-def _git_update_message(result: GitUpdateResult) -> str:
-    """What updating a pack from its repository did (shared with the /update command)."""
-    return describe_update(result)
