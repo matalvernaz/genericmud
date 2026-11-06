@@ -383,9 +383,7 @@ class SessionPanel(wx.Panel):
         self._find = FindState()  # sticky across searches; F3 repeats whatever is in here
         self._find_direction = False  # direction of the search in flight, for the caret sync
         self._find_restart = False  # next result starts from an output edge, inclusively
-        # The output put the reader back at the bottom since a search last found something,
-        # so the next one searches from there, not on from the line it found.
-        self._find_from_bottom = False
+        self._find_anchored = False  # the search went from the reader's own line, not an edge
         self._focused = False  # this world is the one in front (GenericMudFrame._update_focus)
         self._keep_caret_on_focus = False  # one-shot: don't jump to the bottom this time
         self._questions: list[_PackQuestion] = []  # pack dialogs the loop thread waits on
@@ -922,9 +920,10 @@ class SessionPanel(wx.Panel):
             # the reader actually was. Jumping to the bottom here would throw that away.
             self._keep_caret_on_focus = False
         else:
+            # Which line the search goes on from is read off this caret when it is asked for,
+            # so nothing has to be remembered here (see _caret_anchor).
             self.output.SetInsertionPointEnd()
             self.output.ShowPosition(self.output.GetLastPosition())
-            self._find_from_bottom = True  # and F3 goes on from here, too
         event.Skip()
 
     # --- find (output only) ---
@@ -1004,16 +1003,38 @@ class SessionPanel(wx.Panel):
             self._open_find()
             return
         forward = not self._find.forward if reverse else self._find.forward
-        self._run_find(forward, from_bottom=self._find_from_bottom)
+        self._run_find(forward)
 
-    def _run_find(
-        self, forward: bool, *, restart: bool = False, from_bottom: bool = False
-    ) -> None:
+    def _caret_anchor(self) -> tuple[str, int, bool]:
+        """Which output line the reader is on: its text, its distance from the end, and at bottom.
+
+        The engine cannot see this caret, so every search is sent with it: a search that has to
+        guess is what skipped the matches between the caret and the last hit, and sent a fresh
+        Find back to the newest match the reader had already read.
+
+        Standing below the newest line of text -- where going back to the output puts you -- is
+        not a line at all, and is said as such: those searches start at the newest line itself,
+        which is what carrying on from down there means.
+        """
+        if self._pending:
+            self._flush_output()  # the line under the caret may still be in the append batch
+        ok, _column, index = self.output.PositionToXY(self.output.GetInsertionPoint())
+        # The text ends with a newline, and the control counts the empty line after it: the
+        # last line by number is not a line of text, and the caret sitting there means "below
+        # everything I have", not "on the newest line".
+        lines = self.output.GetNumberOfLines() - 1
+        if not ok or lines <= 0 or index >= lines:
+            return "", 0, True
+        return self.output.GetLineText(index), lines - 1 - index, False
+
+    def _run_find(self, forward: bool, *, restart: bool = False) -> None:
         if self.app is None:
             return
         self._find_direction = forward  # _sync_find_caret needs the direction actually used
-        # A search from the bottom lands on its edge occurrence, as a new search does.
-        self._find_restart = restart or from_bottom
+        text, from_end, at_bottom = self._caret_anchor()
+        self._find_anchored = bool(text)
+        # A search that starts below the newest line lands on that line inclusively.
+        self._find_restart = restart or at_bottom
         self._loop.call_soon_threadsafe(
             self.app.on_ws_message,
             protocol.find(
@@ -1021,7 +1042,9 @@ class SessionPanel(wx.Panel):
                 forward=forward,
                 case_sensitive=self._find.case_sensitive,
                 restart=restart,
-                from_bottom=from_bottom,
+                from_bottom=at_bottom,
+                text=text,
+                from_end=from_end,
             ),
         )
 
@@ -1039,9 +1062,11 @@ class SessionPanel(wx.Panel):
         """
         restart = self._find_restart
         self._find_restart = False
+        # A search anchored on the reader's line can land on any occurrence of that line's
+        # text, so an edge is only the answer when nothing said where the search began.
+        from_edge = restart and not self._find_anchored
         if not message.get("found"):
             return  # still at the bottom, if that's where it searched from
-        self._find_from_bottom = False  # the next search goes on from this match
         if self._pending:
             self._flush_output()  # the matched line may still be in the append batch
         lines = self.output.GetValue().split("\n")
@@ -1054,7 +1079,7 @@ class SessionPanel(wx.Panel):
             matched_line,
             caret_line,
             forward=self._find_direction,
-            from_edge=restart,
+            from_edge=from_edge,
         )
         if line is None and not restart:
             # The caret drifted from the engine's cursor (the reader arrowed away, or
