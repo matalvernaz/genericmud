@@ -327,3 +327,38 @@ def test_saving_without_connecting_returns_to_the_list_with_it_picked(monkeypatc
     assert seen == [None, "Penultimate"]  # the list reopened with the saved world picked
     assert frame.opened == []
     assert _FakeWorldDialog.asked[0]["show_connect"] is True  # the New World button offered it
+
+
+def test_editing_a_world_returns_to_the_list_with_it_still_picked(monkeypatch):
+    # After an edit the reader goes back to the list, and should land where they were: on the
+    # world they edited, under its new name if they renamed it, not at the top of the list.
+    from genericmud.ui import wx_app
+
+    frame = _frame_shape(monkeypatch)
+    seen: list[object] = []
+    picked = World("Penultimate", "pen.example", 9500)
+
+    class FakeConnectDialog:
+        answers: list[int] = []
+
+        def __init__(self, parent, saved, preselect=None):
+            seen.append(preselect)
+
+        def ShowModal(self):
+            return FakeConnectDialog.answers.pop(0)
+
+        def get_world(self):
+            return picked
+
+        def Destroy(self):
+            pass
+
+    renamed = World("Penultimate Destination", "pen.example", 9500)
+    FakeConnectDialog.answers = [wx_app._ID_EDIT_WORLD, wx_app._ID_EDIT_WORLD, wx.ID_CANCEL]
+    results = [renamed, None]  # renamed the first time, cancelled the second
+    monkeypatch.setattr(wx_app, "ConnectDialog", FakeConnectDialog)
+    frame._edit_saved_world = lambda world: results.pop(0)
+
+    frame._on_connect(None)
+
+    assert seen == [None, "Penultimate Destination", "Penultimate"]
