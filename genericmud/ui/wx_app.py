@@ -48,7 +48,7 @@ from genericmud.completion import CompletionCycler
 from genericmud.config.keymap import load_keymap
 from genericmud.config.ui_prefs import UiPrefs, load_ui_prefs, save_ui_prefs
 from genericmud.config.update_prefs import is_snoozed, load_prefs, save_prefs, snooze_timestamp
-from genericmud.config.world_files import migrate_world_files
+from genericmud.config.world_files import WORLD_FILE_ROOTS, migrate_world_files
 from genericmud.config.worlds import (
     DEFAULT_CONNECT_METHOD,
     DEFAULT_PORT,
@@ -99,6 +99,7 @@ from genericmud.packs.user_rules import (
 )
 from genericmud.packs.world_share import export_world, import_world
 from genericmud.protocol.charset import AUTO, ENCODING_CHOICES, encoding_label
+from genericmud.safepath import world_component
 from genericmud.scripting import user_scripts
 from genericmud.scripting.api import MESSAGE_BUTTONS, ScriptApi
 from genericmud.session.crashlog import install_loop_exception_handler
@@ -264,6 +265,22 @@ _PASSTHROUGH_COMBOS = frozenset({
     "ctrl+left", "ctrl+right", "ctrl+home", "ctrl+end", "ctrl+delete",
     "ctrl+shift+left", "ctrl+shift+right", "ctrl+shift+home", "ctrl+shift+end",
 })
+
+# What each kind of per-world file is called when a rename has to mention it. Keyed by the
+# folder in WORLD_FILE_ROOTS, which is the list of the kinds that exist.
+_WORLD_FILE_WORDS = {
+    "userpacks": "Automation Manager rules",
+    "maps": "map",
+    "state": "saved variables",
+}
+
+
+def _and_list(items: list[str]) -> str:
+    """Join words the way a person says them: "a, b and c"."""
+    if len(items) < 2:
+        return "".join(items)
+    return ", ".join(items[:-1]) + " and " + items[-1]
+
 
 _OUTPUT_CAP_LINES = 5000  # keep the native control bounded so NVDA/UIA stays responsive
 _FLUSH_INTERVAL_MS = 50  # batch output appends during floods
@@ -4961,7 +4978,12 @@ class GenericMudFrame(wx.Frame):
             dialog.Destroy()
         self._apply_to_open_tabs(world.name, edited)
         if edited.name.casefold() != world.name.casefold():
+            moved, left = self._move_world_files(world.name, edited.name)
             self._rename_open_tabs(world.name, edited.name)
+            if moved:
+                self.announce(f"Its {_and_list(moved)} moved with it.")
+            if left:
+                self.announce(f"Its {_and_list(left)} stayed under the old name.")
 
     def _rename_problem(self, old_name: str, new_name: str) -> str:
         """Why this rename may not take that name, or "" when it may.
@@ -4975,6 +4997,42 @@ class GenericMudFrame(wx.Frame):
         if any(world.name.casefold() == new_name.casefold() for world in load_worlds()):
             return f"There is already a world called {new_name}. Choose a different name."
         return ""
+
+    def _move_world_files(self, old_name: str, new_name: str) -> tuple[list[str], list[str]]:
+        """Carry a renamed world's own files to its new name; return what moved, for saying.
+
+        A world's data is filed under its name: its Automation Manager rules and scripts, its
+        room map and its saved pack variables. Left behind, a renamed world comes back with no
+        map and no rules, and the files sit under a name nothing points at -- which is exactly
+        how the wheels of an earlier rename were found lying about in a real config folder.
+
+        Only ever moves into a name nothing occupies: a file already filed under the new name
+        belongs to a world that had it, and is not replaced. Returns the kinds that moved and
+        the kinds left behind, named the way the rest of the app names them, for saying.
+        """
+        old = world_component(old_name)
+        new = world_component(new_name)
+        if old.casefold() == new.casefold():
+            return [], []
+        root = config_dir()
+        moved: list[str] = []
+        left: list[str] = []
+        for folder, suffix in WORLD_FILE_ROOTS:
+            source = root / folder / f"{old}{suffix}"
+            if not source.exists():
+                continue
+            target = root / folder / f"{new}{suffix}"
+            if target.exists():
+                left.append(_WORLD_FILE_WORDS.get(folder, folder))
+                continue
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                source.rename(target)
+            except OSError:
+                left.append(_WORLD_FILE_WORDS.get(folder, folder))
+                continue  # left where it is rather than half moved
+            moved.append(_WORLD_FILE_WORDS.get(folder, folder))
+        return moved, left
 
     def _rename_open_tabs(self, old_name: str, new_name: str) -> None:
         """Let a disconnected tab take the world's new name, label and all."""

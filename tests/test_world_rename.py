@@ -104,6 +104,91 @@ def test_a_disconnected_world_can_be_renamed_and_its_tab_follows(dialog):
     assert any("Renamed Penultimate to Penultimate Destination" in said for said in frame.said)
 
 
+def _world_files(root, name):
+    """The three files a perfectly set-up world owns, written under the name it is filed by."""
+    from genericmud.safepath import world_component
+
+    filed = world_component(name)
+    made = []
+    for folder, suffix in (("userpacks", ""), ("maps", ".json"), ("state", "-vars.json")):
+        path = root / folder / f"{filed}{suffix}"
+        if folder == "userpacks":
+            path.mkdir(parents=True)
+            (path / "rules.json").write_text("{}", encoding="utf-8")
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("{}", encoding="utf-8")
+        made.append(path)
+    return made
+
+
+def test_a_rename_carries_the_map_rules_and_variables_to_the_new_name(
+    dialog, monkeypatch, tmp_path
+):
+    pytest.importorskip("wx")
+    from genericmud.safepath import world_component
+    from genericmud.ui import wx_app
+
+    monkeypatch.setattr(wx_app, "config_dir", lambda: tmp_path)
+    old = World("Penultimate", "pen.example", 9500)
+    panel = _Panel(old, _Connection(connected=False))
+    frame = _frame([panel], [old])
+    dialog.edited = World("Penultimate Destination", "pen.example", 9500)
+    was = _world_files(tmp_path, "Penultimate")
+
+    frame._edit_saved_world(old)
+
+    now = world_component("Penultimate Destination")
+    assert (tmp_path / "userpacks" / now / "rules.json").is_file()
+    assert (tmp_path / "maps" / f"{now}.json").is_file()
+    assert (tmp_path / "state" / f"{now}-vars.json").is_file()
+    for path in was:  # nothing is left filed under the name it no longer has
+        assert not path.exists(), path
+    assert any("moved with it" in said for said in frame.said)
+
+
+def test_a_file_already_filed_under_the_new_name_is_never_overwritten(
+    dialog, monkeypatch, tmp_path
+):
+    pytest.importorskip("wx")
+    from genericmud.safepath import world_component
+    from genericmud.ui import wx_app
+
+    monkeypatch.setattr(wx_app, "config_dir", lambda: tmp_path)
+    old = World("Penultimate", "pen.example", 9500)
+    frame = _frame([_Panel(old, _Connection())], [old])
+    dialog.edited = World("Arrived", "pen.example", 9500)
+    _world_files(tmp_path, "Penultimate")
+    now = world_component("Arrived")
+    mine = tmp_path / "state" / f"{now}-vars.json"
+    mine.parent.mkdir(parents=True, exist_ok=True)
+    mine.write_text('{"kept": true}', encoding="utf-8")
+
+    frame._edit_saved_world(old)
+
+    assert mine.read_text(encoding="utf-8") == '{"kept": true}'
+    # only the file that was already there is left alone: everything else still moves
+    assert (tmp_path / "maps" / f"{now}.json").is_file()
+    assert (tmp_path / "userpacks" / now / "rules.json").is_file()
+
+
+def test_a_rename_with_no_files_to_carry_says_nothing_about_files(
+    dialog, monkeypatch, tmp_path
+):
+    pytest.importorskip("wx")
+    from genericmud.ui import wx_app
+
+    monkeypatch.setattr(wx_app, "config_dir", lambda: tmp_path)
+    old = World("Penultimate", "pen.example", 9500)
+    frame = _frame([_Panel(old, _Connection())], [old])
+    dialog.edited = World("Penultimate Destination", "pen.example", 9500)
+
+    frame._edit_saved_world(old)
+
+    assert not any("moved with it" in said for said in frame.said)
+    assert any("Renamed Penultimate to Penultimate Destination" in said for said in frame.said)
+
+
 def test_a_connected_tab_locks_the_name_and_says_how_to_free_it(dialog):
     old = World("Penultimate", "pen.example", 9500)
     panel = _Panel(old, _Connection(connected=True))
