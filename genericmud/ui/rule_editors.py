@@ -590,6 +590,9 @@ class TimerEditorDialog(_RuleEditorBase):
         self._every = self._text(
             grid, "E&very this many seconds:", str(timer.every or "")
         )
+        self._offset = self._text(
+            grid, "Offset in seconds, be&fore the interval is up:", str(timer.offset or "")
+        )
         self._at = self._text(grid, "At this &time each day (HH:MM:SS):", timer.at)
         self._one_shot = wx.CheckBox(self, label="Do it &once only")
         self._one_shot.SetName("Do it once only")
@@ -611,6 +614,7 @@ class TimerEditorDialog(_RuleEditorBase):
             label=self._label.GetValue().strip(),
             enabled=self._enabled,
             every=max(0.0, self._number(self._every.GetValue())),
+            offset=max(0.0, self._number(self._offset.GetValue())),
             at=self._at.GetValue().strip() if self._kind.GetSelection() == 1 else "",
             one_shot=self._one_shot.GetValue(),
             send=self._send.GetValue().strip(),
