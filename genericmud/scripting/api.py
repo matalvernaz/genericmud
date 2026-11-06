@@ -81,6 +81,17 @@ class ScriptApi:
     def send(self, text: str) -> None:
         self._engine.sink.send(str(text))
 
+    def run_script(self, text: str, *, line: str = "", wildcards=()) -> None:
+        """Run rule-authored Lua: a function a script defines, or the text itself.
+
+        Set up by the app, which knows this world's loaded scripts; a ScriptApi without one
+        (a pack's, a test's) reports that rather than pretending to run anything.
+        """
+        runner = getattr(self, "scripts", None)
+        if runner is None:
+            raise RuntimeError("no scripting runtime is attached to this session")
+        runner.run(str(text), line=str(line), wildcards=list(wildcards))
+
     def execute(self, text: str) -> None:
         """Process ``text`` as if the user typed it (MUSHclient ``Execute``).
 
@@ -177,6 +188,22 @@ class ScriptApi:
 
     def echo(self, text: str, channel: str = "main") -> None:
         self._engine.sink.echo(str(text), channel)
+
+    def type_text(self, text: str) -> None:
+        """Put text in the player's command box, unsent (MUSHclient's "send to command")."""
+        self._engine.sink.type_text(str(text))
+
+    def log_line(self, text: str) -> None:
+        """Write a line to the session log without showing it (MUSHclient's "send to log")."""
+        self._engine.sink.log_line(str(text))
+
+    def note(self, text: str, channel: str = "main") -> None:
+        """Show a line of the client's own in the output, and in the log (MUSHclient's Note)."""
+        self._engine.sink.echo(str(text), channel, log=True)
+
+    def print(self, text: str, channel: str = "main") -> None:  # noqa: A003 - MUSHclient's name
+        """Show a line of the client's own in the output, never in the log (MUSHclient's Print)."""
+        self._engine.sink.echo(str(text), channel, log=False)
 
     def speak(self, text: str, channel: str = "main", interrupt: bool = False) -> None:
         self._engine.sink.speak(str(text), channel, interrupt)
@@ -506,6 +533,14 @@ class ScriptApi:
         opts.setdefault("source", self._source)
         return self._engine.add_trigger(pattern, callback, **opts)  # type: ignore[arg-type]
 
+    def set_group_enabled(self, group: str, enabled: bool = True) -> int:
+        """Turn every rule in a group on or off (MUSHclient's EnableGroup); how many changed."""
+        return self._engine.set_group_enabled(str(group), bool(enabled))
+
+    def set_enabled(self, name: str, enabled: bool = True) -> bool:
+        """Turn a named rule on or off, as MUSHclient's EnableTrigger/EnableAlias do."""
+        return self._engine.set_enabled(str(name), bool(enabled))
+
     def remove_trigger(self, name: str) -> None:
         """Drop a previously-registered trigger by name (dynamic MUSHclient triggers)."""
         self._engine.remove_trigger(name)
@@ -533,6 +568,37 @@ class ScriptApi:
     def remove_key(self, key: str) -> None:
         """Drop this source's binding of ``key``."""
         self._engine.remove_key(key, source=self._source)
+
+    def add_named_timer(
+        self,
+        name: str,
+        delay: float,
+        callback: Callable[[], None],
+        *,
+        every: float | None = None,
+        next_delay: Callable[[], float] | None = None,
+        group: str = "",
+        enabled: bool = True,
+    ) -> object:
+        """A timer with a name (MUSHclient's AddTimer): findable, switchable, cancellable."""
+        return self._engine.add_named_timer(
+            str(name),
+            delay,
+            callback,
+            every=every,
+            next_delay=next_delay,
+            group=str(group),
+            source=self._source,
+            enabled=enabled,
+        )
+
+    def remove_named_timer(self, name: str) -> bool:
+        """MUSHclient's DeleteTimer."""
+        return self._engine.remove_named_timer(str(name))
+
+    def set_timer_enabled(self, name: str, enabled: bool = True) -> bool:
+        """MUSHclient's EnableTimer."""
+        return self._engine.set_timer_enabled(str(name), bool(enabled))
 
     def add_timer(self, delay: float, callback: Callable[[], None]) -> None:
         if self._active_timers >= _MAX_ACTIVE_TIMERS:

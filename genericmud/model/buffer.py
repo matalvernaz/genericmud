@@ -46,6 +46,11 @@ class Line:
     channel: str = "main"
     gagged: bool = False  # suppressed from self-voice
     display_when_gagged: bool = False  # gagged from voice but kept visible/reviewable
+    # Shown (or not, by the two above) like any other line, but left out of the session log. It
+    # is MUSHclient's "omit from log", and it is a separate thing from gagging on purpose: a
+    # line worth reading now (a database backup starting, a metaprefix marker) is not worth
+    # keeping for months, and a line worth keeping is not always one worth hearing.
+    omit_from_log: bool = False
     ts: float = field(default_factory=time.time)
     spans: list[Span] = field(default_factory=list)  # colour runs; empty if unparsed
     seq: int = -1  # monotonic all-time position, stamped by Buffer.append (-1 = unbuffered)

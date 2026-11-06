@@ -100,11 +100,12 @@ how much you've mapped.
 
 Automation and sounds:
 Ctrl+B opens the Automation Manager. Its Show box contains Triggers, Aliases,
-Hotkeys, Channels, Scripts, and MUD data. A trigger watches text from the MUD. An alias
-replaces a shortcut you type. A hotkey reacts to a chosen key combination.
-Each can send one command or several commands, one per line, without writing
-code. The Scripts category has the Lua editor for decisions, timers, saved
-values, and reusable automation. Ctrl+Shift+B browses ready-made soundpacks.
+Hotkeys, Channels, Scripts, MUD data, and Timers. A trigger watches text from the MUD. An alias
+replaces a shortcut you type. A hotkey reacts to a chosen key combination. A timer
+acts on a clock. Each can send one command or several commands, one per line,
+without writing code. The Scripts category has the Lua editor for decisions,
+timers, saved values, and reusable automation. Ctrl+Shift+B browses ready-made
+soundpacks.
 
 Sharing:
 File menu, Export This World saves your whole setup — connection, triggers,
@@ -120,8 +121,8 @@ Automation and Lua scripting
 Start here:
 Connect to the saved world you want to change, or delete it from the same dialog.
 Press Ctrl+B or open the Automation menu and choose Manage automation. In the Show
-box, choose Triggers, Aliases, Hotkeys, Channels, or Scripts. They are categories in
-one manager.
+box, choose Triggers, Aliases, Hotkeys, Channels, Scripts, MUD data, or Timers.
+They are categories in one manager.
 
 Make an alias without code:
 Show Aliases and choose New. In When I type, enter combo *. In Commands to send,
@@ -140,8 +141,27 @@ in it to say where they belong.
 
 Make a trigger without code:
 Show Triggers and choose New. Enter the text to watch for. The line contains
-this text is usually the right match choice. Add any commands, spoken text,
-sound, line handling, or channel routing you need, then choose OK.
+this text is usually the right match choice. "Send it to" says where the response
+goes: the MUD, your command box (unsent, to finish yourself), the output as a note,
+the log alone, this client again, or a script -- a function name, or Lua code such as
+mud.set_enabled("combat", false). Add any spoken text, sound, line handling, or channel
+routing you need, then choose OK. Leave this line out of the
+session log is separate from hiding it: the line still works as it did, it just never
+reaches the file, which is how a repeating notice stops filling the record.
+
+A rule can have a name, a group, and an order. The Label is the name a script turns
+that one rule off and on by, with mud.set_enabled. The Group switches every rule that
+shares it together, with mud.set_group_enabled, which is how all the combat rules go
+off in one call. Order decides which is tried first when several match: the lower
+number first, and equal numbers fall back to the pattern text. Keep checking the rules
+after this one is on by default -- every matching rule acts -- and clearing it makes
+that rule the last one heard about the line. A player rule that stops the search never
+silences a soundpack.
+
+A timer (Timers in the Automation Manager) acts on a clock rather than on a line:
+every so often, or once a day at a time such as 03:00. What it does is the same
+question the other rules answer, so it can send commands, fill your command box, write
+a note, or run Lua. Do it once only makes it a one-shot.
 
 Trigger, alias, and hotkey command fields accept one command per line. ${1}
 means the first matched part. ${script:attack} reads a value saved by a script.
@@ -167,7 +187,7 @@ value, so speaking ${value} health reads your health. Only when it changes is on
 for new rules.
 
 Choose Duplicate to start from a copy. Disable keeps an item saved without
-letting it run. Ctrl+1 through Ctrl+5 change categories, Ctrl+N creates an item,
+letting it run. Ctrl+1 through Ctrl+7 change categories, Ctrl+N creates an item,
 Enter edits, and Delete deletes after confirmation. F2 renames a script.
 
 Open the Lua editor:
@@ -355,7 +375,8 @@ Ctrl+B            Open the Automation Manager
 Ctrl+Shift+V      List the MUD's variables and script values
 Ctrl+Shift+B      Browse soundpacks online
 Automation Manager:
-Ctrl+1 to 5       Show triggers, aliases, hotkeys, channels, or scripts
+Ctrl+1 to 7       Show triggers, aliases, hotkeys, channels, scripts, MUD data,
+                  or timers
 Ctrl+N            Create an item in the category being shown
 Enter / Delete    Edit / delete the selected item
 F2                Rename the selected script
