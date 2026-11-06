@@ -160,3 +160,26 @@ def test_parked_line_stays_put_as_new_lines_arrive():
     for i in range(5, 10):
         buffer.append(Line(f"line{i}"))  # appends, no eviction
     assert cursor.current_word() == "line1"  # unmoved
+
+def test_go_to_column_parks_on_the_word_holding_it():
+    # The output box has a caret of its own, and a line can carry several links: the word the
+    # caret is in is the only way to know which one the reader means.
+    from genericmud.model.buffer import Buffer, Line
+
+    buffer = Buffer()
+    buffer.append(Line("Exits: north and down."))
+    cursor = ReviewCursor(buffer)
+    assert cursor.go_to_column(4) == "Exits:"  # inside the first word
+    assert cursor.go_to_column(7) == "north"  # a column in the gap takes the next word
+    assert cursor.go_to_column(8) == "north"
+    assert cursor.go_to_column(20) == "down."  # the word is the one the world wrote
+    assert cursor.go_to_column(999) == "down."  # past the end is the last word, not an error
+
+
+def test_go_to_column_on_an_empty_line_is_harmless():
+    from genericmud.model.buffer import Buffer, Line
+
+    buffer = Buffer()
+    buffer.append(Line("   "))
+    cursor = ReviewCursor(buffer)
+    assert cursor.go_to_column(2) == ""
