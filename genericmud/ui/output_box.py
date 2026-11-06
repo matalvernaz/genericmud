@@ -9,6 +9,7 @@ import wx
 
 from genericmud.bridge import protocol
 from genericmud.ui.clipboard import _set_clipboard_text
+from genericmud.ui.command_entry import CommandEntryCtrl
 from genericmud.ui.keyboard import _key_combo
 from genericmud.ui.output_dialogs import ChooseDialog, CopyLineDialog, FindDialog
 from genericmud.ui.scrollback import anchor_after_append, find_line
@@ -24,7 +25,9 @@ class OutputBoxMixin:
     a link, and opens MXP menus and the copy box. Uses these attributes from
     SessionPanel.__init__: _alive, _find, _find_anchored, _find_direction, _find_restart,
     _flush_scheduled, _input_masked, _keep_caret_on_focus, _loop, _pending, _prefs, app, input and
-    output. Hands keys to command_box's _dispatch_bound_combo.
+    output. Editable sessions use _entry_from_output when focus returns to Command.
+    Hands keys to command_box's _dispatch_bound_combo and password changes to
+    command_box's _set_input_masked.
     """
 
     def _fill_command(self, text: str) -> None:
@@ -34,9 +37,15 @@ class OutputBoxMixin:
         following the link, and an unfinished command nobody is looking at is the state that
         sends half a sentence by accident.
         """
-        self.input.SetValue(text)
-        self.input.SetInsertionPointEnd()
+        if isinstance(self.input, CommandEntryCtrl):
+            if self.output.HasFocus():
+                self.input.move_to_tail()
+            self.input.replace_command(text)
+        else:
+            self.input.SetValue(text)
+            self.input.SetInsertionPointEnd()
         self.input.SetFocus()
+
 
     def _choose_from_menu(self, message: dict) -> None:
         """Ask which of a menu's commands was meant, and send only the one picked.
@@ -87,7 +96,7 @@ class OutputBoxMixin:
         elif kind == protocol.FIND_RESULT:
             self._sync_find_caret(message)
         elif kind == protocol.INPUT_MASKED:
-            self._input_masked = bool(message.get("masked"))
+            self._set_input_masked(bool(message.get("masked")))
         elif kind == protocol.INPUT_TEXT:
             self._fill_command(str(message.get("text", "")))
         elif kind == protocol.MENU:
@@ -165,6 +174,7 @@ class OutputBoxMixin:
         deliberately does not. Done synchronously rather than via CallAfter so the caret
         is already at the end when the screen reader reads the newly focused control.
         """
+        self._entry_from_output = True
         if self._keep_caret_on_focus:
             # Focus is coming back from the Find dialog, so the search must run from where
             # the reader actually was. Jumping to the bottom here would throw that away.
@@ -176,11 +186,20 @@ class OutputBoxMixin:
             self.output.ShowPosition(self.output.GetLastPosition())
         event.Skip()
 
+
     # --- find (output only) ---
 
     def _on_output_key(self, event: wx.KeyEvent) -> None:
         """Find keys and link following, live only while the output has focus."""
         code = event.GetKeyCode()
+        if (getattr(self, "_entry_input", None) is not None and code in
+                (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER) and event.ControlDown()
+                and not event.AltDown() and not event.ShiftDown()):
+            if not self._dispatch_entry_shortcut("ctrl+enter"):
+                if isinstance(self.input, CommandEntryCtrl):
+                    self.input.move_to_tail()
+                self.input.SetFocus()
+            return
         if (
             code == ord("F")
             and event.ControlDown()
@@ -233,6 +252,7 @@ class OutputBoxMixin:
         if self._dispatch_bound_combo(combo):
             return
         event.Skip()
+
 
     def _open_find(self) -> None:
         # Closing the modal dialog briefly restores focus to output. Preserve its
@@ -359,10 +379,16 @@ class OutputBoxMixin:
         unicode_key = event.GetUnicodeKey()
         modified = event.ControlDown() or event.AltDown()
         if unicode_key >= 32 and unicode_key != 127 and not modified:
+            entry = isinstance(self.input, CommandEntryCtrl)
             selection = self.input.GetSelection()
+            if entry:
+                self.input.move_to_tail()
             self.input.SetFocus()
-            # Focusing may select all text; WriteText must use the user's edit range.
-            self.input.SetSelection(*selection)
+            if entry:
+                self.input.move_to_tail()
+            else:
+                # Focusing may select all text; Standard keeps the user's edit range.
+                self.input.SetSelection(*selection)
             self.input.WriteText(chr(unicode_key))
             return
         event.Skip()  # arrows etc. -> native screen-reader review of the output

@@ -14,6 +14,7 @@ import wx
 
 from genericmud.bridge import protocol
 from genericmud.ui.clipboard import _clipboard_text, _set_clipboard_text
+from genericmud.ui.command_entry import CommandEntryCtrl
 from genericmud.ui.pack_dialogs import (
     PackMessageDialog,
     PackNotepadFrame,
@@ -74,20 +75,38 @@ class PackWindowMixin:
             wx.CallAfter(_set_clipboard_text, text)
 
     def get_command(self) -> str:
-        return str(self._on_ui_thread(self.input.GetValue, ""))
+        def read() -> str:
+            if isinstance(self.input, CommandEntryCtrl):
+                return self.input.current_command()
+            return self.input.GetValue()
+
+        return str(self._on_ui_thread(read, ""))
+
 
     def set_command(self, text: str) -> bool:
         def fill() -> bool:
-            if self.input.GetValue():
-                return False
-            self.input.SetValue(text)
-            self.input.SetInsertionPointEnd()
+            if isinstance(self.input, CommandEntryCtrl):
+                if self.input.current_command():
+                    return False
+                self.input.replace_command(text)
+            else:
+                if self.input.GetValue():
+                    return False
+                self.input.SetValue(text)
+                self.input.SetInsertionPointEnd()
             return True
 
         return bool(self._on_ui_thread(fill, False))
 
+
     def paste_command(self, text: str) -> str:
         def paste() -> str:
+            if isinstance(self.input, CommandEntryCtrl):
+                try:
+                    return self.input.paste_command(text)
+                except ValueError as error:
+                    self._loop.call_soon_threadsafe(self._speak_system, str(error))
+                    return ""
             start, end = self.input.GetSelection()
             replaced = self.input.GetValue()[start:end]
             self.input.Replace(start, end, text)
@@ -95,14 +114,19 @@ class PackWindowMixin:
 
         return str(self._on_ui_thread(paste, ""))
 
+
     def select_command(self, first: int, last: int) -> None:
         def select() -> None:
+            if isinstance(self.input, CommandEntryCtrl):
+                self.input.select_command(first, last)
+                return
             length = self.input.GetLastPosition()
             start = min(max(first - 1, 0), length)
             end = length if last < 0 else min(max(last, start), length)
             self.input.SetSelection(start, end)
 
         self._on_ui_thread(select, None)
+
 
     def open_url(self, url: str) -> bool:
         if not self._alive:

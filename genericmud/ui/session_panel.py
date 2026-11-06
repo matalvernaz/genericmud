@@ -24,6 +24,7 @@ from genericmud.session.diaglog import DiagnosticLog
 from genericmud.session.hub import SessionHub
 from genericmud.transport.connection import MudConnection
 from genericmud.ui.command_box import _HISTORY_LIMIT, CommandBoxMixin
+from genericmud.ui.command_entry import CommandEntryCtrl
 from genericmud.ui.output_box import OutputBoxMixin
 from genericmud.ui.pack_dialogs import PackNotepadFrame, _PackQuestion
 from genericmud.ui.pack_window import PackWindowMixin
@@ -102,10 +103,17 @@ class SessionPanel(
         # way on every Up and Down; with real lines they behave. It also lets a pasted list
         # arrive as one block, which is how a world with stacking off gets several commands at
         # once. Enter still sends -- it cannot insert a newline here (see _on_input_key).
-        self.input = wx.TextCtrl(self, style=wx.TE_MULTILINE | wx.TE_PROCESS_ENTER)
-        # Two lines tall, measured from the font rather than assumed in pixels: the reader may
-        # have their text scaled up, and a guessed height would clip the line being typed.
-        self.input.SetMinSize((-1, self.input.GetCharHeight() * 2 + 8))
+        self._entry_input = (CommandEntryCtrl(self)
+                             if self._prefs.command_input_mode == "editable" else None)
+        self._entry_from_output = False
+        if self._entry_input is not None:
+            self.input = self._entry_input
+            self._entry_input.execute = self._send_entry
+        else:
+            self.input = wx.TextCtrl(self, style=wx.TE_MULTILINE | wx.TE_PROCESS_ENTER)
+        # Standard keeps its two-line compose box. The optional editor sizes itself.
+        if self._entry_input is None:
+            self.input.SetMinSize((-1, self.input.GetCharHeight() * 2 + 8))
         self.input.SetName(f"{world.name} command")
 
         sizer = wx.BoxSizer(wx.VERTICAL)
@@ -117,6 +125,7 @@ class SessionPanel(
 
         self.input.Bind(wx.EVT_TEXT_ENTER, self._on_send)
         self.input.Bind(wx.EVT_KEY_DOWN, self._on_input_key)
+        self.input.Bind(wx.EVT_SET_FOCUS, self._on_input_focus)
         self.output.Bind(wx.EVT_CHAR, self._on_output_char)
         self.output.Bind(wx.EVT_SET_FOCUS, self._on_output_focus)
         self.output.Bind(wx.EVT_KEY_DOWN, self._on_output_key)

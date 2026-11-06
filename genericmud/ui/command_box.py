@@ -8,6 +8,7 @@ from __future__ import annotations
 import wx
 
 from genericmud.app import CLIENT_PREFIX
+from genericmud.ui.command_entry import CommandEntryCtrl
 from genericmud.ui.keyboard import (
     _COMPLETE_BACKWARD,
     _COMPLETE_FORWARD,
@@ -35,8 +36,9 @@ class CommandBoxMixin:
     Sends what was typed, walks the history, completes words and runs bound keys. Uses these
     attributes from SessionPanel.__init__: _completion, _completion_start, _completion_tail,
     _connect_finished, _hist_index, _history, _history_limit, _input_masked, _keymap, _loop,
-    _prefs, _voice, app and input. Asks session_connection whether the tab is connected, and to
-    reconnect.
+    _prefs, _voice, app and input. Editable sessions also use _entry_input and
+    _entry_from_output; Standard follows the original compose/history path. Asks
+    session_connection whether the tab is connected, and to reconnect.
     """
 
     def _remember(self, lines: list[str]) -> None:
@@ -72,6 +74,9 @@ class CommandBoxMixin:
         passwords. Only a block is split, and its blank lines are dropped; a block holding
         nothing but blank lines is one blank Enter.
         """
+        if isinstance(self.input, CommandEntryCtrl):
+            self._send_entry(True)
+            return
         value = self.input.GetValue()
         if "\n" in value or "\r" in value:
             lines = [line for line in value.splitlines() if line.strip()] or [""]
@@ -106,11 +111,54 @@ class CommandBoxMixin:
                     self.app.on_ws_message, {"type": "input", "text": line}
                 )
 
+
     def _on_input_key(self, event: wx.KeyEvent) -> None:
         code = event.GetKeyCode()
-        if code in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER):
+        entry = isinstance(getattr(self, "input", None), CommandEntryCtrl)
+        secret_entry = getattr(self, "_entry_input", None) is not None and self._input_masked
+        if entry and code in (0, wx.WXK_SHIFT, wx.WXK_CONTROL, wx.WXK_ALT, wx.WXK_RAW_CONTROL):
+            # Modifier transitions do not end a completion run. Cocoa reports
+            # flagsChanged as KEY_DOWN/0 even when releasing Command, while
+            # other ports report the modifier key. The next editing key resets it.
+            event.Skip()
+            return
+        combo = _key_combo(event, allow_numpad=not self._prefs.numpad_compass)
+        if ((entry or secret_entry) and combo in ("escape", "ctrl+r", "ctrl+enter")
+                and self._dispatch_entry_shortcut(combo)):
+            return
+        if (secret_entry and code in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER)
+                and event.ControlDown() and not event.AltDown() and not event.ShiftDown()):
+            self.input.SetFocus()
+            return
+        if entry:
+            plain = not (event.ControlDown() or event.AltDown() or event.ShiftDown())
+            combo = _key_combo(event, allow_numpad=not self._prefs.numpad_compass)
+            if combo != "ctrl+r":
+                self.input.reset_recall()
+            if code in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER) and not (
+                event.ControlDown() or event.AltDown()
+            ):
+                event.Skip()  # native CHAR/TEXT_ENTER handling, including IME confirmation
+                return
+            if plain and code == wx.WXK_DOWN and self.input.create_tail():
+                return
+            if plain and code == wx.WXK_BACK and self.input.protects_backspace():
+                return
+            if plain and code == wx.WXK_ESCAPE:
+                self.input.clear_line()
+                return
+            if combo == "ctrl+r":
+                feedback = self.input.recall_command()
+                if feedback:
+                    self._loop.call_soon_threadsafe(self._speak_system, feedback)
+                return
+            if combo == "ctrl+enter":
+                self.input.move_to_tail()
+                self.input.SetFocus()
+                return
+        if not entry and code in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER):
             modified = event.ControlDown() or event.AltDown()
-            if event.ShiftDown() and not modified:
+            if event.ShiftDown() and not modified and not secret_entry:
                 self._start_new_command_line()
                 return
             if not modified:
@@ -118,13 +166,15 @@ class CommandBoxMixin:
                 self._on_send(None)
                 return
         combo = _key_combo(event, allow_numpad=not self._prefs.numpad_compass)
-        if combo in (_COMPLETE_FORWARD, _COMPLETE_BACKWARD):
+        if combo in (_COMPLETE_FORWARD, _COMPLETE_BACKWARD) and not secret_entry:
             self._cycle_completion(backward=(combo == _COMPLETE_BACKWARD))
             return
         self._completion.reset()  # any other key ends a completion run
         plain = not (event.ControlDown() or event.AltDown() or event.ShiftDown())
         if plain and code in (wx.WXK_UP, wx.WXK_DOWN):
-            if self._history_step(-1 if code == wx.WXK_UP else 1):
+            if not entry and not secret_entry and self._history_step(
+                -1 if code == wx.WXK_UP else 1
+            ):
                 return
             event.Skip()  # not history: leave the arrows to the field and the reader
             return
@@ -134,6 +184,7 @@ class CommandBoxMixin:
         if self._dispatch_bound_combo(combo):
             return
         event.Skip()  # passthrough/unbound combos -> default handling (Alt+F4 -> EVT_CLOSE)
+
 
     def _dispatch_bound_combo(self, combo: str | None) -> bool:
         """Send a bound keymap/pack combo to the engine; return whether it was consumed.
@@ -182,9 +233,15 @@ class CommandBoxMixin:
         """
         if self.app is None:
             return
+        entry = isinstance(self.input, CommandEntryCtrl)
         if not self._completion.active:
-            text = self.input.GetValue()
+            text = self.input.current_command() if entry else self.input.GetValue()
             caret = self.input.GetInsertionPoint()
+            if entry:
+                start, end = self.input.line_bounds()
+                if not start <= caret <= end:
+                    return
+                caret = len(self.input.text_range(start, caret))
             head = text[:caret]
             start = max(head.rfind(" "), head.rfind(";")) + 1
             prefix = head[start:caret]
@@ -206,12 +263,18 @@ class CommandBoxMixin:
         word = self._completion.prev() if backward else self._completion.next()
         if word is None:
             return
-        prefix_text = self.input.GetValue()[: self._completion_start]
-        self.input.SetValue(prefix_text + word + self._completion_tail)
-        self.input.SetInsertionPoint(self._completion_start + len(word))
+        text = self.input.current_command() if entry else self.input.GetValue()
+        value = text[: self._completion_start] + word + self._completion_tail
+        caret = self._completion_start + len(word)
+        if entry:
+            self.input.replace_command(value, caret=caret)
+        else:
+            self.input.SetValue(value)
+            self.input.SetInsertionPoint(caret)
         # Tab is not a caret-movement gesture, so the screen reader announces nothing here
         # (unlike history recall, where it reads the line itself) -- speak the word ourselves.
         self._loop.call_soon_threadsafe(self._speak_system, word)
+
 
     def _history_step(self, direction: int) -> bool:
         """Move one entry through command history, or leave the key to the field.
@@ -271,3 +334,94 @@ class CommandBoxMixin:
     def _speak_system(self, text: str) -> None:  # loop thread
         if self._voice is not None:
             self._voice.speak(text, channel="system", interrupt=True)
+
+    def _send_entry(self, append: bool) -> None:
+        entry = self.input
+        if not isinstance(entry, CommandEntryCtrl):
+            return
+        self._completion.reset()
+        if self.app is None:
+            self._loop.call_soon_threadsafe(
+                self._speak_system, "Session is still starting; command kept",
+            )
+            return
+        text = (entry.selected_text() if not append and entry.GetSelection()[0] !=
+                entry.GetSelection()[1] else entry.current_command())
+        if not append and not text.strip(" "):
+            return
+        # Multiline execution is possible only for an explicit Shift+Enter selection.
+        # Use the same blank-line handling as Standard's deliberate block submission.
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        lines = ([line for line in text.split("\n") if line.strip()] or [""]
+                 if "\n" in text else [text])
+        offline_ok = all(line.startswith(CLIENT_PREFIX) for line in lines)
+        if self._connect_finished and not self.is_connected() and not offline_ok:
+            if self.is_connecting():
+                self.reconnect()
+            else:
+                self._prompt_reconnect()
+            return  # no document/selection changes while deciding whether to reconnect
+        if append:
+            entry.finish_submission()
+        self._remember([line for line in lines if line])
+        for line in lines:
+            self._loop.call_soon_threadsafe(self.app.on_ws_message, {"type": "input", "text": line})
+
+
+    def _dispatch_entry_shortcut(self, combo: str) -> bool:
+        """An explicit pack binding wins over this mode's editing shortcuts.
+
+        Dispatch on the loop thread directly: the shared engine keymap would
+        otherwise interpret Ctrl+Enter as Standard's autoretype toggle.
+        """
+        engine = getattr(self.app, "engine", None)
+        if engine is None or not engine.has_key(combo):
+            return False
+        self._loop.call_soon_threadsafe(engine.press_key, combo)
+        return True
+
+
+    def _set_input_masked(self, masked: bool) -> None:
+        self._input_masked = masked
+        if getattr(self, "_entry_input", None) is None:
+            return
+        if masked == (self.input is not self._entry_input):
+            return
+        focused = self.input.HasFocus()
+        selection = self._entry_input.GetSelection()
+        self._completion.reset()
+        self._entry_input.reset_recall()
+        sizer = self.GetSizer()
+        if masked:
+            self._entry_input.Hide()
+            self._password_label = wx.StaticText(self, label="Pass&word:")
+            self.input = wx.TextCtrl(self, style=wx.TE_PROCESS_ENTER | wx.TE_PASSWORD)
+            self.input.SetName(f"{self.world.name} password")
+            self.input.Bind(wx.EVT_TEXT_ENTER, self._on_send)
+            self.input.Bind(wx.EVT_KEY_DOWN, self._on_input_key)
+            sizer.Add(self._password_label, 0, wx.LEFT, 2)
+            sizer.Add(self.input, 0, wx.EXPAND | wx.ALL, 2)
+        else:
+            secret = self.input
+            if secret.GetValue():
+                self._loop.call_soon_threadsafe(self._speak_system, "Unsent password cleared")
+            sizer.Detach(secret)
+            sizer.Detach(self._password_label)
+            secret.Hide()
+            self._password_label.Destroy()
+            self.input = self._entry_input
+            self.input.Show()
+        self.Layout()
+        if focused:
+            self.input.SetFocus()
+            if not masked:
+                self.input.SetSelection(*selection)
+        if not masked:
+            secret.Destroy()  # secret text and its native undo buffer never enter the document
+
+
+    def _on_input_focus(self, event: wx.FocusEvent) -> None:
+        if self._entry_from_output and isinstance(self.input, CommandEntryCtrl):
+            self.input.move_to_tail()
+        self._entry_from_output = False
+        event.Skip()

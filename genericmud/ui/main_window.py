@@ -158,6 +158,21 @@ class GenericMudFrame(SavedWorldsMixin, SoundpackSetupMixin, SelfUpdateMixin, wx
             "Call the window after the world you're in, as MUSHclient does",
         )
         self._title_world_item.Check(self._prefs.title_shows_world)
+        input_menu = wx.Menu()
+        standard_item = input_menu.AppendRadioItem(wx.ID_ANY, "&Standard")
+        editable_item = input_menu.AppendRadioItem(
+            wx.ID_ANY, "&Editable command buffer (VIPMud-style)",
+        )
+        standard_item.Check(self._prefs.command_input_mode == "standard")
+        editable_item.Check(self._prefs.command_input_mode == "editable")
+        view_menu.AppendSubMenu(
+            input_menu, "Command &input mode",
+            "Applies to newly opened sessions; existing sessions keep their mode",
+        )
+        self.Bind(wx.EVT_MENU,
+                  lambda _e: self._save_pref("command_input_mode", "standard"), standard_item)
+        self.Bind(wx.EVT_MENU,
+                  lambda _e: self._save_pref("command_input_mode", "editable"), editable_item)
         menubar.Append(view_menu, "&View")
 
         help_menu = wx.Menu()
@@ -297,7 +312,7 @@ class GenericMudFrame(SavedWorldsMixin, SoundpackSetupMixin, SelfUpdateMixin, wx
         """A keymap toggle changed a speech pref; persist it (prefs mutate on the wx thread)."""
         wx.CallAfter(self._save_pref, attr, value)
 
-    def _save_pref(self, attr: str, value: bool) -> None:
+    def _save_pref(self, attr: str, value: bool | str) -> None:
         setattr(self._prefs, attr, value)
         save_ui_prefs(self._prefs)
 
