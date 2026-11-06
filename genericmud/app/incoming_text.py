@@ -386,7 +386,11 @@ class IncomingTextMixin:
             line_links.append(Link(url.rsplit("/", 1)[-1], url))
         line = Line(plain, spans=spans, links=line_links)
         self.engine.process_line(line)  # may set line.channel and gag flags
-        self._log(line.plain_text)  # full session log, including gagged-from-speech
+        if not line.omit_from_log:
+            # The full session log, including gagged-from-speech -- but a line a trigger asked
+            # to leave out stays out, which is how a repeating notice is read (or silenced) now
+            # without being written down for the next reader of the file.
+            self._log(line.plain_text)
         if self._login is not None and not self._login.done:
             self._login.feed(line.plain_text)  # answer name/password prompts
             if self._login.done:

@@ -12,7 +12,7 @@ not run in your other worlds.
 1. Connect to the saved world you want to change.
 2. Press **Ctrl+B**, or choose **Automation > Manage automation**.
 3. In the **Show** box, choose **Triggers**, **Aliases**, **Hotkeys**,
-   **Channels**, **Scripts**, or **MUD data**.
+   **Channels**, **Scripts**, **MUD data**, or **Timers**.
 4. Choose **New**.
 
 These are categories in one manager, not separate simple and advanced tools:
@@ -26,6 +26,8 @@ These are categories in one manager, not separate simple and advanced tools:
   such as `Char.Vitals.hp`. `${value}` is the new value and `${name}` is what
   arrived. **Only when it changes** is on for a new rule.
 - A **script** contains reusable Lua automation.
+- A **timer** acts on a clock: every so often, or once a day at a time such as
+  `03:00`.
 
 Choose an item and press Enter to edit it. **Duplicate** opens a copy that you
 can change. **Disable** keeps an ordinary item saved without letting it run.
@@ -34,7 +36,7 @@ used.
 
 Keyboard shortcuts inside the manager:
 
-- **Ctrl+1** through **Ctrl+5** show the five categories in order.
+- **Ctrl+1** through **Ctrl+7** show the seven categories in order.
 - **Ctrl+N** creates an item in the category being shown.
 - **Enter** edits the selected item.
 - **Delete** deletes the selected item after confirmation.
@@ -73,7 +75,10 @@ an alias for `sh *`, or one from a soundpack, still comes first. Lua's
    right match choice. Wildcards, exact whole lines, and regular expressions
    are also available.
 3. Fill in any actions you need: commands, spoken text, a sound, speech
-   interruption, hiding the line, or routing it to a channel.
+   interruption, hiding the line, **Leave this line out of the session log**, or
+   routing it to a channel. Hiding the line decides what you hear; leaving it out
+   of the log decides what is kept, and either can be set without the other, so a
+   repeating notice can be read once and never written down.
 4. Choose **OK**. The trigger works on the next matching line.
 
 Hotkeys use the same command field. Focus **Press the key combination**, press
@@ -91,6 +96,17 @@ command. If one value is missing, none of the sequence is sent. This avoids
 running half of an action. genericMud speaks each distinct missing-value problem
 once and records repeated occurrences in the diagnostic log. One item can send
 at most 100 commands at a time.
+
+## Put rules in an order
+
+When several rules match the same line, **Order** decides which is tried first: the lower
+number first, and rules sharing a number fall back to their pattern text, so the order never
+depends on which file they came from. **Keep checking the rules after this one** is on by
+default, so every matching rule acts; clearing it makes that rule the last one heard about the
+line.
+
+A player rule that stops the search never stops a soundpack's rules: MUSHclient draws the same
+line between one plugin and the next, so a pack's own triggers keep working.
 
 ## When Lua is useful
 
@@ -494,6 +510,24 @@ mud.timer(60, check_score)
 
 Reloading or deleting the script cancels its waiting timers.
 
+A timer that repeats, can be found by name, and can be switched off is `mud.add_timer`. The
+options table is where its shape goes:
+
+```lua
+mud.add_timer("tick", 60, function()
+    mud.command("score")
+end, {every=60, group="checks"})
+
+mud.enable_timer("tick", false)  -- off, by name
+mud.delete_timer("tick")
+```
+
+`every` is the gap between fires. `group` puts it in a group with other rules, so one call
+switches them all.
+
+For a timer at a time of day, use a rule in the Automation Manager (Ctrl+B): its **At this
+time each day** field takes `03:00`, and the rule can send, speak, note or run Lua.
+
 ## Speech, text, and sounds
 
 Speak text:
@@ -589,7 +623,8 @@ value that should be saved with one world.
 
 ## Use several script files
 
-Scripts load in alphabetical order. Numbered names make that order obvious:
+Scripts load in alphabetical order, into **one** Lua state for the world. Numbered
+names make that order obvious:
 
 ```text
 10-settings.lua
@@ -597,9 +632,31 @@ Scripts load in alphabetical order. Numbered names make that order obvious:
 30-healing.lua
 ```
 
-Each file has its own Lua state. A Lua `local` or global created in one file is
-not visible in another file. Use `mud.set_var` and `mud.get_var` to share a value
-between files.
+The files are parts of one program, so a global or a function defined in one is
+visible in the ones after it:
+
+```lua
+-- 10-settings.lua
+function warn_low_hp()
+    mud.speak("health low")
+end
+```
+
+```lua
+-- 20-combat.lua
+mud.trigger("You are bleeding", function()
+    warn_low_hp()
+end)
+```
+
+Two consequences worth knowing. A name has to be defined **before** it is used,
+which is why the numbers are there; and a later file that defines the same global
+name wins, as it would if you read the files in order. Keep module-wide values
+together in the lowest-numbered file and this never comes up.
+
+`local` is still local to its own file, and `mud.set_var` / `mud.get_var` are still
+the way to keep a value across a reload; `mud.shared_get` / `mud.shared_set` share
+between worlds.
 
 Aliases with higher `priority` are checked first. The same option works for
 triggers:
@@ -609,6 +666,58 @@ mud.alias("heal *", function(line, captures)
     mud.command("cast major heal ${1}")
 end, {priority=100})
 ```
+
+That one state is also the one a rule's **send to script** uses, so a rule can call a
+function one of your files defines, and a value a rule leaves behind is there for the
+next rule.
+
+## MUSHclient's names also work here
+
+Your world's scripting space carries MUSHclient's own function names beside `mud.*`, in the
+same space rather than a second one: the same scripts, the same variables, the same rules.
+That is for two people in particular. One learned from MUSHclient's documentation and knows
+`Send` and `GetVariable` better than anything else. The other has automation they made in
+MUSHclient, which until now only worked there. Both can write it here without translating it
+first.
+
+**Which to use.** Write `mud.*`. It is this client's own vocabulary, a rule built with it
+takes a function instead of a block of flags, and it is the only one that speaks, follows the
+data the MUD sends, and reaches your other sessions. MUSHclient's names are for the other
+direction: pasting something, following a MUSHclient guide, or reading a soundpack. Where
+both exist they mean the same thing -- `Send` and `mud.send`, `GetVariable` and `mud.get_var`
+-- so mixing them is never wrong, only repetitive.
+
+The ones worth knowing:
+
+| MUSHclient | What it does here |
+| --- | --- |
+| `Send("look")` | sends one command, as `mud.command` does |
+| `Note("text")`, `Tell("text")`, `ColourNote(...)` | shows a line in the output window and speaks it |
+| `print("text")` | the same as `Note`; Lua's `print` goes to the output window, not to a console nobody can see |
+| `GetVariable`, `SetVariable`, `DeleteVariable` | the same values `mud.get_var`, `mud.set_var`, and `mud.delete_var` use |
+| `DoAfter(seconds, "command")` | runs a command later |
+| `AddTrigger`, `AddAlias`, `AddTimer`, and their `Enable…` and `Delete…` | rules registered while the script runs |
+| `PlaySound`, `StopSound`, `Sound` | the same sound bus `mud.play` uses |
+| `world.Send(...)`, `world.Note(...)` | the same functions through the `world` table, the way a soundpack calls them |
+
+The constants such code tests are there too: `trigger_flag`, `sendto`, and
+`error_code`, along with `bit`.
+
+Three things to know about it:
+
+- It is Lua 5.1, the dialect MUSHclient embeds, so pasted MUSHclient code behaves
+  as its author wrote it. Both `unpack` and `table.unpack` work.
+- Nothing about the safety limits changes. No files, no network, no programs:
+  MUSHclient's names are a vocabulary, not more power.
+- A name you misspell is an error, spoken the first time it happens and written to the
+  diagnostic log. A soundpack gets a quiet do-nothing stand-in instead, because it has
+  to load; your own script would rather be told.
+
+Two things it does not include. MushReader's commands, such as `tts_interrupt`, are
+aliases a soundpack assumes are installed in MUSHclient; your world does not, so a
+command of that name still goes to the MUD. Use `mud.speak` for speech. And a loaded
+soundpack is a scripting space of its own: both answer the MUD's lines, but a pack's
+variables, triggers, and plugins belong to the pack, and a pack never sees `mud.*`.
 
 ## A complete starter script
 
@@ -684,10 +793,16 @@ Rules and timing:
 - `mud.trigger(pattern, callback [, options])`
 - `mud.key(key_name, callback)`
 - `mud.timer(seconds, callback)`
+- `mud.add_timer(name, seconds, callback [, options])`
+- `mud.enable_timer(name, true_or_false)`
+- `mud.delete_timer(name)`
 - `mud.on_data(name, callback [, options])`
 
-The alias and trigger options are `regex` and `priority`. A trigger can also use
-`channel`. The only `mud.on_data` option is `changes`.
+The alias and trigger options are `regex` and `priority`, plus `label` and `group`.
+A label is the name a rule is switched by -- `mud.set_enabled("shoot", false)` -- and the
+manager reads it out first; a group is what `mud.set_group_enabled` switches as one. A
+trigger can also use `channel`. The `mud.add_timer` options are `every`, `group` and
+`enabled`. The only `mud.on_data` option is `changes`.
 
 Commands and output:
 
