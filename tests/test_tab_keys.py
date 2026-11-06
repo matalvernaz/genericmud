@@ -14,7 +14,7 @@ import pytest
 
 wx = pytest.importorskip("wx")  # wx_app imports wx at module level
 from genericmud.config.keymap import load_keymap  # noqa: E402 - after the importorskip
-from genericmud.ui.wx_app import GenericMudFrame  # noqa: E402 - ditto
+from genericmud.ui.main_window import GenericMudFrame  # noqa: E402 - ditto
 
 NAMES = ["Alpha", "Beta", "Gamma", "Delta", "Epsilon", "Zeta", "Eta", "Theta", "Iota", "Kappa"]
 

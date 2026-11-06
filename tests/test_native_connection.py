@@ -12,7 +12,7 @@ from genericmud.config.worlds import World
 from tests.helpers import RecordingBackend
 
 wx = pytest.importorskip("wx", reason="native session lifecycle requires wxPython")
-from genericmud.ui import session_panel, wx_app  # noqa: E402
+from genericmud.ui import main_window, session_panel  # noqa: E402
 
 
 class Panel:
@@ -269,8 +269,8 @@ async def test_ctrl_d_and_menu_offer_to_stop_pending_connections(monkeypatch, st
             GetItemLabel=lambda: "", SetItemLabel=labels.append, Enable=lambda value: None,
         ),
     )
-    wx_app.GenericMudFrame._refresh_connection_item(frame)
-    wx_app.GenericMudFrame._on_disconnect(frame, None)
+    main_window.GenericMudFrame._refresh_connection_item(frame)
+    main_window.GenericMudFrame._on_disconnect(frame, None)
     expected = "reconnect" if state == "idle" else "disconnect"
     assert actions == [expected]
     assert labels == [f"&{expected.capitalize()}\tCtrl+D"]
@@ -402,7 +402,7 @@ async def test_ctrl_d_stops_the_attempt_then_reuses_the_same_tab(monkeypatch, ph
         await attempt
     panel.backend.spoken.clear()
     frame = SimpleNamespace(_active_panel=lambda: panel)
-    wx_app.GenericMudFrame._on_disconnect(frame, None)
+    main_window.GenericMudFrame._on_disconnect(frame, None)
 
     async def stopped():
         while panel.is_connected() or panel.is_connecting():
@@ -545,7 +545,7 @@ async def test_connection_settings_save_and_reach_all_sessions(monkeypatch, tmp_
         panel._prefs = prefs
         await panel._start()
     path = tmp_path / "ui-prefs.toml"
-    monkeypatch.setattr(wx_app, "save_ui_prefs", lambda value: save_ui_prefs(value, path))
+    monkeypatch.setattr(main_window, "save_ui_prefs", lambda value: save_ui_prefs(value, path))
     destroyed = []
 
     class Dialog:
@@ -561,13 +561,13 @@ async def test_connection_settings_save_and_reach_all_sessions(monkeypatch, tmp_
         def Destroy(self):
             destroyed.append(True)
 
-    monkeypatch.setattr(wx_app, "ConnectionSettingsDialog", Dialog)
+    monkeypatch.setattr(main_window, "ConnectionSettingsDialog", Dialog)
     frame = SimpleNamespace(
         _prefs=prefs,
         book=SimpleNamespace(GetPageCount=lambda: 2, GetPage=lambda index: panels[index]),
     )
     try:
-        wx_app.GenericMudFrame._on_connection_settings(frame, None)
+        main_window.GenericMudFrame._on_connection_settings(frame, None)
         assert destroyed == [True]
         if accepted:
             await sleeps.next(300)

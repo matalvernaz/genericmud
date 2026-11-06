@@ -839,7 +839,7 @@ def test_editing_a_world_changes_its_open_tab_at_once(frame, monkeypatch):
 def test_the_connection_menu_item_names_what_it_will_do():
     # One item, relabelled: Ctrl+D has to mean "drop it" while connected and "bring it
     # back" once it is down, so the label has to follow the tab, not the menu.
-    from genericmud.ui.wx_app import _connection_menu_label
+    from genericmud.ui.main_window import _connection_menu_label
 
     assert _connection_menu_label(True) == "&Disconnect\tCtrl+D"
     assert _connection_menu_label(False) == "&Reconnect\tCtrl+D"
@@ -1158,13 +1158,13 @@ def test_ctrl_d_works_in_the_first_tab_after_a_menu_was_opened_with_none(
     # opening a tab didn't bring it back: Ctrl+D did nothing until a menu was opened again.
     import asyncio
 
-    from genericmud.ui import session_panel, wx_app
+    from genericmud.ui import main_window, session_panel
     from tests.helpers import RecordingBackend
 
     monkeypatch.setenv("HOME", str(tmp_path))  # the frame reads and writes its config
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
-    monkeypatch.setattr(wx_app, "make_voice_backend", RecordingBackend)
-    monkeypatch.setattr(wx_app, "make_diagnostic_log", lambda: None)
+    monkeypatch.setattr(main_window, "make_voice_backend", RecordingBackend)
+    monkeypatch.setattr(main_window, "make_diagnostic_log", lambda: None)
 
     startup_finished = asyncio.Event()
 
@@ -1178,7 +1178,7 @@ def test_ctrl_d_works_in_the_first_tab_after_a_menu_was_opened_with_none(
         session_panel.SessionPanel, "reconnect", lambda panel: pressed.append(panel.world.name)
     )
     loop = asyncio.new_event_loop()
-    main = wx_app.GenericMudFrame(loop, {})
+    main = main_window.GenericMudFrame(loop, {})
     try:
         item = main._connection_item
         menu_open = wx.MenuEvent(wx.wxEVT_MENU_OPEN, 0, main.GetMenuBar().GetMenu(0))
@@ -1201,13 +1201,13 @@ def test_ctrl_d_works_in_the_first_tab_after_a_menu_was_opened_with_none(
 def test_the_soundpacks_menu_opens_a_notepad_the_player_picks(frame, tmp_path, monkeypatch):
     import asyncio
 
-    from genericmud.ui import session_panel, wx_app
+    from genericmud.ui import main_window, session_panel
     from tests.helpers import RecordingBackend
 
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
-    monkeypatch.setattr(wx_app, "make_voice_backend", RecordingBackend)
-    monkeypatch.setattr(wx_app, "make_diagnostic_log", lambda: None)
+    monkeypatch.setattr(main_window, "make_voice_backend", RecordingBackend)
+    monkeypatch.setattr(main_window, "make_diagnostic_log", lambda: None)
 
     async def no_session(_panel):
         return None
@@ -1229,7 +1229,7 @@ def test_the_soundpacks_menu_opens_a_notepad_the_player_picks(frame, tmp_path, m
 
     monkeypatch.setattr(wx, "SingleChoiceDialog", _Chooser)
     loop = asyncio.new_event_loop()
-    main = wx_app.GenericMudFrame(loop, {})
+    main = main_window.GenericMudFrame(loop, {})
     try:
         spoken: list[str] = []
         monkeypatch.setattr(main, "announce", spoken.append)
@@ -1515,13 +1515,13 @@ def test_the_world_in_front_is_the_selected_tab_while_genericmud_is(frame, tmp_p
     # is the active one.
     import asyncio
 
-    from genericmud.ui import session_panel, wx_app
+    from genericmud.ui import main_window, session_panel
     from tests.helpers import RecordingBackend
 
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
-    monkeypatch.setattr(wx_app, "make_voice_backend", RecordingBackend)
-    monkeypatch.setattr(wx_app, "make_diagnostic_log", lambda: None)
+    monkeypatch.setattr(main_window, "make_voice_backend", RecordingBackend)
+    monkeypatch.setattr(main_window, "make_diagnostic_log", lambda: None)
 
     async def no_session(_panel):
         return None
@@ -1534,7 +1534,7 @@ def test_the_world_in_front_is_the_selected_tab_while_genericmud_is(frame, tmp_p
     )
     in_front = [True]
     loop = asyncio.new_event_loop()
-    main = wx_app.GenericMudFrame(loop, {})
+    main = main_window.GenericMudFrame(loop, {})
     monkeypatch.setattr(main, "_world_in_front", lambda: in_front[0])
     try:
         main.open_session(World("One", "one.example", 4000))
@@ -1590,22 +1590,22 @@ def test_genericmud_is_in_front_while_it_is_the_active_program(frame, tmp_path, 
     # puts the world behind, as a notepad does in MUSHclient.
     import asyncio
 
-    from genericmud.ui import wx_app
+    from genericmud.ui import main_window
     from tests.helpers import RecordingBackend
 
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
-    monkeypatch.setattr(wx_app, "make_voice_backend", RecordingBackend)
-    monkeypatch.setattr(wx_app, "make_diagnostic_log", lambda: None)
+    monkeypatch.setattr(main_window, "make_voice_backend", RecordingBackend)
+    monkeypatch.setattr(main_window, "make_diagnostic_log", lambda: None)
 
     class _Notepad:
         pass
 
-    monkeypatch.setattr(wx_app, "PackNotepadFrame", _Notepad)
+    monkeypatch.setattr(main_window, "PackNotepadFrame", _Notepad)
     active_program = [True]
     monkeypatch.setattr(wx.GetApp(), "IsActive", lambda: active_program[0])
     loop = asyncio.new_event_loop()
-    main = wx_app.GenericMudFrame(loop, {})
+    main = main_window.GenericMudFrame(loop, {})
     try:
         monkeypatch.setattr(wx, "GetActiveWindow", lambda: None)  # a native message box
         assert main._world_in_front()
@@ -1738,13 +1738,13 @@ def test_installing_a_pack_with_its_own_sounds_says_the_folder_can_stay_blank(
     import asyncio
     from types import SimpleNamespace
 
-    from genericmud.ui import wx_app
+    from genericmud.ui import main_window
     from tests.helpers import RecordingBackend
 
     monkeypatch.setenv("HOME", str(tmp_path))  # the frame reads and writes its config
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
-    monkeypatch.setattr(wx_app, "make_voice_backend", RecordingBackend)
-    monkeypatch.setattr(wx_app, "make_diagnostic_log", lambda: None)
+    monkeypatch.setattr(main_window, "make_voice_backend", RecordingBackend)
+    monkeypatch.setattr(main_window, "make_diagnostic_log", lambda: None)
     shown: list[dict] = []
 
     class _Dialog:
@@ -1758,9 +1758,9 @@ def test_installing_a_pack_with_its_own_sounds_says_the_folder_can_stay_blank(
             pass
 
     loop = asyncio.new_event_loop()
-    main = wx_app.GenericMudFrame(loop, {})
+    main = main_window.GenericMudFrame(loop, {})
     try:
-        monkeypatch.setattr(wx_app, "WorldDialog", _Dialog)
+        monkeypatch.setattr(main_window, "WorldDialog", _Dialog)
         pack = SimpleNamespace(id="sc", dialect="vipmud")
         main._confirm_and_connect(World("Star Conquest", "squidsoft.net", 7777), pack)
         assert shown[0]["title"] == "Confirm World"
