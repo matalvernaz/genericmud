@@ -120,7 +120,9 @@ world can be renamed without editing any file — unless a tab is connected to i
 because a connected tab is using that name: it is the log file being written, the
 `/to` address and the tab's own label. Disconnect the tab (Ctrl+D) and the name is
 yours to change; a tab that is only disconnected takes the new name and writes its
-next log under it. The dialog says so when it doesn't apply. **Ctrl+D** disconnects and
+next log under it. The world's own data follows the name, so a rename keeps its room
+map, its Automation Manager rules and its saved pack variables. The dialog says so
+when a name can't be changed. **Ctrl+D** disconnects and
 **Ctrl+W** closes the tab. If the MUD is unavailable at startup or the connection
 drops on its own, genericMud keeps trying every five seconds until it returns.
 **File → Connection settings...** turns Auto reconnect on or off and sets the
