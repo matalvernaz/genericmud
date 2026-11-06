@@ -1738,7 +1738,7 @@ def test_installing_a_pack_with_its_own_sounds_says_the_folder_can_stay_blank(
     import asyncio
     from types import SimpleNamespace
 
-    from genericmud.ui import main_window
+    from genericmud.ui import main_window, soundpack_setup
     from tests.helpers import RecordingBackend
 
     monkeypatch.setenv("HOME", str(tmp_path))  # the frame reads and writes its config
@@ -1760,7 +1760,7 @@ def test_installing_a_pack_with_its_own_sounds_says_the_folder_can_stay_blank(
     loop = asyncio.new_event_loop()
     main = main_window.GenericMudFrame(loop, {})
     try:
-        monkeypatch.setattr(main_window, "WorldDialog", _Dialog)
+        monkeypatch.setattr(soundpack_setup, "WorldDialog", _Dialog)
         pack = SimpleNamespace(id="sc", dialect="vipmud")
         main._confirm_and_connect(World("Star Conquest", "squidsoft.net", 7777), pack)
         assert shown[0]["title"] == "Confirm World"
