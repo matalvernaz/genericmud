@@ -1,3 +1,9 @@
+"""How a key press becomes a keymap name such as "ctrl+1", "alt+up" or "f11".
+
+Also the Windows AltGr check, the keys the window keeps for itself (menus, clipboard and word
+moves), and why a hotkey can't have one of those keys.
+"""
+
 from __future__ import annotations
 
 import sys

@@ -1,3 +1,8 @@
+"""The command box: sending what was typed, history, word completion and bound keys.
+
+Also the numpad compass, which walks with the number pad.
+"""
+
 from __future__ import annotations
 
 import wx

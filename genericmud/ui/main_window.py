@@ -1,3 +1,9 @@
+"""The main window: its menus, a tab per world, who speaks, the title, and the tool windows.
+
+Saved worlds, soundpack setup and updating genericMud are in three mixins, each in its own
+module: saved_worlds, soundpack_setup and self_update_window.
+"""
+
 from __future__ import annotations
 
 import asyncio

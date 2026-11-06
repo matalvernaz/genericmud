@@ -1,3 +1,8 @@
+"""Updating genericMud from the window: the release check, the offer, the download, the restart.
+
+The SelfUpdateMixin part of the main window, with the two dialogs it opens.
+"""
+
 from __future__ import annotations
 
 import threading

@@ -1,3 +1,5 @@
+"""Connect to a saved world, and the automatic reconnect settings every world shares."""
+
 from __future__ import annotations
 
 import sys

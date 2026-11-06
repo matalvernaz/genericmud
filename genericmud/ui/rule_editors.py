@@ -1,3 +1,9 @@
+"""The editor dialogs for each kind of automation rule.
+
+Triggers, aliases, hotkeys, MUD data rules and channels, and "Watch this" from the variables
+window, which makes a MUD data rule for one value.
+"""
+
 from __future__ import annotations
 
 from collections.abc import Callable

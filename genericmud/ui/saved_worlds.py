@@ -1,3 +1,9 @@
+"""The main window's saved-world actions.
+
+New World, connecting to a saved world, editing, renaming with the world's own files, deleting,
+exporting and importing.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
