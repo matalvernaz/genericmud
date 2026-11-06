@@ -8,6 +8,54 @@ fails the build on purpose.
 
 Entries start at 0.7.1. Earlier releases were tagged before this file existed.
 
+## 0.24.0 — 2026-11-06
+
+**Reconnecting by itself**, from have-you-met-matt
+
+* If the MUD is down when a tab opens, or the connection drops, genericMud
+  keeps trying every five seconds until the MUD is back, however long that
+  takes. It says why it couldn't connect, such as "connection refused", and
+  says it again if the reason changes.
+* File, Connection settings turns this off or on for every world and sets how
+  long to wait between tries, from 1 to 300 seconds. With it off, Ctrl+D still
+  reconnects when you ask.
+* Typing a command while it's trying again says "Still connecting" and keeps
+  the command in the box, instead of asking whether to reconnect.
+* A connection that keeps dropping as soon as it's back is announced once,
+  not every time, and "Reconnected" waits a second to be sure it held.
+
+**Connecting**, from MasterJake00
+
+* A tab takes its host, port, TLS switch and encoding from the saved world
+  each time it connects, so editing a world's port and pressing Ctrl+D uses
+  the new port. The sounds folder still needs a new tab.
+* When a game says over MSSP that it has an encrypted port, genericMud
+  mentions it once when you connect, and /secure moves the world onto it and
+  reconnects.
+* Understand Pueblo HTML, a new switch in a world's details, off unless you
+  turn it on: a Pueblo world's HTML is read as plain words, and the commands
+  it offers as links become links you can follow.
+
+**The saved world list**, from MasterJake00
+
+* Edit can rename a world while no tab is connected to it. Its map, its
+  automation rules and its saved soundpack settings go with the new name.
+* Delete removes a saved world and its login, after asking. Its logs, map and
+  rules stay. Alt+D, or the Delete key in the list (delete on a Mac).
+* A new world can be saved without connecting to it: When I press OK offers
+  Save and connect, Save, don't connect, and Connect, don't save.
+
+**Typing and reading**, from MasterJake00
+
+* The command box holds several lines. Enter sends, Shift+Enter starts a new
+  line, and a pasted list goes out one command per line, in order. Enter on an
+  empty box still sends a blank line, for "press return to continue".
+* Up and Down only bring back earlier commands from an empty box or from a
+  command you've already sent. A command you're still writing stays as it is.
+* A search (Ctrl+F, F3) starts from the line you're on in the output, instead
+  of from the last match or the newest line.
+* Enter on an output line with several links follows the one under the caret.
+
 ## 0.23.1 — 2026-11-05
 
 **Reconnect fixes**, from have-you-met-matt

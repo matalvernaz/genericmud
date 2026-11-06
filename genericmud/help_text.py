@@ -18,13 +18,18 @@ offers three things: save and connect, save without connecting, or connect
 without saving. Save without connecting adds the world to your list and opens
 no tab, then Ctrl+O connects when you want. A good first MUD is Aardwolf:
 host aardmud.org, port 4000.
+If the MUD is down, or the connection drops, genericMud keeps trying every five
+seconds and says why it couldn't connect. File menu, Connection settings turns
+that off or changes how long it waits; Ctrl+D stops it for one tab.
 If accented or non-Latin letters come out garbled, edit the world and choose
 its Encoding. Russian MUDs often use Windows-1251 or KOI8-R, Chinese ones GBK
 or Big5. Automatic suits most MUDs.
 
 Playing:
 Type commands in the command box and press Enter. Try: look, north (or just
-n), say hello, and help. Up and Down arrows step through what you've typed.
+n), say hello, and help. From an empty box, Up and Down step through what
+you've typed; a command you're still writing is left alone. Shift+Enter starts
+another line, and Enter sends every line as its own command.
 A semicolon sends several commands at once, as in n;n;look; type it twice to
 send a real one. Each world can change the separator or turn it off in its
 details (Ctrl+O, then Edit), which also has its logging settings.

@@ -96,8 +96,8 @@ keep a secure port that they never mention: they announce it over MSSP, one of t
 protocols the client already reads, and the client says so in passing at connect — "this game
 offers an encrypted connection on port 9501; /secure switches this world to it". Typing
 `/secure` sets the world's port and TLS switch, saves the world if it is one you saved, and
-reconnects. Nothing is switched on a game's say-so alone; the offer is only made once, and only when the connection
-you are on isn't already encrypted.
+reconnects. Nothing is switched on a game's say-so alone; the offer is only made once, and only
+when the connection you are on isn't already encrypted.
 
 **Understand Pueblo HTML** is off unless you switch it on, and unlike the other
 settings that is deliberate: turning it on makes genericMud introduce itself as a
@@ -166,6 +166,8 @@ entry changes to **Reconnect** to say so. Reconnecting reuses the tab, so the
 scrollback you already have stays put. Typing a command for the MUD into a
 disconnected tab asks whether to reconnect rather than dropping the command
 silently, and what you typed stays in the box, ready to send once you're back.
+While genericMud is already trying to reconnect by itself, it says "Still
+connecting" instead of asking.
 genericMud's own slash commands, such as `/to` and `/aliases`, still run without
 asking.
 
