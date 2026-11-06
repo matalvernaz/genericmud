@@ -51,6 +51,7 @@ def _panel(*, value: str = "", connected: bool = True, masked: bool = False):
     panel._input_masked = masked
     panel._connect_finished = True
     panel.is_connected = lambda: connected
+    panel.is_connecting = lambda: False  # down, and not retrying by itself
     panel.prompts = []
     panel._prompt_reconnect = lambda: panel.prompts.append(True)
     panel._loop = _Loop()
@@ -88,19 +89,54 @@ def test_each_line_is_its_own_thing_to_recall():
     assert panel.input.value == "a"
 
 
-def test_spaces_round_a_line_are_not_part_of_the_command():
+def test_a_line_goes_out_as_typed_spaces_and_all():
+    # In-game editors keep a line's indent, and a password may start or end with a space.
     panel = _panel(value="  look  \n  score  ")
     panel._on_send(None)
-    assert _sent(panel) == ["look", "score"]
+    assert _sent(panel) == ["  look  ", "  score  "]
+    panel = _panel(value="   indented line")
+    panel._on_send(None)
+    assert _sent(panel) == ["   indented line"]
 
 
-def test_an_empty_box_sends_nothing():
+def test_an_empty_enter_still_reaches_the_mud():
+    # A blank Enter answers a pager ("press return to continue"), and with autoretype on the
+    # engine repeats the last command for it. A block of nothing but blank lines is the same.
     for value in ("", "\n\n", "   \n\t\n"):
         panel = _panel(value=value)
         panel._on_send(None)
-        assert _sent(panel) == []
+        assert _sent(panel) == [""]
         assert panel.input.value == ""
         assert panel._history == []
+
+
+def test_an_empty_enter_repeats_the_last_command_with_autoretype_on():
+    # End to end through the engine: what the box sends is what autoretype needs.
+    from genericmud.app import EngineApp
+    from genericmud.config.keymap import load_keymap
+    from genericmud.voice.router import VoiceRouter
+    from tests.helpers import RecordingBackend
+
+    sent: list[str] = []
+    app = EngineApp(
+        VoiceRouter(RecordingBackend(), clock=lambda: 0.0),
+        send=sent.append,
+        post=[].append,
+        keymap=load_keymap("vipmud"),
+    )
+    app.autoretype = True
+    for value in ("kill rat", ""):
+        panel = _panel(value=value)
+        panel._on_send(None)
+        for message in panel._loop.messages:
+            app.on_ws_message(message)
+    assert sent == ["kill rat", "kill rat"]
+
+
+def test_hidden_input_goes_out_exactly_as_typed():
+    panel = _panel(value=" pass word ", masked=True)
+    panel._on_send(None)
+    assert _sent(panel) == [" pass word "]
 
 
 def test_a_dead_session_keeps_the_whole_block_while_it_asks():
