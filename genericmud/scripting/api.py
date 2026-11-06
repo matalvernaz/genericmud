@@ -533,6 +533,10 @@ class ScriptApi:
         opts.setdefault("source", self._source)
         return self._engine.add_trigger(pattern, callback, **opts)  # type: ignore[arg-type]
 
+    def set_group_enabled(self, group: str, enabled: bool = True) -> int:
+        """Turn every rule in a group on or off (MUSHclient's EnableGroup); how many changed."""
+        return self._engine.set_group_enabled(str(group), bool(enabled))
+
     def set_enabled(self, name: str, enabled: bool = True) -> bool:
         """Turn a named rule on or off, as MUSHclient's EnableTrigger/EnableAlias do."""
         return self._engine.set_enabled(str(name), bool(enabled))

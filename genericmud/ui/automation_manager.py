@@ -29,11 +29,11 @@ from genericmud.scripting.api import ScriptApi
 from genericmud.ui.help_dialog import HelpDialog
 from genericmud.ui.keyboard import _NUMPAD_KEYS, _hotkey_taken
 from genericmud.ui.rule_editors import (
-    TimerEditorDialog,
     AliasEditorDialog,
     ChannelEditorDialog,
     DataRuleEditorDialog,
     KeyEditorDialog,
+    TimerEditorDialog,
     TriggerEditorDialog,
 )
 from genericmud.ui.session_panel import SessionPanel
@@ -46,6 +46,7 @@ def _rule_summary(kind: str, rule) -> str:
     # The label first when it has one: it is what the player named the rule, and what a script
     # refers to it by, so it is the thing they are looking for in the list.
     named = f"{rule.label}: " if getattr(rule, "label", "") else ""
+    grouped = f" (group {rule.group})" if getattr(rule, "group", "") else ""
     commands = "; ".join(
         line.strip() for line in rule.send.splitlines() if line.strip()
     ) if hasattr(rule, "send") else ""
@@ -62,7 +63,10 @@ def _rule_summary(kind: str, rule) -> str:
         ) if part]
         how = rule.match_kind()
         label = f"{rule.pattern}" if how == "wildcard" else f"{rule.pattern} ({how})"
-        return f"{status}{named}Trigger: {label}: {'; '.join(actions) or 'no action'}"
+        return (
+            f"{status}{named}Trigger{grouped}: {label}: "
+            f"{'; '.join(actions) or 'no action'}"
+        )
     if kind == "timer":
         when = (
             f"every {rule.every:g} seconds"
@@ -73,7 +77,10 @@ def _rule_summary(kind: str, rule) -> str:
         return f"{status}{named}Timer: {when}{once}: {commands or 'nothing'}"
 
     if kind == "alias":
-        return f"{status}{named}Alias: {rule.pattern} sends {commands or 'nothing'}"
+        return (
+            f"{status}{named}Alias{grouped}: {rule.pattern} "
+            f"sends {commands or 'nothing'}"
+        )
     if kind == "key":
         action = commands or rule.speak or rule.sound or "nothing"
         return f"{status}Hotkey: {rule.key} runs {action}"

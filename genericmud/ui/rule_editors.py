@@ -192,6 +192,9 @@ class TriggerEditorDialog(_RuleEditorBase):
         self._label = self._text(
             grid, "&Label (a script turns it off and on by this name):", trigger.label
         )
+        self._group = self._text(
+            grid, "&Group (rules sharing a name switch together):", trigger.group
+        )
         # Order must mirror MATCH_CHOICES: ("contains", "wildcard", "exact", "regex").
         self._match = wx.RadioBox(
             self, label="Ho&w to match",
@@ -282,6 +285,7 @@ class TriggerEditorDialog(_RuleEditorBase):
             stop_channel=self._stop_channel.GetValue().strip(),
             match=match,
             label=self._label.GetValue().strip(),
+            group=self._group.GetValue().strip(),
             interrupt=self._interrupt.GetValue(),
             enabled=self._enabled,
         )
@@ -303,6 +307,9 @@ class AliasEditorDialog(_RuleEditorBase):
         self._label = self._text(
             grid, "&Label (a script turns it off and on by this name):", alias.label
         )
+        self._group = self._text(
+            grid, "&Group (rules sharing a name switch together):", alias.group
+        )
         self._regex = wx.CheckBox(self, label="Pattern is a &regular expression")
         self._regex.SetValue(alias.regex)
         grid.Add(wx.StaticText(self, label=""))
@@ -318,6 +325,7 @@ class AliasEditorDialog(_RuleEditorBase):
             pattern=self._pattern.GetValue().strip(),
             regex=self._regex.GetValue(),
             label=self._label.GetValue().strip(),
+            group=self._group.GetValue().strip(),
             send=self._send.GetValue().strip(),
             send_to=SEND_TO_CHOICES[self._send_to.GetSelection()],
             speak=self._speak.GetValue().strip(),

@@ -149,6 +149,10 @@ routing you need, then choose OK. Leave this line out of the
 session log is separate from hiding it: the line still works as it did, it just never
 reaches the file, which is how a repeating notice stops filling the record.
 
+A trigger or alias can be put in a group. Every rule that shares the group's name
+switches together with mud.set_group_enabled, which is how all the combat rules go off
+in one call.
+
 A timer (Timers in the Automation Manager) acts on a clock rather than on a line:
 every so often, or once a day at a time such as 03:00. What it does is the same
 question the other rules answer, so it can send commands, fill your command box, write

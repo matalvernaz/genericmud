@@ -89,6 +89,9 @@ class UserTrigger:
     # MUSHclient's trigger name: the handle a script turns it off and on with, and what the
     # manager reads out first. Empty means no handle; the manager can still disable it.
     label: str = ""
+    # MUSHclient's group: rules sharing a name are switched together by one call, which is what
+    # "turn all the combat rules off" needs. Empty means the rule stands alone.
+    group: str = ""
     enabled: bool = True
 
     def match_kind(self) -> str:
@@ -105,6 +108,7 @@ class UserAlias:
     send_to: str = "world"  # where that text goes, as for triggers (SEND_TO_CHOICES)
     speak: str = ""  # optional speech, same templates; can read a value with no commands
     label: str = ""  # as for triggers: the handle that turns it off and on
+    group: str = ""  # as for triggers: switched together with the rest of its group
     enabled: bool = True
 
 
@@ -478,6 +482,7 @@ def _register_trigger(api: ScriptApi, t: UserTrigger) -> None:
         channel=t.channel or None,
         source=SOURCE,
         name=t.label.strip(),
+        group=t.group.strip(),
     )
 
 
@@ -558,7 +563,14 @@ def _register_alias(api: ScriptApi, a: UserAlias) -> None:
         if a.speak and sent:
             api.speak(_speech(api, a.speak, ctx))
 
-    api.add_alias(a.pattern, fire, regex=a.regex, source=SOURCE, name=a.label.strip())
+    api.add_alias(
+        a.pattern,
+        fire,
+        regex=a.regex,
+        source=SOURCE,
+        name=a.label.strip(),
+        group=a.group.strip(),
+    )
     # A plain alias also takes more words typed after it. Not one that only speaks: it has no
     # command for the words to join, and taking the line would stop it reaching the MUD.
     plain = (
