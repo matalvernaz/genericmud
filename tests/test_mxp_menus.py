@@ -135,7 +135,7 @@ def test_a_picked_command_may_not_run_a_client_command():
 def test_a_menu_is_named_as_one_when_a_line_has_several_links():
     # A line carrying several links names them when the cursor is between them; the menu has to
     # say so there, or the reader only finds out by following it.
-    from genericmud.app.engine_app import _menu_note
+    from genericmud.app.links import _menu_note
 
     plain = Link("north", "north")
     menu = Link("a sword", "buy sword", choices=(("buy sword", ""), ("examine", "")))
