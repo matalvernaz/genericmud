@@ -37,14 +37,14 @@ def frame():
 def panel(frame, monkeypatch):
     import asyncio
 
-    from genericmud.ui import wx_app
+    from genericmud.ui import session_panel
 
     async def no_session(_panel):
         return None
 
-    monkeypatch.setattr(wx_app.SessionPanel, "_start", no_session)
+    monkeypatch.setattr(session_panel.SessionPanel, "_start", no_session)
     loop = asyncio.new_event_loop()
-    session = wx_app.SessionPanel(frame, loop, {}, World("Test", "mud.example", 4000))
+    session = session_panel.SessionPanel(frame, loop, {}, World("Test", "mud.example", 4000))
     yield session
     session.close_notepads()
     session.Destroy()

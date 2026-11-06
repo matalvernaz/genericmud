@@ -33,9 +33,9 @@ class _App:
 
 
 def _panel(world: World):
-    from genericmud.ui import wx_app
+    from genericmud.ui import session_panel
 
-    panel = wx_app.SessionPanel.__new__(wx_app.SessionPanel)
+    panel = session_panel.SessionPanel.__new__(session_panel.SessionPanel)
     panel.world = world
     panel.app = _App()
     panel._connection = _Connection()
@@ -43,9 +43,9 @@ def _panel(world: World):
 
 
 def _saving(monkeypatch, *worlds: World) -> None:
-    from genericmud.ui import wx_app
+    from genericmud.ui import session_panel
 
-    monkeypatch.setattr(wx_app, "load_worlds", lambda: list(worlds))
+    monkeypatch.setattr(session_panel, "load_worlds", lambda: list(worlds))
 
 
 def test_a_reconnect_takes_the_port_and_tls_the_world_has_now(monkeypatch):

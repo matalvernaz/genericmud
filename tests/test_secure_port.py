@@ -132,7 +132,7 @@ def test_the_window_saves_the_new_port_and_reconnects(monkeypatch):
     import pytest
 
     wx = pytest.importorskip("wx")
-    from genericmud.ui import wx_app
+    from genericmud.ui import session_panel
 
     saved: list[tuple] = []
 
@@ -148,14 +148,14 @@ def test_the_window_saves_the_new_port_and_reconnects(monkeypatch):
             scheduled.append(callback)
 
     frame = Frame()
-    panel = wx_app.SessionPanel.__new__(wx_app.SessionPanel)
+    panel = session_panel.SessionPanel.__new__(session_panel.SessionPanel)
     panel.world = World("gw", "gw.example", 9500, tls=False)
     panel.app = None  # no engine here: the switch only has to schedule its work
     panel._loop = Loop()
     panel._alive = True
     monkeypatch.setattr(wx, "GetTopLevelParent", lambda _window: frame)
     monkeypatch.setattr(wx, "CallAfter", lambda function, *args: function(*args))
-    monkeypatch.setattr(wx_app, "load_worlds", lambda: [World("GW", "gw.example", 9500)])
+    monkeypatch.setattr(session_panel, "load_worlds", lambda: [World("GW", "gw.example", 9500)])
 
     assert panel.use_secure_port(9501) is True
     assert panel.world.port == 9501 and panel.world.tls is True
@@ -171,7 +171,7 @@ def test_the_switch_closes_the_live_link_before_reconnecting():
     import pytest
 
     pytest.importorskip("wx")
-    from genericmud.ui import wx_app
+    from genericmud.ui import session_panel
 
     order: list[str] = []
 
@@ -179,7 +179,7 @@ def test_the_switch_closes_the_live_link_before_reconnecting():
         connected = True
         connecting = False
 
-    panel = wx_app.SessionPanel.__new__(wx_app.SessionPanel)
+    panel = session_panel.SessionPanel.__new__(session_panel.SessionPanel)
     panel._alive = True
     panel._reconnecting = True  # as a live session's own reconnect guard would leave it
     panel._connection = Connection()
@@ -203,9 +203,9 @@ def test_the_window_does_not_reconnect_a_world_already_there(monkeypatch):
     import pytest
 
     wx = pytest.importorskip("wx")
-    from genericmud.ui import wx_app
+    from genericmud.ui import session_panel
 
-    panel = wx_app.SessionPanel.__new__(wx_app.SessionPanel)
+    panel = session_panel.SessionPanel.__new__(session_panel.SessionPanel)
     panel.world = World("gw", "gw.example", 9501, tls=True)
     panel._alive = True
     panel.reconnect = lambda: (_ for _ in ()).throw(AssertionError("reconnected anyway"))
@@ -252,7 +252,7 @@ def test_the_window_tells_the_engine_what_it_switched_to(monkeypatch):
     import pytest
 
     wx = pytest.importorskip("wx")
-    from genericmud.ui import wx_app
+    from genericmud.ui import session_panel
 
     told: list[World] = []
     scheduled: list = []
@@ -269,14 +269,14 @@ def test_the_window_tells_the_engine_what_it_switched_to(monkeypatch):
         def call_soon_threadsafe(self, callback, *args):
             scheduled.append((callback, args))
 
-    panel = wx_app.SessionPanel.__new__(wx_app.SessionPanel)
+    panel = session_panel.SessionPanel.__new__(session_panel.SessionPanel)
     panel.world = World("Pen", "pen.example", 9500, tls=False)
     panel.app = App()
     panel._loop = Loop()
     panel._alive = True
     monkeypatch.setattr(wx, "GetTopLevelParent", lambda _window: Frame())
     monkeypatch.setattr(wx, "CallAfter", lambda function, *args: function(*args))
-    monkeypatch.setattr(wx_app, "load_worlds", lambda: [World("Pen", "pen.example", 9500)])
+    monkeypatch.setattr(session_panel, "load_worlds", lambda: [World("Pen", "pen.example", 9500)])
 
     assert panel.use_secure_port(9501) is True
     assert scheduled and scheduled[0][0] == panel.app.apply_world_settings
@@ -308,14 +308,14 @@ def test_the_window_takes_the_port_on_its_own_thread(monkeypatch):
     import pytest
 
     wx = pytest.importorskip("wx")
-    from genericmud.ui import wx_app
+    from genericmud.ui import session_panel
 
     handed: list = []
 
     def no_window(_window):
         raise AssertionError("touched the window off its own thread")
 
-    panel = wx_app.SessionPanel.__new__(wx_app.SessionPanel)
+    panel = session_panel.SessionPanel.__new__(session_panel.SessionPanel)
     panel.world = World("gw", "gw.example", 9500, tls=False)
     panel._alive = True
     monkeypatch.setattr(wx, "GetTopLevelParent", no_window)
@@ -331,7 +331,7 @@ def test_a_world_that_was_never_saved_is_not_saved_by_secure(monkeypatch):
     import pytest
 
     wx = pytest.importorskip("wx")
-    from genericmud.ui import wx_app
+    from genericmud.ui import session_panel
 
     saved: list = []
     scheduled: list = []
@@ -345,14 +345,16 @@ def test_a_world_that_was_never_saved_is_not_saved_by_secure(monkeypatch):
         def call_soon_threadsafe(self, callback, *args):
             scheduled.append(callback)
 
-    panel = wx_app.SessionPanel.__new__(wx_app.SessionPanel)
+    panel = session_panel.SessionPanel.__new__(session_panel.SessionPanel)
     panel.world = World("visit", "visit.example", 9500, tls=False)
     panel.app = None
     panel._loop = Loop()
     panel._alive = True
     monkeypatch.setattr(wx, "GetTopLevelParent", lambda _window: Frame())
     monkeypatch.setattr(wx, "CallAfter", lambda function, *args: function(*args))
-    monkeypatch.setattr(wx_app, "load_worlds", lambda: [World("other", "other.example", 4000)])
+    monkeypatch.setattr(
+        session_panel, "load_worlds", lambda: [World("other", "other.example", 4000)]
+    )
 
     assert panel.use_secure_port(9501) is True
     assert saved == []
@@ -368,7 +370,7 @@ def test_the_switch_says_where_it_ended_up_after_the_reconnect():
     import pytest
 
     pytest.importorskip("wx")
-    from genericmud.ui import wx_app
+    from genericmud.ui import session_panel
 
     class Connection:
         connected = True
@@ -383,7 +385,7 @@ def test_the_switch_says_where_it_ended_up_after_the_reconnect():
 
     posted: list = []
     voice = Voice()
-    panel = wx_app.SessionPanel.__new__(wx_app.SessionPanel)
+    panel = session_panel.SessionPanel.__new__(session_panel.SessionPanel)
     panel._alive = True
     panel._reconnecting = False
     panel._connection = Connection()
