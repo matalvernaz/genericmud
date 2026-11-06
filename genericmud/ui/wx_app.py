@@ -1465,11 +1465,14 @@ class SessionPanel(wx.Panel):
             # connection re-pointed at the new one, so typed commands go out in it too.
             self.app.set_encoding(self.world.encoding)
             self._connection.text_codec = self.app.codec
+            # And the engine's own picture of the link, which an MSSP offer of an encrypted
+            # port is checked against: left as it opened, a world edited onto that port and
+            # TLS was offered it again, and /secure then said to set by hand what was set.
+            self.app.apply_world_settings(self.world)
 
     async def _reconnect(self) -> None:  # loop thread
         if not self._alive or self._connection is None or self.app is None:
             return  # the tab closed before this got its turn on the loop
-        self._adopt_saved_world()
         if self._connection.connected:
             return  # the link came back while this waited its turn on the loop
         if self._reconnecting or self._connection.connecting:
@@ -1483,6 +1486,9 @@ class SessionPanel(wx.Panel):
                 self._voice.speak(f"Still connecting to {self.world.name}.", channel="system",
                                   interrupt=True)
             return
+        # Only now, with no link up and none on its way: the encoding is replaced along with the
+        # address, and a live session's text must not change codec under it.
+        self._adopt_saved_world()
         self._reconnecting = True
         # Manual reconnect clears the session's stop intent, but respects the global choice.
         self._connection.auto_reconnect = self._prefs.auto_reconnect
