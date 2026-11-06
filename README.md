@@ -568,6 +568,13 @@ are spoken once and written to the diagnostics rather than swallowed. Every rule
 world shares one Lua space for this, and a rule can call any function of any of that
 world's scripts.
 
+**Order** decides which rule is tried first when several match: lower numbers first, and
+rules sharing a number fall back to their pattern text, so the order never depends on which
+file they came from. **Keep checking the rules after this one** is on by default -- every
+matching rule acts -- and clearing it makes that rule the last one heard about the line. A
+player rule that stops the search never stops a soundpack's rules; MUSHclient draws the same
+line between one plugin and the next.
+
 Triggers and aliases also take a **Group**: rules sharing a name switch together, so
 `mud.set_group_enabled("combat", false)` turns all of them off in one call -- MUSHclient's
 EnableGroup. A group nothing belongs to is not an error; it is a group waiting for its

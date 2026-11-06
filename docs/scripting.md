@@ -97,6 +97,17 @@ running half of an action. genericMud speaks each distinct missing-value problem
 once and records repeated occurrences in the diagnostic log. One item can send
 at most 100 commands at a time.
 
+## Put rules in an order
+
+When several rules match the same line, **Order** decides which is tried first: the lower
+number first, and rules sharing a number fall back to their pattern text, so the order never
+depends on which file they came from. **Keep checking the rules after this one** is on by
+default, so every matching rule acts; clearing it makes that rule the last one heard about the
+line.
+
+A player rule that stops the search never stops a soundpack's rules: MUSHclient draws the same
+line between one plugin and the next, so a pack's own triggers keep working.
+
 ## When Lua is useful
 
 Ordinary trigger, alias, and hotkey fields already support multiple commands

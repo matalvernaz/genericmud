@@ -92,6 +92,14 @@ class UserTrigger:
     # MUSHclient's group: rules sharing a name are switched together by one call, which is what
     # "turn all the combat rules off" needs. Empty means the rule stands alone.
     group: str = ""
+    # MUSHclient's sequence: the lower the number, the sooner the rule is tried. Rules with the
+    # same order are tried by their pattern text, as MUSHclient does, so the order is never a
+    # matter of which file they were added from.
+    order: int = 100
+    # Whether the rules after this one are still tried when it matches. True keeps today's
+    # behaviour (every matching rule acts); clearing it makes this rule the last one heard about
+    # the line. MUSHclient's default is the other way round, which is why this says what it does.
+    keep_evaluating: bool = True
     enabled: bool = True
 
     def match_kind(self) -> str:
@@ -109,6 +117,8 @@ class UserAlias:
     speak: str = ""  # optional speech, same templates; can read a value with no commands
     label: str = ""  # as for triggers: the handle that turns it off and on
     group: str = ""  # as for triggers: switched together with the rest of its group
+    order: int = 100  # as for triggers: lower is tried first
+    keep_evaluating: bool = True  # as for triggers: let later aliases see the command too
     enabled: bool = True
 
 
@@ -602,6 +612,15 @@ def _register_trigger(api: ScriptApi, t: UserTrigger) -> None:
         pattern,
         fire if has_actions else None,
         regex=regex,
+        # A lower order number is tried first, so the engine's higher-priority-first becomes a
+        # sign change; equal orders fall back to the pattern, which is MUSHclient's order too.
+        priority=-int(t.order),
+        tiebreak=t.pattern,
+        # A rule that stops the search stops it for the player's own rules, never for a pack's:
+        # stop_scope keeps one player rule from silencing a soundpack. That is what MUSHclient
+        # means by stopping evaluation inside one plugin.
+        stop_scope=SOURCE,
+        keep_evaluating=t.keep_evaluating,
         gag=(gag == "line"),
         gag_but_display=(gag == "speech"),
         omit_from_log=t.omit_log,
@@ -771,6 +790,13 @@ def _register_alias(api: ScriptApi, a: UserAlias) -> None:
         source=SOURCE,
         name=a.label.strip(),
         group=a.group.strip(),
+        priority=-int(a.order),
+        tiebreak=a.pattern,
+        stop_scope=SOURCE,
+        keep_evaluating=a.keep_evaluating,
+        # An alias that matches takes the command -- what was typed does not also go to the
+        # MUD -- whether or not later aliases are allowed to see it.
+        consumes=True,
     )
     if rule is not None:
         rule.enabled = a.enabled
@@ -796,6 +822,7 @@ def _register_alias(api: ScriptApi, a: UserAlias) -> None:
     extra = api.add_alias(
         extra_words_pattern(a.pattern), fire_with_words, regex=True, source=SOURCE,
         priority=EXTRA_WORDS_PRIORITY, fallback=True,
+        consumes=True,  # it takes the words it was given, as the alias itself does
     )
     if extra is not None:
         extra.enabled = a.enabled
