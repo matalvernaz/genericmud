@@ -10,7 +10,7 @@ from genericmud.config.atomic import atomic_write_text
 from genericmud.mapping import load_map, save_map
 from genericmud.packs import user_rules
 from genericmud.safepath import legacy_world_component, world_component
-from genericmud.scripting import user_scripts
+from genericmud.scripting import rule_scripts, user_scripts
 from genericmud.scripting.api import ScriptApi
 from genericmud.voice.router import SYSTEM_CHANNEL
 
@@ -20,7 +20,8 @@ class WorldFilesMixin:
 
     Part of EngineApp (engine_app.py). Every attribute below starts in its constructor.
 
-    Writes: _map_unsaved, _user_script_generation, _user_script_runtimes, map.
+    Writes: _map_unsaved, _rule_scripts, _user_script_generation, _user_script_runtimes,
+    map.
 
     Reads: _diag, _other_worlds, _vip_packs, _world_paths, engine, map_dir, name, packs, voice.
 
@@ -108,9 +109,22 @@ class WorldFilesMixin:
             self.voice.speak(f"Rule not applied: {error}", channel=SYSTEM_CHANNEL, interrupt=False)
             return
         self.engine.remove_source(user_rules.SOURCE)
-        user_rules.register_rules(
-            ScriptApi(self.engine, source=user_rules.SOURCE, base_dir=str(pack_dir)), rules
-        )
+        api = ScriptApi(self.engine, source=user_rules.SOURCE, base_dir=str(pack_dir))
+        # A rule's "send to script" reaches this world's Lua through the api it calls on.
+        api.scripts = self.rule_scripts(pack_dir)
+        user_rules.register_rules(api, rules)
+
+    def rule_scripts(self, pack_dir):
+        """The runner a rule's "send to script" uses: this world's Lua, and its loaded scripts."""
+        runner = getattr(self, "_rule_scripts", None)
+        if runner is None or runner.base_dir != str(pack_dir):
+            runner = rule_scripts.RuleScripts(
+                self.engine, str(pack_dir), self._user_script_runtimes
+            )
+            self._rule_scripts = runner
+        else:
+            runner.set_scripts(self._user_script_runtimes)
+        return runner
 
     def reload_user_scripts(self, announce: bool = False) -> bool:
         """Transactionally replace this world's ordered native-Lua automation scripts."""

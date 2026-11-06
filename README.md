@@ -522,6 +522,43 @@ the alias sends several commands, the extra words go on the end of the last one,
 unless a command says where they belong with `${1}`, as in `give ${1} to bob`.
 The shortcut has to be a word of its own, so `sh` never takes `shout`.
 
+**Send it to** sits beside the response text and says where it goes, the way
+MUSHclient's "send to" does. One text, one destination:
+
+| Send it to | What happens |
+|---|---|
+| The MUD | the commands are sent, as before |
+| My command box, unsent | the text lands in your command box to finish and send yourself -- a trailing space is kept, so `reply ${1} ` waits for the message |
+| The output, as a note | shown in the window and kept in the session log |
+| The session log only | written down, never shown |
+| This client again | run as if you had typed it, so your own aliases see it first and only what falls through reaches the MUD |
+
+**A script** is the target that opens everything else up. Its text is read two ways:
+
+- if it names a function your scripts define, that function is **called** with the
+  matched line and the captures -- `on_backup(line, wildcards)` -- which is
+  MUSHclient's "send to script";
+- otherwise it is **run as Lua** against the same `mud` table your scripts use, so a
+  rule can say its piece without a script file: `mud.set_enabled("backup-watch", false)`,
+  `mud.timer(5, function() mud.command("look") end)`.
+
+Code a rule runs inline is given `line` (what matched) and `wildcards` (the captures,
+`wildcards[1]` first) as globals; a called function receives them as arguments. Errors
+are spoken once and written to the diagnostics rather than swallowed. Every rule of a
+world shares one Lua space for this, and a rule can call any function of any of that
+world's scripts.
+
+Triggers and aliases also take a **Label**: the name a script uses to turn the rule off
+and on, in MUSHclient's style. A rule with a label can be switched by a script with
+`mud.set_enabled("watch-backups", false)`; one without can only be switched in the
+Automation Manager. The manager reads the label first, because it is what you called
+the rule.
+
+The world's **Log the notes automation writes** setting decides whether notes reach
+the log; clear it and notes behave like prints without rewriting a rule. Nothing here
+speaks: what you want to hear goes in **Speak this text**, because what belongs in the
+record and what belongs in your ears are different needs.
+
 Each trigger, alias, or hotkey can send one command or a sequence. Put one
 command on each line. The whole sequence is filled in before its first command
 is sent. Command fields understand matched text (`${1}` or the older `%1`), a
