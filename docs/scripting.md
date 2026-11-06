@@ -12,7 +12,7 @@ not run in your other worlds.
 1. Connect to the saved world you want to change.
 2. Press **Ctrl+B**, or choose **Automation > Manage automation**.
 3. In the **Show** box, choose **Triggers**, **Aliases**, **Hotkeys**,
-   **Channels**, **Scripts**, or **MUD data**.
+   **Channels**, **Scripts**, **MUD data**, or **Timers**.
 4. Choose **New**.
 
 These are categories in one manager, not separate simple and advanced tools:
@@ -26,6 +26,8 @@ These are categories in one manager, not separate simple and advanced tools:
   such as `Char.Vitals.hp`. `${value}` is the new value and `${name}` is what
   arrived. **Only when it changes** is on for a new rule.
 - A **script** contains reusable Lua automation.
+- A **timer** acts on a clock: every so often, or once a day at a time such as
+  `03:00`.
 
 Choose an item and press Enter to edit it. **Duplicate** opens a copy that you
 can change. **Disable** keeps an ordinary item saved without letting it run.
@@ -34,7 +36,7 @@ used.
 
 Keyboard shortcuts inside the manager:
 
-- **Ctrl+1** through **Ctrl+5** show the five categories in order.
+- **Ctrl+1** through **Ctrl+7** show the seven categories in order.
 - **Ctrl+N** creates an item in the category being shown.
 - **Enter** edits the selected item.
 - **Delete** deletes the selected item after confirmation.
@@ -73,7 +75,10 @@ an alias for `sh *`, or one from a soundpack, still comes first. Lua's
    right match choice. Wildcards, exact whole lines, and regular expressions
    are also available.
 3. Fill in any actions you need: commands, spoken text, a sound, speech
-   interruption, hiding the line, or routing it to a channel.
+   interruption, hiding the line, **Leave this line out of the session log**, or
+   routing it to a channel. Hiding the line decides what you hear; leaving it out
+   of the log decides what is kept, and either can be set without the other, so a
+   repeating notice can be read once and never written down.
 4. Choose **OK**. The trigger works on the next matching line.
 
 Hotkeys use the same command field. Focus **Press the key combination**, press
@@ -589,7 +594,8 @@ value that should be saved with one world.
 
 ## Use several script files
 
-Scripts load in alphabetical order. Numbered names make that order obvious:
+Scripts load in alphabetical order, into **one** Lua state for the world. Numbered
+names make that order obvious:
 
 ```text
 10-settings.lua
@@ -597,9 +603,31 @@ Scripts load in alphabetical order. Numbered names make that order obvious:
 30-healing.lua
 ```
 
-Each file has its own Lua state. A Lua `local` or global created in one file is
-not visible in another file. Use `mud.set_var` and `mud.get_var` to share a value
-between files.
+The files are parts of one program, so a global or a function defined in one is
+visible in the ones after it:
+
+```lua
+-- 10-settings.lua
+function warn_low_hp()
+    mud.speak("health low")
+end
+```
+
+```lua
+-- 20-combat.lua
+mud.trigger("You are bleeding", function()
+    warn_low_hp()
+end)
+```
+
+Two consequences worth knowing. A name has to be defined **before** it is used,
+which is why the numbers are there; and a later file that defines the same global
+name wins, as it would if you read the files in order. Keep module-wide values
+together in the lowest-numbered file and this never comes up.
+
+`local` is still local to its own file, and `mud.set_var` / `mud.get_var` are still
+the way to keep a value across a reload; `mud.shared_get` / `mud.shared_set` share
+between worlds.
 
 Aliases with higher `priority` are checked first. The same option works for
 triggers:
@@ -686,8 +714,10 @@ Rules and timing:
 - `mud.timer(seconds, callback)`
 - `mud.on_data(name, callback [, options])`
 
-The alias and trigger options are `regex` and `priority`. A trigger can also use
-`channel`. The only `mud.on_data` option is `changes`.
+The alias and trigger options are `regex` and `priority`, plus `label` and `group`.
+A label is the name a rule is switched by -- `mud.set_enabled("shoot", false)` -- and the
+manager reads it out first; a group is what `mud.set_group_enabled` switches as one. A
+trigger can also use `channel`. The only `mud.on_data` option is `changes`.
 
 Commands and output:
 
