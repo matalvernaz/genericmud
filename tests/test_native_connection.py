@@ -643,3 +643,31 @@ async def test_initial_recovery_restores_login_and_the_world_codec(monkeypatch):
         assert panel.backend.spoken.count("Reconnected to Test.") == 1
     finally:
         await _close_panel(panel, monkeypatch)
+
+
+async def test_an_initial_failure_says_why_before_it_keeps_trying(monkeypatch):
+    # Retrying for ever hides a typo in the host or a refused certificate unless the reason is
+    # said. It rides in the status that is spoken, since a line of its own would be cut off by it.
+    waiting = asyncio.Event()
+    real_sleep = asyncio.sleep
+
+    async def open_connection(*args, **kwargs):
+        raise OSError("connection refused")
+
+    async def hold(delay):
+        if delay == 0:
+            return await real_sleep(0)
+        waiting.set()
+        await asyncio.get_running_loop().create_future()  # until the tab closes
+
+    monkeypatch.setattr(asyncio, "open_connection", open_connection)
+    monkeypatch.setattr(asyncio, "sleep", hold)
+    panel = Panel(monkeypatch)  # automatic reconnection on, as it is by default
+    try:
+        await panel._start()
+        await asyncio.wait_for(waiting.wait(), 1)
+        assert panel.backend.spoken == [
+            "connection unavailable: connection refused; reconnecting every 5s"
+        ]
+    finally:
+        await _close_panel(panel, monkeypatch)

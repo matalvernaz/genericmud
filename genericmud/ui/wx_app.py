@@ -524,7 +524,7 @@ class SessionPanel(wx.Panel):
             # it -- a visual-only echo leaves a blind user with no idea the connect ever failed.
             if self.app is not None:
                 self.app.engine.connected = False
-            if self._connection.start_reconnect():
+            if self._connection.start_reconnect(detail=str(error)):
                 return  # transport owns the retries and their single spoken announcement
             if self._voice is not None:
                 self._voice.speak(f"Connect failed: {error}", channel="system", interrupt=True)
@@ -1087,6 +1087,11 @@ class SessionPanel(wx.Panel):
         # "/verb" a MUD owns is dropped unasked, as it was before the question existed.
         offline_ok = text.startswith(CLIENT_PREFIX)
         if self._connect_finished and not self.is_connected() and not offline_ok:
+            if self.is_connecting():
+                # Already trying again by itself: "Reconnect now?" could only be answered with
+                # "Still connecting", so that is said straight away, and the text stays put.
+                self.reconnect()
+                return
             # Nothing typed into a dead session reaches the MUD -- the transport drops it and
             # the client says nothing, which looks exactly like a MUD ignoring the command.
             # Ask instead, and leave the text in the box so it isn't lost while deciding.
@@ -1452,7 +1457,7 @@ class SessionPanel(wx.Panel):
             if self._diag is not None:
                 self._diag.event("reconnect.failed", error=f"{type(error).__name__}: {error}")
             self._post(protocol.echo(f"* Reconnect failed: {error}"))
-            if self._connection.start_reconnect():
+            if self._connection.start_reconnect(detail=str(error)):
                 return
             if self._voice is not None:
                 self._voice.speak(f"Reconnect failed: {error}", channel="system", interrupt=True)
