@@ -1945,6 +1945,7 @@ _CONNECT_LABELS = (
 
 _ID_NEW_WORLD = wx.ID_HIGHEST + 1
 _ID_EDIT_WORLD = wx.ID_HIGHEST + 2
+_ID_DELETE_WORLD = wx.ID_HIGHEST + 3
 
 
 def _saved_on_same_server(world: World) -> bool:
@@ -2348,8 +2349,19 @@ class ConnectDialog(wx.Dialog):
         edit.Bind(wx.EVT_BUTTON, self._on_edit)
         new = wx.Button(self, _ID_NEW_WORLD, "&New World...")
         new.Bind(wx.EVT_BUTTON, lambda _event: self.EndModal(_ID_NEW_WORLD))
+        # No mnemonic in the label: Alt+D belongs to the "Connection details" label, and two
+        # Alt+D's in one dialog is how this button would steal it. Alt+R instead, and Delete
+        # while the list has the focus and a world picked -- Delete does nothing in a list box
+        # on Windows, so nothing is taken from it.
+        delete = wx.Button(self, _ID_DELETE_WORLD, "Delete...")
+        delete.Bind(wx.EVT_BUTTON, self._on_delete)
+        self._choice.Bind(wx.EVT_KEY_DOWN, self._on_choice_key)
+        self.SetAcceleratorTable(
+            wx.AcceleratorTable([(wx.ACCEL_ALT, ord("R"), _ID_DELETE_WORLD)])
+        )
         buttons.Add(self._connect, 0, wx.RIGHT, 6)
         buttons.Add(edit, 0, wx.RIGHT, 6)
+        buttons.Add(delete, 0, wx.RIGHT, 6)
         buttons.Add(new, 0, wx.RIGHT, 6)
         buttons.Add(wx.Button(self, wx.ID_CANCEL, "C&ancel"), 0)
         outer.Add(buttons, 0, wx.ALL | wx.ALIGN_RIGHT, 10)
@@ -2358,6 +2370,7 @@ class ConnectDialog(wx.Dialog):
         enabled = bool(self._saved)
         self._connect.Enable(enabled)
         edit.Enable(enabled)
+        delete.Enable(enabled)
         if enabled:
             self._choice.SetSelection(0)
             self._update_details()
@@ -2386,6 +2399,17 @@ class ConnectDialog(wx.Dialog):
     def _on_connect(self, _event: wx.CommandEvent) -> None:
         if self.get_world() is not None:
             self.EndModal(wx.ID_OK)
+
+    def _on_choice_key(self, event: wx.KeyEvent) -> None:
+        """Delete removes the picked world -- only with the list focused and one selected."""
+        if event.GetKeyCode() == wx.WXK_DELETE and self.get_world() is not None:
+            self.EndModal(_ID_DELETE_WORLD)
+            return
+        event.Skip()
+
+    def _on_delete(self, _event: wx.CommandEvent) -> None:
+        if self.get_world() is not None:
+            self.EndModal(_ID_DELETE_WORLD)
 
     def _on_edit(self, _event: wx.CommandEvent) -> None:
         if self.get_world() is not None:
@@ -5057,6 +5081,67 @@ class GenericMudFrame(wx.Frame):
         else:
             self.announce(f"Renamed {old_name} to {new_name}.")
 
+    def _a_tab_is_connected_to(self, name: str) -> bool:
+        """Whether a tab is using this world right now."""
+        for index in range(self.book.GetPageCount()):
+            panel = self.book.GetPage(index)
+            panel_world = getattr(panel, "world", None)
+            if panel_world is None or panel_world.name.casefold() != name.casefold():
+                continue
+            is_connected = getattr(panel, "is_connected", None)
+            if is_connected is not None and is_connected():
+                return True
+        return False
+
+    def _delete_saved_world(self, world: World) -> None:
+        """Delete a saved world and its login, and nothing else.
+
+        Asked first, because it is the one thing in the client that destroys something the
+        player made. Everything else the world owns stays where it is -- its logs, its sound
+        folder, its map, its saved variables and its own automation rules -- so re-adding a
+        world by the same name finds its map and its rules again. The password is the exception:
+        a login kept for a world that no longer exists is a credential nobody is looking after,
+        and the world list is the only place that would have said so.
+        """
+        connected = self._a_tab_is_connected_to(world.name)
+        message = (
+            f"Delete the saved world {world.name}?\n\n"
+            "Only the saved world and its login -- the saved username and password -- go.\n"
+            "Everything else it owns stays where it is, in case you add it back: its log "
+            "files, its sound folder, its map, its saved variables and any automation rules "
+            "of its own.\n"
+            + (
+                "A tab is connected to it now: that tab keeps running until you close it.\n"
+                if connected
+                else ""
+            )
+            + "\nPress No to keep it."
+        )
+        dialog = wx.MessageDialog(
+            self, message, "Delete World", wx.YES_NO | wx.NO_DEFAULT | wx.ICON_WARNING
+        )
+        try:
+            if dialog.ShowModal() != wx.ID_YES:
+                return
+        finally:
+            dialog.Destroy()
+        remaining = [
+            saved for saved in load_worlds() if saved.name.casefold() != world.name.casefold()
+        ]
+        try:
+            save_worlds(remaining)
+        except (OSError, ValueError) as error:
+            wx.MessageBox(
+                f"Couldn't delete {world.name}: {error}",
+                "Delete World",
+                wx.OK | wx.ICON_ERROR,
+                self,
+            )
+            return
+        if self._credentials is not None:
+            self._credentials.delete(world.name)
+        self.announce(f"{world.name} deleted. Its log files are still there.")
+
     def _apply_to_open_tabs(self, name: str, world: World) -> None:
         """An edited world's command stacking and logging take effect in its open tabs at
         once; the rest (host, encoding, sounds) when it next connects. A rename lands in the
@@ -5110,6 +5195,9 @@ class GenericMudFrame(wx.Frame):
             if action == _ID_NEW_WORLD:
                 self._show_world_dialog()
                 return
+            if action == _ID_DELETE_WORLD and world is not None:
+                self._delete_saved_world(world)
+                continue
             if action == _ID_EDIT_WORLD and world is not None:
                 self._edit_saved_world(world)
                 continue
