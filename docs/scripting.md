@@ -592,7 +592,8 @@ value that should be saved with one world.
 
 ## Use several script files
 
-Scripts load in alphabetical order. Numbered names make that order obvious:
+Scripts load in alphabetical order, into **one** Lua state for the world. Numbered
+names make that order obvious:
 
 ```text
 10-settings.lua
@@ -600,9 +601,31 @@ Scripts load in alphabetical order. Numbered names make that order obvious:
 30-healing.lua
 ```
 
-Each file has its own Lua state. A Lua `local` or global created in one file is
-not visible in another file. Use `mud.set_var` and `mud.get_var` to share a value
-between files.
+The files are parts of one program, so a global or a function defined in one is
+visible in the ones after it:
+
+```lua
+-- 10-settings.lua
+function warn_low_hp()
+    mud.speak("health low")
+end
+```
+
+```lua
+-- 20-combat.lua
+mud.trigger("You are bleeding", function()
+    warn_low_hp()
+end)
+```
+
+Two consequences worth knowing. A name has to be defined **before** it is used,
+which is why the numbers are there; and a later file that defines the same global
+name wins, as it would if you read the files in order. Keep module-wide values
+together in the lowest-numbered file and this never comes up.
+
+`local` is still local to its own file, and `mud.set_var` / `mud.get_var` are still
+the way to keep a value across a reload; `mud.shared_get` / `mud.shared_set` share
+between worlds.
 
 Aliases with higher `priority` are checked first. The same option works for
 triggers:
