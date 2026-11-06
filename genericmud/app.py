@@ -2234,8 +2234,11 @@ class EngineApp:
             )
         elif kind == protocol.LINK_AT:
             from_end = message.get("from_end")
+            column = message.get("column")
             self._activate_link_at(
-                str(message.get("text", "")), from_end if isinstance(from_end, int) else 0
+                str(message.get("text", "")),
+                from_end if isinstance(from_end, int) else 0,
+                column if isinstance(column, int) else -1,
             )
         elif kind == protocol.CLIENT_ERROR:
             self._handle_client_error(message)
@@ -2869,13 +2872,15 @@ class EngineApp:
             chosen.text, chosen.command, insert=chosen.insert, hint=chosen.hint
         )
 
-    def _activate_link_at(self, text: str, from_end: int) -> None:
+    def _activate_link_at(self, text: str, from_end: int, column: int = -1) -> None:
         """Follow the link on the output line the reader is on (Enter in the output box).
 
         The output box holds fewer lines than the buffer and has a caret of its own, so the
-        window says which line it is: its text, and how far it sits from the end. The review
-        cursor moves to that line and the link is followed from there, so Enter never acts on
-        some newer line the reader hasn't heard. A line that can't be found follows nothing.
+        window says which line it is -- its text, and how far it sits from the end -- and which
+        word of it the caret is on. The review cursor moves to that line and that word, so
+        Enter never acts on some newer line the reader hasn't heard, and a line carrying
+        several links follows the one under the caret rather than giving up. A line that can't
+        be found follows nothing.
         """
         lines = self.buffer.lines()
         near = len(lines) - 1 - max(0, from_end)
@@ -2884,6 +2889,8 @@ class EngineApp:
             self._speak_review("no link on this line")
             return
         self.review.go_to(min(matches, key=lambda index: abs(index - near)))
+        if column >= 0:
+            self.review.go_to_column(column)
         self._activate_link()
 
     def _follow_link(

@@ -993,17 +993,22 @@ class SessionPanel(wx.Panel):
                 if self._pending:
                     self._flush_output()  # the caret's line may still be in the append batch
                 lines = self.output.GetValue().split("\n")
-                ok, _column, caret_line = self.output.PositionToXY(
+                ok, column, caret_line = self.output.PositionToXY(
                     self.output.GetInsertionPoint()
                 )
                 if not ok or not 0 <= caret_line < len(lines):
                     caret_line = len(lines) - 1
+                    column = -1
+                # The column goes too: a line can carry several links, and the one the reader
+                # means is the one under the caret. Without it the engine can only take the
+                # line's only link, which is why Enter did nothing on a line with two.
                 self._loop.call_soon_threadsafe(
                     self.app.on_ws_message,
                     {
                         "type": protocol.LINK_AT,
                         "text": lines[caret_line],
                         "from_end": len(lines) - 1 - caret_line,
+                        "column": column,
                     },
                 )
             return

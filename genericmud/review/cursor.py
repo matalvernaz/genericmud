@@ -62,6 +62,25 @@ class ReviewCursor:
         self._word = self._char = 0
         return self._line_text()
 
+    def go_to_column(self, column: int) -> str:
+        """Enter the current line at the word holding ``column``, counted from its start.
+
+        A window showing this buffer has a caret of its own, and the line it is on is not enough
+        to act on: a line can carry several links, and the one the reader means is the one under
+        the caret. Parking on its word is what makes the follow key act on that link rather than
+        giving up on a line with more than one.
+        """
+        text = self._line_text()
+        self._word = 0
+        for number, match in enumerate(re.finditer(r"\S+", text)):
+            if match.end() > max(0, column):
+                self._word = number
+                break
+        else:
+            self._word = max(0, len(text.split()) - 1)
+        self._char = 0
+        return self.current_word()
+
     def next_line(self) -> str:
         self._set_line(self._index() + 1)
         self._word = self._char = 0
