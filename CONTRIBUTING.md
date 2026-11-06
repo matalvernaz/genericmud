@@ -71,6 +71,44 @@ The engine runs on an asyncio loop in a background thread, and the wx window run
 - Title: one plain sentence saying what changes for a player, like "A saved world can be deleted from the world list".
 - Description: what was wrong or missing; what a player does and hears now; how you tested it, including the test that failed before your fix; and anything you couldn't test, like a platform or a screen reader you don't have. The pull request template asks for these.
 
+## Where things live
+
+The native and web windows share one session engine. A change to command execution,
+protocols, soundpacks or speech normally belongs in the shared code, rather than in a window.
+
+- `genericmud/app/engine_app.py` constructs one world's session and owns its connection
+  lifecycle and initial state. Import `EngineApp` from `genericmud.app`.
+- `genericmud/app/` groups that session's methods by job: `incoming_text`, `typed_commands`,
+  `autologin`, `mud_data`, `server_media`, `soundpacks`, `world_files`, `walking`, `links`,
+  `key_actions` and `session_log`. These are mixins of `EngineApp`; their docstrings name the
+  state they use. `sink.py` connects automation side effects back to the session.
+- `genericmud/ui/wx_app.py` starts the native window and its background asyncio loop.
+  `main_window.py` holds the frame and menus; `session_panel.py` builds one world's tab.
+  The tab's methods live in `session_connection.py`, `command_box.py`, `output_box.py` and
+  `pack_window.py`. Dialogs have their own modules in the same folder.
+- `genericmud/web_launcher.py`, `genericmud/bridge/` and `frontend/` connect the shared
+  engine to the optional web window. `bridge/protocol.py` defines the messages both windows use.
+- `genericmud/transport/` handles connections, reconnects and telnet negotiation.
+  `genericmud/protocol/` parses server formats such as GMCP, MSDP, MXP, Pueblo and MSP.
+- `genericmud/automation/` holds triggers, aliases, timers, hotkeys and channel routing.
+  `genericmud/scripting/` exposes the Lua API and interprets VIPMud and MUSHclient scripts.
+- `genericmud/packs/` installs, loads, updates and shares soundpacks and user rules.
+- `genericmud/voice/` routes speech and controls the speaking queue; `voice/backends/`
+  connects it to the player's screen reader or system voice. `genericmud/sound/` handles
+  audio playback, buses and server media downloads.
+- `genericmud/model/`, `render/` and `review/` hold buffered lines, text rendering and
+  output review. `navigation.py` and `mapping.py` handle routes, breadcrumbs and the room map.
+  `completion.py` indexes recent output words and cycles through completion matches.
+- `genericmud/config/` loads and saves worlds, preferences and keymaps.
+  `genericmud/session/` supplies credentials, automatic login, logs and cross-session routing.
+  These are standalone services; the methods that connect them live in `app/`.
+- `genericmud/update/` checks and installs app updates. `tools/`, `genericMud.spec` and
+  `hooks/` build the standalone apps. `genericmud/__main__.py` handles command-line options.
+
+Tests follow those jobs in `tests/`. Native source assertions use `tests/ui_source.py` to find
+a named definition across the split files. A monkeypatch must target the module that reads the
+name, even when the method is reached through `SessionPanel` or `EngineApp`.
+
 ## Licensing
 
 genericMud is MIT licensed. Only bring in code under a licence that allows that, and say where it came from. Ideas from other MUD clients are welcome. Code, tests or data from GPL-licensed clients, like Mudlet, or from copyrighted manuals, like VIPMud's, are not.
