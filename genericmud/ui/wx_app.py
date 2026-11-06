@@ -108,6 +108,8 @@ from genericmud.session.diaglog import DiagnosticLog, make_diagnostic_log
 from genericmud.session.hub import SessionHub
 from genericmud.sound.bass_backend import make_sound_backend
 from genericmud.transport.connection import MudConnection
+from genericmud.ui.background_work import _run_async
+from genericmud.ui.clipboard import _clipboard_text, _set_clipboard_text
 from genericmud.ui.keyboard import (
     _COMPLETE_BACKWARD,
     _COMPLETE_FORWARD,
@@ -1521,31 +1523,6 @@ class SessionPanel(wx.Panel):
             self.reconnect()
 
 
-def _clipboard_text() -> str:  # UI thread
-    """The clipboard's text, or "" when it holds none or can't be opened."""
-    clipboard = wx.TheClipboard
-    if not clipboard.Open():
-        return ""
-    try:
-        data = wx.TextDataObject()
-        return data.GetText() if clipboard.GetData(data) else ""
-    finally:
-        clipboard.Close()
-
-
-def _set_clipboard_text(text: str) -> bool:  # UI thread
-    """Put ``text`` on the clipboard; False when another program is holding it open."""
-    clipboard = wx.TheClipboard
-    if not clipboard.Open():
-        return False
-    try:
-        clipboard.SetData(wx.TextDataObject(text))
-        clipboard.Flush()  # Windows keeps it after genericMud closes
-    finally:
-        clipboard.Close()
-    return True
-
-
 class PackNotepadFrame(wx.Frame):
     """A soundpack's MUSHclient notepad: text to read in a window of its own, while the game
     carries on. Read-only; Escape or Close puts it away."""
@@ -2753,20 +2730,6 @@ def _git_update_message(result: GitUpdateResult) -> str:
 
 
 _SOURCE_MAX_BYTES = 3_000_000_000  # cap when following an installer's source repo (~3 GB)
-
-
-def _run_async(work, on_done) -> None:
-    """Run ``work()`` on a daemon thread; deliver its result (or exception) to
-    ``on_done`` back on the wx main thread. Keeps network/IO off the UI thread."""
-
-    def runner() -> None:
-        try:
-            outcome = work()
-        except Exception as error:  # noqa: BLE001 - surfaced to the UI via on_done
-            outcome = error
-        wx.CallAfter(on_done, outcome)
-
-    threading.Thread(target=runner, daemon=True).start()
 
 
 class VaultBrowserDialog(wx.Dialog):
