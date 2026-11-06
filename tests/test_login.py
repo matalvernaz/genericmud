@@ -707,7 +707,7 @@ def test_an_echoed_password_is_hidden_from_the_output(tmp_path):
 
 
 def test_the_redaction_matches_whole_words_only():
-    from genericmud.app.engine_app import _redact_secret
+    from genericmud.app.incoming_text import _redact_secret
 
     assert _redact_secret("Password: hunter2", "hunter2") == "Password: ***"
     assert _redact_secret("connect hero hunter2", "hunter2") == "connect hero ***"

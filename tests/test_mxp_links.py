@@ -8,7 +8,7 @@ presses one key, and on a line carrying several links the cursor's word picks wh
 from __future__ import annotations
 
 from genericmud.app import EngineApp
-from genericmud.app.engine_app import _link_positions
+from genericmud.app.incoming_text import _link_positions
 from genericmud.bridge import protocol
 from genericmud.config.keymap import load_keymap
 from genericmud.model.buffer import Buffer, Line, Link
