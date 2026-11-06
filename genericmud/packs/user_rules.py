@@ -34,6 +34,22 @@ SOUNDS_DIRNAME = "sounds"  # picked sound files are copied here (keeps the pack 
 
 _CAPTURE_RE = re.compile(r"%(\d)")
 _GAG_CHOICES = ("none", "speech", "line")
+# Where a rule's response text goes -- MUSHclient's "send to" box (its eSendTo* enum). The
+# order is the order they are offered in, and matches SEND_TO_LABELS.
+SEND_TO_CHOICES = ("world", "command", "output", "log", "execute", "script")
+SEND_TO_LABELS = (
+    "The MUD (send these commands)",
+    "My command box, unsent (finish it myself)",
+    "The output, as a note (kept in the log)",
+    "The session log only (never shown)",
+    "This client again (run it as if I typed it)",
+    "A script (a function name, or Lua code)",
+)
+
+
+def send_to_kind(value: object) -> str:
+    """The send-to target a saved value names; anything unknown goes to the MUD, as before."""
+    return value if isinstance(value, str) and value in SEND_TO_CHOICES else "world"
 # How a trigger pattern matches a line. "contains" and "exact" are newbie-facing
 # sugar over regex (escaped literal, searched / anchored); "wildcard" is * and ?.
 MATCH_CHOICES = ("contains", "wildcard", "exact", "regex")
@@ -58,12 +74,20 @@ class UserTrigger:
     pan: int = 0  # -100 (left) .. 100 (right)
     loop: bool = False
     speak: str = ""  # spoken text; %1 or ${1}, ${script:x}, ${mud:x}
-    send: str = ""  # commands, one per line; %1 or ${1}, ${script:x}, ${mud:x}
+    send: str = ""  # what to do with the matched line; %1 or ${1}, ${script:x}, ${mud:x}
+    # Where "send" goes: SEND_TO_CHOICES. MUSHclient calls this "send to", and it is the same
+    # question for triggers, aliases and timers -- the text is one field, the destination
+    # another. Never a separate field per destination.
+    send_to: str = "world"
     gag: str = "none"  # "none" | "speech" (silent but shown) | "line" (removed)
+    omit_log: bool = False  # leave the line out of the session log, whatever gag does
     channel: str = ""  # route the line to this channel ("" = leave on main)
     stop_channel: str = ""  # stop this user cue channel when fired ("" = none)
     match: str = ""  # one of MATCH_CHOICES; "" = legacy file (the regex flag decides)
     interrupt: bool = False  # cut current speech the moment this fires
+    # MUSHclient's trigger name: the handle a script turns it off and on with, and what the
+    # manager reads out first. Empty means no handle; the manager can still disable it.
+    label: str = ""
     enabled: bool = True
 
     def match_kind(self) -> str:
@@ -76,8 +100,10 @@ class UserTrigger:
 class UserAlias:
     pattern: str = ""  # what the user types; * ? wildcards unless regex
     regex: bool = False
-    send: str = ""  # replacement commands, one per line; capture/variable templates allowed
+    send: str = ""  # what to do with the typed command; capture/variable templates allowed
+    send_to: str = "world"  # where that text goes, as for triggers (SEND_TO_CHOICES)
     speak: str = ""  # optional speech, same templates; can read a value with no commands
+    label: str = ""  # as for triggers: the handle that turns it off and on
     enabled: bool = True
 
 
@@ -197,9 +223,14 @@ def _substitute(text: str, wildcards: list[str]) -> str:
     return _CAPTURE_RE.sub(one, text)
 
 
-def _commands(text: str) -> tuple[str, ...]:
-    """Non-empty commands from a one-command-per-line field."""
-    commands = tuple(line.strip() for line in text.splitlines() if line.strip())
+def _commands(text: str, *, keep_spaces: bool = False) -> tuple[str, ...]:
+    """Non-empty commands from a one-command-per-line field.
+
+    ``keep_spaces`` leaves the ends alone, for text going into the command box rather than out
+    to the MUD: the trailing space of "tell Ariadne " is there to be typed into.
+    """
+    cleaner = (lambda line: line) if keep_spaces else (lambda line: line.strip())
+    commands = tuple(cleaner(line) for line in text.splitlines() if line.strip())
     if len(commands) > _MAX_COMMANDS_PER_RULE:
         raise ValueError(f"too many commands (maximum {_MAX_COMMANDS_PER_RULE})")
     return commands
@@ -246,14 +277,14 @@ def _expand_commands(
 
 
 def _command_action(
-    api: ScriptApi, text: str, *, carry_words: bool = False
+    api: ScriptApi, text: str, *, send_to: str = "world", carry_words: bool = False
 ) -> tuple[tuple[str, ...], Callable[[MatchContext | None], bool]]:
-    """A contained command-stack action plus whether the stack has any commands.
+    """A contained action and whether it has any text, delivering to the rule's send-to target.
 
     ``carry_words`` puts the match's first capture, the words typed after a plain alias, on
-    the end of the last command.
+    the end of the last line.
     """
-    commands = _commands(text)
+    commands = _commands(text, keep_spaces=send_to_kind(send_to) == "command")
     spoken_errors: set[str] = set()
 
     def run(ctx: MatchContext | None = None) -> bool:
@@ -267,17 +298,71 @@ def _command_action(
                 )
             if detail not in spoken_errors:
                 spoken_errors.add(detail)
-                api.speak(f"Automation command not sent: {detail}", channel="system")
+                api.speak(f"Automation text not used: {detail}", channel="system")
             return False
         if carry_words and expanded and ctx is not None and len(ctx.wildcards) > 1:
             # Added after expansion, so the player's own words go out as typed and are never
             # read as a template.
             expanded[-1] = f"{expanded[-1].rstrip()} {ctx.wildcards[1]}"
-        for command in expanded:
-            api.send(command)
+        deliver(api, expanded, send_to, ctx)
         return True
 
     return commands, run
+
+
+def deliver(
+    api: ScriptApi, lines: list[str], send_to: str, ctx: MatchContext | None = None
+) -> None:
+    """Put the expanded text where the rule says (MUSHclient's "send to" targets).
+
+    The text is one field and the destination another, for triggers, aliases and -- later --
+    timers alike: never a separate field per destination.
+    """
+    kind = send_to_kind(send_to)
+    if kind == "command":
+        # The box holds several lines now, so a stack arrives as a block to finish and send,
+        # which is the point of putting it there rather than sending it.
+        api.type_text("\n".join(lines))
+    elif kind == "output":
+        for line in lines:
+            api.note(line)
+    elif kind == "log":
+        for line in lines:
+            api.log_line(line)
+    elif kind == "script":
+        line = ctx.line.plain_text if ctx is not None else ""
+        # ctx.wildcards[0] is the whole matched line; a Lua function's wildcards[1] is the
+        # first capture, as mud.trigger's callback has it.
+        wildcards = list(ctx.wildcards[1:]) if ctx is not None else []
+        for text in lines:  # each line is its own call: a function name, or Lua code
+            try:
+                api.run_script(text, line=line, wildcards=wildcards)
+            except Exception as error:  # noqa: BLE001 - a broken rule must say so, once
+                _script_failed(api, error)
+    elif kind == "execute":
+        # MUSHclient's "execute": hand it back to the client as if it had been typed, so an
+        # alias takes it first and only what falls through reaches the MUD. Its "send to
+        # script" is a different thing -- calling a named routine in a script -- and this
+        # client's scripts are hook files with no named entry points yet, so that one waits.
+        api.execute("\n".join(lines))
+    else:
+        for line in lines:
+            api.send(line)
+
+
+def _script_failed(api: ScriptApi, error: Exception) -> None:
+    """A rule's script went wrong: log it, and say it once per distinct problem."""
+    detail = f"{type(error).__name__}: {error}"
+    said = getattr(api, "_rule_script_failures", None)
+    if said is None:
+        said = set()
+        api._rule_script_failures = said  # noqa: SLF001 - one set per session's api
+    if detail in said:
+        return
+    said.add(detail)
+    if api.diag is not None:
+        api.diag.event("user_rule.script_error", source=api.source or SOURCE, error=detail)
+    api.speak(f"Automation script failed: {detail}", channel="system")
 
 
 def extra_words_pattern(shortcut: str) -> str:
@@ -333,7 +418,7 @@ def _trigger_pattern(t: UserTrigger) -> tuple[str, bool]:
 
 def _register_trigger(api: ScriptApi, t: UserTrigger) -> None:
     gag = t.gag if t.gag in _GAG_CHOICES else "none"
-    commands, send_commands = _command_action(api, t.send)
+    commands, send_commands = _command_action(api, t.send, send_to=t.send_to)
     has_actions = bool(t.sound or t.speak or commands or t.stop_channel or t.interrupt)
 
     def fire(ctx: MatchContext) -> None:
@@ -364,8 +449,10 @@ def _register_trigger(api: ScriptApi, t: UserTrigger) -> None:
         regex=regex,
         gag=(gag == "line"),
         gag_but_display=(gag == "speech"),
+        omit_from_log=t.omit_log,
         channel=t.channel or None,
         source=SOURCE,
+        name=t.label.strip(),
     )
 
 
@@ -380,21 +467,27 @@ _KEY_REPLY_CHANNEL = REVIEW_CHANNEL
 
 
 def _register_alias(api: ScriptApi, a: UserAlias) -> None:
-    commands, send_commands = _command_action(api, a.send)
+    commands, send_commands = _command_action(api, a.send, send_to=a.send_to)
 
     def fire(ctx: MatchContext) -> None:
         sent = send_commands(ctx)
         if a.speak and sent:
             api.speak(_speech(api, a.speak, ctx))
 
-    api.add_alias(a.pattern, fire, regex=a.regex, source=SOURCE)
+    api.add_alias(a.pattern, fire, regex=a.regex, source=SOURCE, name=a.label.strip())
     # A plain alias also takes more words typed after it. Not one that only speaks: it has no
     # command for the words to join, and taking the line would stop it reaching the MUD.
-    plain = not a.regex and not any(wildcard in a.pattern for wildcard in "*?")
+    plain = (
+        not a.regex
+        and not any(wildcard in a.pattern for wildcard in "*?")
+        and send_to_kind(a.send_to) == "world"  # nothing to carry words onto elsewhere
+    )
     if not plain or not commands:
         return
     places_words = any(_FIRST_CAPTURE_RE.search(command) for command in commands)
-    _, send_with_words = _command_action(api, a.send, carry_words=not places_words)
+    _, send_with_words = _command_action(
+        api, a.send, send_to=a.send_to, carry_words=not places_words
+    )
 
     def fire_with_words(ctx: MatchContext) -> None:
         sent = send_with_words(ctx)
