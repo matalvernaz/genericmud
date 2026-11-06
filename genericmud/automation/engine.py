@@ -67,9 +67,20 @@ class EngineSink:
 
     def send(self, text: str) -> None: ...
     def send_packet(self, data: bytes) -> None: ...
-    def echo(self, text: str, channel: str = "main") -> None: ...
+    def echo(self, text: str, channel: str = "main", *, log: bool = False) -> None:
+        """Show ``text`` in the output as a line of the client's own (MUSHclient's echo).
+
+        ``log`` asks for it to be written to the session log too, which is the difference
+        between a note and a print: a note is part of the record, a print is not.
+        """
     def file_line(self, text: str, channel: str) -> None:
         """Keep ``text`` in the scrollback under ``channel``, without showing or speaking it."""
+    def type_text(self, text: str) -> None:
+        """Put ``text`` in the player's command box, unsent (MUSHclient's "send to command")."""
+
+    def log_line(self, text: str) -> None:
+        """Write ``text`` to the session log without showing it (MUSHclient's "send to log")."""
+
     def speak(self, text: str, channel: str = "main", interrupt: bool = False) -> None: ...
     def stop_speech(self) -> None: ...
     def play(
@@ -379,6 +390,22 @@ class AutomationEngine:
         self._aliases.append(rule)
         self._aliases.sort(key=_rule_order)
         return rule
+
+    def set_enabled(self, name: str, enabled: bool) -> bool:
+        """Turn a named trigger, alias or key on or off; True if one had that name.
+
+        MUSHclient's EnableTrigger/EnableAlias/EnableKey, which act by name because a script has
+        no other handle on a rule the player made. A rule without a name can only be switched
+        from the manager, which is what makes naming one worth doing.
+        """
+        if not name:
+            return False
+        found = False
+        for rule in [*self._triggers, *self._aliases, *self._keys]:
+            if rule.name == name:
+                rule.enabled = enabled
+                found = True
+        return found
 
     def remove_trigger(self, name: str) -> None:
         self._triggers = [rule for rule in self._triggers if rule.name != name]

@@ -689,8 +689,10 @@ Rules and timing:
 - `mud.timer(seconds, callback)`
 - `mud.on_data(name, callback [, options])`
 
-The alias and trigger options are `regex` and `priority`. A trigger can also use
-`channel`. The only `mud.on_data` option is `changes`.
+The alias and trigger options are `regex` and `priority`, plus `label`. A label is
+the name a rule is switched by -- `mud.set_enabled("shoot", false)` -- and the manager
+reads it out first. A trigger can also use `channel`. The only `mud.on_data` option is
+`changes`.
 
 Commands and output:
 
