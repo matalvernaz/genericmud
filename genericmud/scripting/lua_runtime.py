@@ -348,6 +348,11 @@ class LuaPackRuntime:
         mud.timer = self._lua_timer()
         mud.on_data = self._lua_on_data()
         mud.set_channel = self._lua_set_channel()
+        mud.set_enabled = api.set_enabled  # MUSHclient's EnableTrigger, by label
+        mud.set_group_enabled = api.set_group_enabled  # its EnableGroup, by group name
+        mud.add_timer = self._lua_add_timer()  # AddTimer: a timer with a name
+        mud.delete_timer = api.remove_named_timer  # DeleteTimer
+        mud.enable_timer = api.set_timer_enabled  # EnableTimer
         self._lua.globals().mud = mud
 
     def _run_callback(self, callback, ctx: MatchContext | None, *args: object):
@@ -423,6 +428,31 @@ class LuaPackRuntime:
 
     def _lua_mud_vars(self):
         return lambda: self._to_lua(self._api.mud_vars())
+
+    def _lua_add_timer(self):
+        """MUSHclient's AddTimer: a named timer, with an options table for the flags.
+
+        Lua has no keyword arguments and ``repeat`` is a reserved word there, so the options
+        table is read here: ``mud.add_timer("tick", 5, fn, {every=5, group="combat"})``.
+        """
+
+        def add(name, delay, callback, options=None):
+            every = None
+            group = ""
+            enabled = True
+            if options is not None:
+                value = options["every"] if options["every"] is not None else options["repeat"]
+                if value is not None:
+                    every = float(value)
+                if options["group"] is not None:
+                    group = str(options["group"])
+                if options["enabled"] is not None:
+                    enabled = bool(options["enabled"])
+            return self._api.add_named_timer(
+                str(name), float(delay), callback, every=every, group=group, enabled=enabled
+            )
+
+        return add
 
     def _lua_register(self, register: Callable[..., None], *, routable: bool = False):
         """Build a mud.trigger/mud.alias function that bridges a Lua callback.
@@ -521,6 +551,35 @@ class LuaPackRuntime:
             )
 
         return factory
+
+    def function(self, name: str):
+        """A Lua function this script's source defined, or None (MUSHclient's named routine)."""
+        try:
+            value = self._lua.globals()[name]
+        except Exception:  # noqa: BLE001 - a name that is not there is simply not there
+            return None
+        return value if value is not None and callable(value) else None
+
+    def set_match(self, line: str, wildcards) -> None:
+        """Offer the match to code that runs next: globals ``line`` and ``wildcards``.
+
+        A called function gets them as arguments; code a rule runs inline has nowhere else to
+        read them from, and "the line that matched" is the first thing such code wants.
+        """
+        values = self._lua.globals()
+        values.line = str(line)
+        values.wildcards = self.table_of(wildcards)
+
+    def table_of(self, values):
+        """Values as a 1-based Lua table, the shape a ``mud`` callback's captures take.
+
+        Built by hand rather than with ``table_from``: its arguments differ across lupa
+        versions, and a captured line is not worth a version fight.
+        """
+        table = self._lua.table()
+        for position, value in enumerate(values, start=1):
+            table[position] = value
+        return table
 
     def run_source(self, code: str):
         return self._guard.run_strict(self._lua.execute, code)

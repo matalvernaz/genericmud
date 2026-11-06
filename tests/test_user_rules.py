@@ -182,7 +182,7 @@ def test_rule_command_stack_expands_before_sending_any_command(tmp_path):
     assert sink.sent == []
     assert sink.spoken == [
         (
-            "Automation command not sent: unknown command variable: script:missing",
+            "Automation text not used: unknown command variable: script:missing",
             "system", False,
         )
     ]

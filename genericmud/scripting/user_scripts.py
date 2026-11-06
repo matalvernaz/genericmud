@@ -122,20 +122,27 @@ def validate_script(pack_dir: str | Path, source: str) -> None:
 def load_scripts(
     engine: AutomationEngine, pack_dir: str | Path, *, source_prefix: str
 ) -> list[LoadedUserScript]:
-    """Load every script alphabetically; roll back this source set if any file fails."""
+    """Load every script, in alphabetical order, into ONE Lua state.
+
+    The files are parts of one world's automation, not separate programs: ``10-settings.lua``
+    can define a function that ``20-combat.lua`` calls, which is the reason to split a script
+    up in the first place. MUSHclient's plugins work the same way -- one state per plugin --
+    and the alternative was sharing only through ``mud.set_var``, which cannot carry a function
+    or a table.
+
+    Order is the rule that follows from it: a name has to be defined before it is used, and a
+    later file that defines the same global wins, exactly as reading the files in that order
+    would. A failure anywhere discards the whole set -- the caller keeps the scripts that were
+    working -- because half a new state is worse than the old one.
+    """
     loaded: list[LoadedUserScript] = []
-    attempted_sources: list[str] = []
+    api = ScriptApi(engine, source=source_prefix, base_dir=str(pack_dir))
+    runtime = LuaPackRuntime(api)
     try:
         for name in list_scripts(pack_dir):
-            source = f"{source_prefix}/{name}"
-            attempted_sources.append(source)
-            runtime = LuaPackRuntime(
-                ScriptApi(engine, source=source, base_dir=str(pack_dir))
-            )
             runtime.run_file(str(script_path(pack_dir, name)))
-            loaded.append(LoadedUserScript(name, source, runtime))
+            loaded.append(LoadedUserScript(name, source_prefix, runtime))
     except BaseException:
-        for source in attempted_sources:
-            engine.remove_source(source)
+        engine.remove_source(source_prefix)  # every rule the half-loaded set registered
         raise
     return loaded
