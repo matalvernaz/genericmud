@@ -262,6 +262,47 @@ def test_rule_editors_offer_variables_only_with_a_live_session(frame, tmp_path):
             without.Destroy()
 
 
+def test_every_rule_editor_shows_whether_the_rule_is_enabled(frame, tmp_path):
+    # The manager could switch a rule off, but the dialog is where a rule is written: "is this
+    # one on?" belongs there, and a rule can be kept and parked.
+    from genericmud.packs.user_rules import (
+        UserAlias,
+        UserChannel,
+        UserKey,
+        UserTimer,
+        UserTrigger,
+        UserWatch,
+    )
+    from genericmud.ui import rule_editors
+
+    makers = {
+        "trigger": lambda rule: rule_editors.TriggerEditorDialog(frame, tmp_path, rule),
+        "alias": lambda rule: rule_editors.AliasEditorDialog(frame, rule),
+        "hotkey": lambda rule: rule_editors.KeyEditorDialog(frame, tmp_path, rule),
+        "data": lambda rule: rule_editors.DataRuleEditorDialog(frame, tmp_path, rule),
+        "timer": lambda rule: rule_editors.TimerEditorDialog(frame, rule),
+        "channel": lambda rule: rule_editors.ChannelEditorDialog(frame, rule),
+    }
+    rules = {
+        "trigger": UserTrigger(pattern="backup", send="look", enabled=False),
+        "alias": UserAlias(pattern="sh", send="shoot", enabled=False),
+        "hotkey": UserKey(key="f2", speak="health", enabled=False),
+        "data": UserWatch(name="Char.Vitals.hp", speak="${value}", enabled=False),
+        "timer": UserTimer(label="tick", every=5, send="look", enabled=False),
+        "channel": UserChannel(name="chat", enabled=False),
+    }
+    for kind, make in makers.items():
+        dialog = make(rules[kind])
+        try:
+            assert dialog._enabled.GetLabel() == "&Enabled", kind
+            assert dialog._enabled.GetValue() is False, kind
+            assert dialog.result().enabled is False, kind
+            dialog._enabled.SetValue(True)
+            assert dialog.result().enabled is True, kind
+        finally:
+            dialog.Destroy()
+
+
 def test_a_hotkey_and_a_data_rule_keep_their_group(frame, tmp_path):
     from genericmud.packs.user_rules import UserKey, UserWatch
     from genericmud.ui.rule_editors import DataRuleEditorDialog, KeyEditorDialog

@@ -200,8 +200,10 @@ value, so speaking ${value} health reads your health. Only when it changes is on
 for new rules.
 
 Choose Duplicate to start from a copy. Disable keeps an item saved without
-letting it run. Ctrl+1 through Ctrl+7 change categories, Ctrl+N creates an item,
-Enter edits, and Delete deletes after confirmation. F2 renames a script.
+letting it run, and every editor has the same switch as the Enabled box at its top,
+so a rule can be parked while you work on it. Ctrl+1 through Ctrl+7 change categories,
+Ctrl+N creates an item, Enter edits, and Delete deletes after confirmation. F2
+renames a script.
 
 MUSHclient's own names work too:
 Your world's scripts, and the code a rule sends to a script, run in Lua 5.1 with
