@@ -54,12 +54,80 @@ def test_a_time_that_is_not_a_time_is_not_a_timer():
 
 
 def test_a_daily_time_waits_for_the_next_one_even_having_passed_today():
-    # 03:00 has gone when it is 05:00: the next 03:00 is tomorrow's, 22 hours away.
-    assert seconds_until(3 * 3600, now=5 * 3600) == 22 * 3600
-    assert seconds_until(5 * 3600, now=3 * 3600) == 2 * 3600
+    # Counted with datetimes now: 2026-06-01 is a Monday in a part of the year with no clock
+    # change, so the real wait and the wall clock agree to the second.
+    from datetime import datetime, time
+
+    evening = datetime(2026, 6, 1, 5, 0)  # 05:00
+    # 03:00 has gone: the next one is tomorrow's, 22 hours away.
+    assert seconds_until(time(3, 0), now=evening) == 22 * 3600
+    assert seconds_until(time(5, 0), now=datetime(2026, 6, 1, 3, 0)) == 2 * 3600
     # Exactly now is a day away, not zero: a timer that fires the instant it is made has
     # nothing to wait for, and would fire in a loop.
-    assert seconds_until(3600, now=3600) == 86400
+    assert seconds_until(time(1, 0), now=datetime(2026, 6, 1, 1, 0)) == 86400
+
+
+def test_a_tick_that_comes_a_little_early_does_not_fire_twice():
+    # asyncio can run a handle a few milliseconds before the time it asked for. Working out
+    # "next 03:00 from now" then would answer "now", fire again immediately, and the player would
+    # get two commands in a second.
+    from datetime import datetime, time
+
+    due = datetime(2026, 6, 1, 3, 0)
+    for offset in (0.004, 0.0):
+        moment = due.replace(microsecond=int(offset * 1_000_000))
+        # The whole day, not the few milliseconds that are left of today.
+        assert seconds_until(time(3, 0), now=moment) > 86_000, offset
+
+
+def test_a_daily_timer_waits_the_real_hours_across_a_clock_change():
+    # A timer set for 03:00 must be 03:00 on the day the clocks change: 23 real hours after the
+    # previous one when they go forward, 25 when they go back. Skipped where the machine's zone
+    # has no daylight saving, since there is nothing to count.
+    from datetime import datetime, time, timedelta
+
+    day = _a_clock_change_day()
+    if day is None:
+        pytest.skip("this machine's time zone has no daylight saving")
+    before = datetime.combine(day - timedelta(days=1), time(3, 0))
+    upcoming, wait = user_rules.next_daily_wait(time(3, 0), now=before)
+    assert upcoming.date() == day
+    assert upcoming.time() == time(3, 0)  # the wall clock, not 24 hours later
+    assert wait in (23 * 3600, 25 * 3600)
+
+
+def _a_clock_change_day():
+    """Some day in the next year whose local offset differs from the day before, or None."""
+    from datetime import date, timedelta
+
+    start = date.today()
+    for step in range(1, 366):
+        day = start + timedelta(days=step)
+        if _offset(day) != _offset(day - timedelta(days=1)):
+            return day
+    return None
+
+
+def _offset(day):
+    from datetime import datetime, time
+
+    return datetime.combine(day, time(12)).astimezone().utcoffset()
+
+
+# --- a timer that could not run says so ------------------------------------------------
+
+
+def test_an_interval_timer_with_no_seconds_says_why_it_will_not_run(tmp_path):
+    # A timer that saves and never fires is silent; this is the only way the player hears it.
+    sink, _engine, scheduled = _scheduled(tmp_path, UserTimer(send="drink water", every=0))
+    assert scheduled == []
+    assert any("Timer not started" in said for said, *_ in sink.spoken)
+
+
+def test_a_daily_timer_with_a_time_nothing_can_read_says_so(tmp_path):
+    sink, _engine, scheduled = _scheduled(tmp_path, UserTimer(send="backup", at="25:99"))
+    assert scheduled == []
+    assert any("25:99" in said for said, *_ in sink.spoken)
 
 
 # --- interval timers -----------------------------------------------------------------
@@ -206,7 +274,9 @@ def test_the_timer_editor_round_trips(tmp_path):
         dialog._kind.SetSelection(1)
         dialog._at.SetValue("03:30")
         assert dialog.result().at == "03:30"
-        assert dialog.result().every == 15  # kept, ignored while it is a daily timer
+        # Cleared, not kept: "once a day" with 15 in the Every box used to fire every 15
+        # seconds while listing as a daily timer.
+        assert dialog.result().every == 0.0
     finally:
         dialog.Destroy()
         frame.Destroy()

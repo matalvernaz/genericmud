@@ -19,7 +19,7 @@ import re
 import shutil
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import datetime, time, timedelta
 from pathlib import Path
 
 from genericmud.automation.engine import MatchContext
@@ -611,33 +611,62 @@ def parse_at(value: str) -> float | None:
     return hours * 3600 + minutes * 60 + seconds
 
 
-def seconds_until(target: float, *, now: float) -> float:
-    """How long from ``now`` (seconds since midnight) until ``target`` comes round again.
+# Seconds of head start before a daily target counts as "today". asyncio may run a handle a
+# few milliseconds early, and without this the timer would decide it is still before today's
+# target and fire a second time.
+_DAILY_GUARD = 0.5
 
-    A time that has already passed today is tomorrow's, so a daily timer set for 03:00 fires at
-    the next 03:00 rather than in the past. Exactly now counts as a day away, not as zero: a
-    timer that fires the instant it is created has nothing to wait for.
+
+def at_time(value: str) -> time | None:
+    """The wall-clock time an "HH:MM:SS" names, or None if it does not name one."""
+    seconds = parse_at(value)
+    if seconds is None:
+        return None
+    hours, rest = divmod(seconds, 3600)
+    minutes, leftover = divmod(rest, 60)
+    return time(int(hours), int(minutes), int(leftover))
+
+
+def next_daily_wait(target: time, *, now: datetime | None = None) -> tuple[datetime, float]:
+    """The next wall-clock ``target`` and the real seconds until it, clocks changing or not.
+
+    Counted with datetimes rather than seconds since midnight: a timer set for 03:00 has to be
+    03:00 on the day the clocks go forward, which is 23 real hours after the last one, and 25
+    when they go back. The guard is the other half -- a timer that fires a few milliseconds
+    early must not work out that today's target is still ahead and fire again.
     """
-    difference = (target - now) % 86400
-    return difference if difference > 0 else 86400.0
-
-
-def clock_seconds(now: datetime | None = None) -> float:
-    """Seconds since midnight, for the daily timers; a seam so tests need no waiting."""
     moment = now or datetime.now()
-    return moment.hour * 3600 + moment.minute * 60 + moment.second + moment.microsecond / 1e6
+    upcoming = _next_occurrence(target, moment)
+    return upcoming, max(_DAILY_GUARD, upcoming.timestamp() - moment.timestamp())
 
 
-def _register_timer(api: ScriptApi, t: UserTimer, *, clock=clock_seconds) -> None:
+def _next_occurrence(target: time, moment: datetime) -> datetime:
+    today = datetime.combine(moment.date(), target)
+    if today.timestamp() - moment.timestamp() >= _DAILY_GUARD:
+        return today
+    return datetime.combine(moment.date() + timedelta(days=1), target)
+
+
+def seconds_until(target: time, *, now: datetime | None = None) -> float:
+    """Seconds until the next ``target``, from :func:`next_daily_wait`."""
+    return next_daily_wait(target, now=now)[1]
+
+
+def _register_timer(api: ScriptApi, t: UserTimer, *, now=datetime.now) -> None:
     """Schedule one timer, and reschedule it after each fire unless it is a one-shot."""
     if not t.enabled or not t.send.strip():
         return
-    at = parse_at(t.at) if t.at.strip() else None
-    if at is None and t.every <= 0:
-        return  # neither shape: nothing to schedule
+    daily = bool(t.at.strip())
+    at = at_time(t.at) if daily else None
+    if daily and at is None:
+        _timer_refused(api, t, f"the time {t.at!r} is not a time; write 03:00 or 21:15:30")
+        return
+    if not daily and t.every <= 0:
+        _timer_refused(api, t, "an interval timer needs a number of seconds, such as 30")
+        return
 
     def delay() -> float:
-        return seconds_until(at, now=clock()) if at is not None else float(t.every)
+        return next_daily_wait(at, now=now())[1] if at is not None else float(t.every)
 
     def fire() -> None:
         commands = _commands(t.send, keep_spaces=send_to_kind(t.send_to) == "command")
@@ -652,6 +681,26 @@ def _register_timer(api: ScriptApi, t: UserTimer, *, clock=clock_seconds) -> Non
         api.add_timer(delay(), fire)
 
     schedule()
+
+
+def _timer_refused(api: ScriptApi, t: UserTimer, reason: str) -> None:
+    """Say why a timer will not run, once per reason, and put it in the diagnostics.
+
+    A timer that saves and never fires is the one failure nobody can hear: there is nothing to
+    notice. A hand-edited rules file reaches this, and so does an older file.
+    """
+    name = t.label.strip() or "a timer"
+    detail = f"{name}: {reason}"
+    said = getattr(api, "_timer_refusals", None)
+    if said is None:
+        said = set()
+        api._timer_refusals = said  # noqa: SLF001 - one set per session's api
+    if api.diag is not None:
+        api.diag.event("user_rule.timer_refused", source=api.source or SOURCE, reason=detail)
+    if detail in said:
+        return
+    said.add(detail)
+    api.speak(f"Timer not started: {detail}.", channel="system")
 
 
 def _register_alias(api: ScriptApi, a: UserAlias) -> None:

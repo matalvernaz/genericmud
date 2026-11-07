@@ -29,11 +29,11 @@ from genericmud.scripting.api import ScriptApi
 from genericmud.ui.help_dialog import HelpDialog
 from genericmud.ui.keyboard import _NUMPAD_KEYS, _hotkey_taken
 from genericmud.ui.rule_editors import (
-    TimerEditorDialog,
     AliasEditorDialog,
     ChannelEditorDialog,
     DataRuleEditorDialog,
     KeyEditorDialog,
+    TimerEditorDialog,
     TriggerEditorDialog,
 )
 from genericmud.ui.session_panel import SessionPanel

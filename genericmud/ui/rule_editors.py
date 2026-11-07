@@ -25,6 +25,7 @@ from genericmud.packs.user_rules import (
     UserTimer,
     UserTrigger,
     UserWatch,
+    at_time,
     copy_sound_into_pack,
     load_rules,
     register_rules,
@@ -535,14 +536,23 @@ class TimerEditorDialog(_RuleEditorBase):
             ],
             majorDimension=1, style=wx.RA_SPECIFY_COLS,
         )
-        daily = bool(timer.at.strip()) or timer.every <= 0
-        self._kind.SetSelection(1 if daily else 0)
+        # A new timer opens on "Every so often": a daily time has nothing in it yet, and an
+        # interval with no number is the one the editor can tell you about immediately.
+        self._kind.SetSelection(1 if timer.at.strip() else 0)
         grid.Add(wx.StaticText(self, label=""))
         grid.Add(self._kind, 1, wx.EXPAND)
-        self._every = self._text(
-            grid, "E&very this many seconds:", str(timer.every or "")
-        )
-        self._at = self._text(grid, "At this &time each day (HH:MM:SS):", timer.at)
+        grid.Add(wx.StaticText(self, label=""))
+        self._every = wx.TextCtrl(self, value=str(timer.every or ""))
+        self._every.SetName("Every this many seconds")
+        self._every_row = grid.GetItemCount()
+        grid.Add(self._every, 1, wx.EXPAND)
+        grid.Add(wx.StaticText(self, label="At this &time each day (HH:MM:SS):"))
+        grid.Add(wx.StaticText(self, label=""))
+        self._at = wx.TextCtrl(self, value=timer.at)
+        self._at.SetName("At this time each day")
+        grid.Add(self._at, 1, wx.EXPAND)
+        self._kind.Bind(wx.EVT_RADIOBOX, self._on_kind)
+        self._show_the_fields_the_kind_needs()
         self._one_shot = wx.CheckBox(self, label="Do it &once only")
         self._one_shot.SetName("Do it once only")
         self._one_shot.SetValue(timer.one_shot)
@@ -558,21 +568,55 @@ class TimerEditorDialog(_RuleEditorBase):
         self._finish(outer, grid)
 
     def result(self) -> UserTimer:
+        daily = self._kind.GetSelection() == 1
         return UserTimer(
             label=self._label.GetValue().strip(),
             enabled=self._enabled,
-            every=max(0.0, self._number(self._every.GetValue())),
-            at=self._at.GetValue().strip() if self._kind.GetSelection() == 1 else "",
+            # One shape or the other, never both: a daily timer that keeps a number in the Every
+            # box would fire on that interval, which is not what "Once a day" says.
+            every=0.0 if daily else self._number(self._every.GetValue()),
+            at=self._at.GetValue().strip() if daily else "",
             one_shot=self._one_shot.GetValue(),
             send=self._send.GetValue().strip(),
             send_to=SEND_TO_CHOICES[self._send_to.GetSelection()],
             omit_log=self._omit_log.GetValue(),
         )
 
+    def _show_the_fields_the_kind_needs(self) -> None:
+        """Switch on the field the chosen shape uses, and switch the other one off."""
+        daily = self._kind.GetSelection() == 1
+        self._every.Enable(not daily)
+        self._at.Enable(daily)
+
+    def _on_kind(self, _event=None) -> None:
+        self._show_the_fields_the_kind_needs()
+
+    def _refusal(self) -> tuple[str, wx.Window] | None:
+        """Why this timer cannot be saved yet, in the words the player needs."""
+        if self._kind.GetSelection() == 1:
+            if at_time(self._at.GetValue()) is None:
+                return (
+                    "Once a day needs a time like 03:00, or 21:15:30. That time is what the "
+                    "timer fires at each day.",
+                    self._at,
+                )
+            return None
+        text = self._every.GetValue().strip()
+        try:
+            seconds = float(text) if text else 0.0
+        except ValueError:
+            seconds = 0.0
+        if seconds <= 0:
+            return (
+                "Every so often needs a number of seconds, such as 30 or 300.",
+                self._every,
+            )
+        return None
+
     @staticmethod
     def _number(text: str) -> float:
         try:
-            return float(text.strip() or 0)
+            return max(0.0, float(text.strip() or 0))
         except ValueError:
             return 0.0
 

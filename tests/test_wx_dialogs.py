@@ -2024,3 +2024,62 @@ def test_typing_while_it_retries_by_itself_says_still_connecting_instead_of_aski
         panel.app = None
         panel._connection._reconnect_task = None
         _close_question_panel(panel, loop)
+
+
+def test_a_new_timer_opens_on_every_so_often_and_switches_fields_by_kind(frame):
+    from genericmud.packs.user_rules import UserTimer
+    from genericmud.ui.rule_editors import TimerEditorDialog
+
+    dialog = TimerEditorDialog(frame, UserTimer())
+    try:
+        assert dialog._kind.GetSelection() == 0  # "Every so often", not a daily time
+        assert dialog._every.IsEnabled() and not dialog._at.IsEnabled()
+        dialog._kind.SetSelection(1)
+        dialog._on_kind()
+        assert dialog._at.IsEnabled() and not dialog._every.IsEnabled()
+    finally:
+        dialog.Destroy()
+
+
+def test_a_timer_with_no_schedule_is_refused_with_the_dialog_open(frame):
+    from genericmud.packs.user_rules import UserTimer
+    from genericmud.ui.rule_editors import TimerEditorDialog
+
+    dialog = TimerEditorDialog(frame, UserTimer(send="drink water"))
+    try:
+        refusal = dialog._refusal()
+        assert refusal is not None
+        message, widget = refusal
+        assert "number of seconds" in message
+        assert widget is dialog._every
+
+        dialog._kind.SetSelection(1)
+        dialog._on_kind()
+        dialog._at.SetValue("25:99")
+        refusal = dialog._refusal()
+        assert refusal is not None and "03:00" in refusal[0]
+
+        dialog._at.SetValue("03:00")
+        assert dialog._refusal() is None
+        assert dialog.result().at == "03:00"
+        assert dialog.result().every == 0.0  # one shape or the other, never both
+    finally:
+        dialog.Destroy()
+
+
+def test_a_daily_timer_cannot_keep_an_interval_in_its_pocket(frame):
+    # "Once a day at noon" with 30 left in the Every box used to save both, and fired every 30
+    # seconds while listing as a daily timer.
+    from genericmud.packs.user_rules import UserTimer
+    from genericmud.ui.rule_editors import TimerEditorDialog
+
+    dialog = TimerEditorDialog(frame, UserTimer(send="backup", every=30, at="", one_shot=False))
+    try:
+        dialog._kind.SetSelection(1)
+        dialog._on_kind()
+        dialog._at.SetValue("12:00")
+        assert dialog._refusal() is None
+        saved = dialog.result()
+        assert (saved.at, saved.every) == ("12:00", 0.0)
+    finally:
+        dialog.Destroy()
