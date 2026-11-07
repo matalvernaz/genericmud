@@ -570,10 +570,12 @@ world's scripts.
 
 **Order** decides which rule is tried first when several match: lower numbers first, and
 rules sharing a number fall back to their pattern text, so the order never depends on which
-file they came from. **Keep checking the rules after this one** is on by default -- every
-matching rule acts -- and clearing it makes that rule the last one heard about the line. A
-player rule that stops the search never stops a soundpack's rules; MUSHclient draws the same
-line between one plugin and the next.
+file they came from. A rule you have not ordered sits above every soundpack's rules, as your
+rules always did. **Keep checking the rules after this one** is on for a trigger and off for an
+alias: your first matching alias has always taken the command on its own, and clearing the box
+makes a trigger the last one heard about the line. A player trigger that stops the search
+never stops a soundpack's triggers; MUSHclient draws the same line between one plugin and the
+next.
 
 Triggers and aliases also take a **Group**: rules sharing a name switch together, so
 `mud.set_group_enabled("combat", false)` turns all of them off in one call -- MUSHclient's

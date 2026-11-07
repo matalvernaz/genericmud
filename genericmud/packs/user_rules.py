@@ -30,6 +30,9 @@ from genericmud.scripting.api import ScriptApi
 from genericmud.voice.router import REVIEW_CHANNEL
 
 SOURCE = "user"  # registration source: remove_source(SOURCE) clears rules for reload
+# The order a rule has when the player has not set one. Priority is worked out from it so that a
+# world with no orders behaves as it did before orders existed (MUSHclient's own default).
+DEFAULT_ORDER = 100
 RULES_FILENAME = "rules.json"
 SOUNDS_DIRNAME = "sounds"  # picked sound files are copied here (keeps the pack portable)
 
@@ -95,7 +98,7 @@ class UserTrigger:
     # MUSHclient's sequence: the lower the number, the sooner the rule is tried. Rules with the
     # same order are tried by their pattern text, as MUSHclient does, so the order is never a
     # matter of which file they were added from.
-    order: int = 100
+    order: int = DEFAULT_ORDER
     # Whether the rules after this one are still tried when it matches. True keeps today's
     # behaviour (every matching rule acts); clearing it makes this rule the last one heard about
     # the line. MUSHclient's default is the other way round, which is why this says what it does.
@@ -117,8 +120,10 @@ class UserAlias:
     speak: str = ""  # optional speech, same templates; can read a value with no commands
     label: str = ""  # as for triggers: the handle that turns it off and on
     group: str = ""  # as for triggers: switched together with the rest of its group
-    order: int = 100  # as for triggers: lower is tried first
-    keep_evaluating: bool = True  # as for triggers: let later aliases see the command too
+    order: int = DEFAULT_ORDER  # as for triggers: lower is tried first
+    # Off for an alias, which is how this client has always behaved: your first matching alias
+    # takes the command, and a later one does not send it a second time.
+    keep_evaluating: bool = False
     enabled: bool = True
 
 
@@ -550,12 +555,12 @@ def register_rules(api: ScriptApi, rules: UserRules) -> None:
             )
     # A rule the file says is off is registered anyway, in the off state: a group or a script
     # has to be able to switch it back on, and a rule the engine never heard of cannot be.
-    for trigger in rules.triggers:
+    for place, trigger in enumerate(rules.triggers):
         if trigger.pattern:
-            _register_trigger(api, trigger)
-    for alias in rules.aliases:
+            _register_trigger(api, trigger, place=place)
+    for place, alias in enumerate(rules.aliases):
         if alias.pattern:
-            _register_alias(api, alias)
+            _register_alias(api, alias, place=place)
     for key in rules.keys:
         if key.enabled and key.key:
             _register_key(api, key)
@@ -581,7 +586,7 @@ def _trigger_pattern(t: UserTrigger) -> tuple[str, bool]:
     return t.pattern, kind == "regex"
 
 
-def _register_trigger(api: ScriptApi, t: UserTrigger) -> None:
+def _register_trigger(api: ScriptApi, t: UserTrigger, *, place: int = 0) -> None:
     gag = t.gag if t.gag in _GAG_CHOICES else "none"
     commands, send_commands = _command_action(api, t.send, send_to=t.send_to)
     has_actions = bool(t.sound or t.speak or commands or t.stop_channel or t.interrupt)
@@ -614,8 +619,13 @@ def _register_trigger(api: ScriptApi, t: UserTrigger) -> None:
         regex=regex,
         # A lower order number is tried first, so the engine's higher-priority-first becomes a
         # sign change; equal orders fall back to the pattern, which is MUSHclient's order too.
-        priority=-int(t.order),
-        tiebreak=t.pattern,
+        # MUSHclient's sequence is 1-10000, lower first, and packs register as -sequence;
+        # DEFAULT_ORDER - order puts an unordered player rule at 0, above every pack rule, which
+        # is where player rules sat before orders existed.
+        priority=DEFAULT_ORDER - int(t.order),
+        # Equal orders fall back to the pattern text, then to the rule's place in the file, so two
+        # rules matching the same text keep their order across a save and reload.
+        tiebreak=f"{t.pattern}\x00{place:04d}",
         # A rule that stops the search stops it for the player's own rules, never for a pack's:
         # stop_scope keeps one player rule from silencing a soundpack. That is what MUSHclient
         # means by stopping evaluation inside one plugin.
@@ -775,7 +785,7 @@ def _timer_refused(api: ScriptApi, t: UserTimer, reason: str) -> None:
     api.speak(f"Timer not started: {detail}.", channel="system")
 
 
-def _register_alias(api: ScriptApi, a: UserAlias) -> None:
+def _register_alias(api: ScriptApi, a: UserAlias, *, place: int = 0) -> None:
     commands, send_commands = _command_action(api, a.send, send_to=a.send_to)
 
     def fire(ctx: MatchContext) -> None:
@@ -790,9 +800,11 @@ def _register_alias(api: ScriptApi, a: UserAlias) -> None:
         source=SOURCE,
         name=a.label.strip(),
         group=a.group.strip(),
-        priority=-int(a.order),
-        tiebreak=a.pattern,
-        stop_scope=SOURCE,
+        priority=DEFAULT_ORDER - int(a.order),
+        tiebreak=f"{a.pattern}\x00{place:04d}",
+        # An alias that stops stops the whole search, pack aliases included, which is what this
+        # client did before orders existed: your first matching alias takes the command.
+        stop_scope=None,
         keep_evaluating=a.keep_evaluating,
         # An alias that matches takes the command -- what was typed does not also go to the
         # MUD -- whether or not later aliases are allowed to see it.

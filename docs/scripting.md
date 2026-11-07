@@ -101,11 +101,12 @@ at most 100 commands at a time.
 
 When several rules match the same line, **Order** decides which is tried first: the lower
 number first, and rules sharing a number fall back to their pattern text, so the order never
-depends on which file they came from. **Keep checking the rules after this one** is on by
-default, so every matching rule acts; clearing it makes that rule the last one heard about the
-line.
+depends on which file they came from. A rule you have not ordered sits above a soundpack's
+rules, which is where your rules have always been. **Keep checking the rules after this one** is
+on for a trigger and off for an alias -- your first matching alias takes the command on its own,
+as it always has -- and clearing it makes a trigger the last one heard about the line.
 
-A player rule that stops the search never stops a soundpack's rules: MUSHclient draws the same
+A player trigger that stops the search never stops a soundpack's triggers: MUSHclient draws the same
 line between one plugin and the next, so a pack's own triggers keep working.
 
 ## When Lua is useful

@@ -15,6 +15,7 @@ import wx
 from genericmud.automation.engine import AutomationEngine
 from genericmud.automation.variables import SCRIPT, VariableEntry
 from genericmud.packs.user_rules import (
+    DEFAULT_ORDER,
     MATCH_CHOICES,
     SEND_TO_CHOICES,
     SEND_TO_LABELS,
@@ -162,7 +163,7 @@ class _RuleEditorBase(wx.Dialog):
         back to their pattern text, so the order is never about which file they came from.
         """
         order = self._text(grid, "&Order (lower is tried first):", str(rule.order))
-        keep = wx.CheckBox(self, label="&Keep checking the rules after this one")
+        keep = wx.CheckBox(self, label="Keep checking the rules a&fter this one")
         keep.SetName("Keep checking the rules after this one")
         keep.SetValue(rule.keep_evaluating)
         grid.Add(wx.StaticText(self, label=""))
@@ -170,11 +171,22 @@ class _RuleEditorBase(wx.Dialog):
         return order, keep
 
     @staticmethod
-    def _order_value(widget: wx.TextCtrl, fallback: int = 100) -> int:
+    def _order_value(widget: wx.TextCtrl) -> int:
+        """The Order field's number: empty means the default, anything else must be a number.
+
+        Raising rather than quietly writing the default is the difference between a rule the
+        player ordered and one that silently did not get the order they typed.
+        """
+        text = widget.GetValue().strip()
+        if not text:
+            return DEFAULT_ORDER
         try:
-            return int(widget.GetValue().strip() or fallback)
+            return int(text)
         except ValueError:
-            return fallback
+            raise ValueError(
+                f"Order is a whole number, and {text!r} is not one. Lower is tried first; "
+                f"{DEFAULT_ORDER} is the default."
+            ) from None
 
     def _send_to_choice(self, grid: wx.FlexGridSizer, current: str) -> wx.Choice:
         """The "send to" box: one response text, one destination (MUSHclient's arrangement)."""
@@ -191,6 +203,23 @@ class _RuleEditorBase(wx.Dialog):
         outer.Add(grid, 1, wx.ALL | wx.EXPAND, 10)
         outer.Add(self.CreateStdDialogButtonSizer(wx.OK | wx.CANCEL), 0, wx.ALL | wx.EXPAND, 10)
         self.SetSizerAndFit(outer)
+        # OK refuses a field it cannot honour and says why, the way the world dialog does; the
+        # text the player typed stays where it is.
+        self.Bind(wx.EVT_BUTTON, self._on_ok, id=wx.ID_OK)
+
+    def _refusal(self) -> tuple[str, wx.Window] | None:
+        """Why this dialog may not close yet, and the field to fix, or None."""
+        return None
+
+    def _on_ok(self, _event: wx.CommandEvent) -> None:
+        refusal = self._refusal()
+        if refusal is not None:
+            message, widget = refusal
+            wx.MessageBox(message, self.GetTitle(), wx.OK | wx.ICON_ERROR, self)
+            widget.SetFocus()
+            widget.SelectAll()
+            return
+        self.EndModal(wx.ID_OK)
 
 
 class TriggerEditorDialog(_RuleEditorBase):
@@ -318,6 +347,13 @@ class TriggerEditorDialog(_RuleEditorBase):
         )
 
 
+    def _refusal(self) -> tuple[str, wx.Window] | None:
+        try:
+            self._order_value(self._order)
+        except ValueError as error:
+            return str(error), self._order
+        return None
+
 class AliasEditorDialog(_RuleEditorBase):
     def __init__(self, parent: wx.Window, alias: UserAlias, *, variables=None) -> None:
         super().__init__(
@@ -362,6 +398,13 @@ class AliasEditorDialog(_RuleEditorBase):
             enabled=self._enabled,
         )
 
+
+    def _refusal(self) -> tuple[str, wx.Window] | None:
+        try:
+            self._order_value(self._order)
+        except ValueError as error:
+            return str(error), self._order
+        return None
 
 class KeyEditorDialog(_RuleEditorBase):
     def __init__(

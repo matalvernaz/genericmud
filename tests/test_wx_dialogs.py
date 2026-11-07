@@ -2114,3 +2114,26 @@ def test_the_timer_editor_refuses_a_label_another_timer_has(frame):
         assert dialog._refusal() is None
     finally:
         dialog.Destroy()
+
+
+def test_the_order_field_refuses_words_and_keeps_the_dialog_open(frame, tmp_path):
+    from genericmud.packs.user_rules import UserTrigger
+    from genericmud.ui.rule_editors import TriggerEditorDialog
+
+    dialog = TriggerEditorDialog(frame, tmp_path, UserTrigger(pattern="backup", send="look"))
+    try:
+        dialog._order.SetValue("1o")
+        refusal = dialog._refusal()
+        assert refusal is not None
+        message, widget = refusal
+        assert "whole number" in message and "1o" in message
+        assert widget is dialog._order
+        assert dialog._order.GetValue() == "1o"  # what was typed is still there
+
+        dialog._order.SetValue("20")
+        assert dialog._refusal() is None
+        dialog._order.SetValue("")
+        assert dialog._refusal() is None  # empty means the default
+        assert dialog._order_value(dialog._order) == 100
+    finally:
+        dialog.Destroy()

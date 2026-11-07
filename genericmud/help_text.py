@@ -157,10 +157,11 @@ A rule can have a name, a group, and an order. The Label is the name a script tu
 that one rule off and on by, with mud.set_enabled. The Group switches every rule that
 shares it together, with mud.set_group_enabled, which is how all the combat rules go
 off in one call. Order decides which is tried first when several match: the lower
-number first, and equal numbers fall back to the pattern text. Keep checking the rules
-after this one is on by default -- every matching rule acts -- and clearing it makes
-that rule the last one heard about the line. A player rule that stops the search never
-silences a soundpack.
+number first, and equal numbers fall back to the pattern text. A rule you have not
+ordered sits above a soundpack's rules, as your rules always did. Keep checking the
+rules after this one is on for a trigger and off for an alias, since your first matching
+alias has always taken the command alone; clearing it makes a trigger the last one heard
+about the line. A player trigger that stops the search never silences a soundpack.
 
 A timer (Timers in the Automation Manager) acts on a clock rather than on a line:
 every so often, or once a day at a time such as 03:00. What it does is the same
