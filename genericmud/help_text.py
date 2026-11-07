@@ -173,7 +173,8 @@ A timer (Timers in the Automation Manager) acts on a clock rather than on a line
 every so often, or once a day at a time such as 03:00. What it does is the same
 question the other rules answer, so it can send commands, fill your command box, write
 a note, store a value, or run Lua. Do it once only makes it a one-shot: it runs once
-and is then removed, here and from the saved rules the next time they are saved. An
+and is then removed, here and from the saved rules the next time they are saved; until
+then it is still in the file, so opening the world again runs it once more. An
 offset is how many seconds before its interval is up it fires, so two timers on the
 same interval take turns. Keep running while the world is disconnected lets it keep its
 clock while nothing is connected: then it can still note, log, store a value or run a
