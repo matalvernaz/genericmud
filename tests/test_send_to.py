@@ -656,9 +656,10 @@ def test_every_kind_of_rule_can_print_instead_of_noting(tmp_path):
 # --- pack and script notes follow the same rule ---------------------------------------------
 
 
-def test_a_packs_note_is_logged_and_its_print_is_not():
-    # MUSHclient's Note goes in the record; its print does not. The pack layer used to treat
-    # both as prints, so a pack that logged by noting silently did not log.
+def test_a_packs_notes_stay_out_of_the_log():
+    # A soundpack's Note is shown and spoken but not written to the session log, as 0.25.0 did
+    # and as MUSHclient does unless a world turns on "log notes" (off by default: log_notes in
+    # its scriptingoptions.cpp). Packs note a lot; a log is for the world and the player.
     pytest.importorskip("lupa")
     from genericmud.scripting.mushclient_compat import MushclientPack
 
@@ -668,4 +669,18 @@ def test_a_packs_note_is_logged_and_its_print_is_not():
     pack.run_source('Note("a note")')
     pack.run_source('print("a print")')
     assert [text for text, _channel in sink.echoed] == ["a note", "a print"]
-    assert sink.echo_flags == [True, False]  # the note is part of the record, the print is not
+    assert sink.echo_flags == [False, False]
+
+
+def test_your_own_scripts_note_is_logged_and_its_print_is_not():
+    # The world's own scripts are the player's, like a rule's destinations: a note is kept in the
+    # record and a print is not.
+    pytest.importorskip("lupa")
+    from genericmud.scripting.mushclient_compat import MushclientPack
+
+    sink = RecordingSink()
+    engine = AutomationEngine(sink)
+    pack = MushclientPack(ScriptApi(engine, source="user-script:1"), player_scripts=True)
+    pack.run_source('Note("a note")')
+    pack.run_source('print("a print")')
+    assert sink.echo_flags == [True, False]

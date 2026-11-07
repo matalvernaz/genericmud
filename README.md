@@ -636,7 +636,8 @@ A note always goes into the session log and a print never does, so the destinati
 you pick is the whole decision -- there is no separate switch for it, and none is needed:
 *log this* and *show this* are the same as *note* and *print*. Nothing here speaks: what
 you want to hear goes in **Speak this text**, because what belongs in the record and what
-belongs in your ears are different needs.
+belongs in your ears are different needs. A soundpack's own notes are shown and spoken but stay out
+of the log, as they always have here and as MUSHclient does unless a world asks for them.
 
 Each trigger, alias, or hotkey can send one command or a sequence. Put one
 command on each line. The whole sequence is filled in before its first command

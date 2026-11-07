@@ -578,6 +578,8 @@ class MushclientPack:
     def __init__(
         self, api: ScriptApi, *, full_stdlib: bool = False, player_scripts: bool = False
     ) -> None:
+        # The world's own scripting space rather than a soundpack: its notes are the player's.
+        self._player_scripts = player_scripts
         self._api = api
         self._base_dir = api.base_dir
         # genericMud's own vocabulary, for the state that hosts the player's own scripts: they get
@@ -2199,12 +2201,17 @@ class MushclientPack:
         it reads the MUD's own lines (type 0), blank ones excepted. Without that, a pack that
         hides a line and prints a reworded copy (Empire's death message) would go silent.
 
-        A note is always logged and a print never is -- the same pair this client's own rules
-        offer as destinations, and what MUSHclient means by the two names.
+        In the world's own scripts a note is kept in the session log and a print is not, the
+        same pair the player's rules offer as destinations. A soundpack's notes are shown and
+        spoken but not logged: MUSHclient logs notes only when a world turns on "log notes",
+        which is off by default, and packs note a lot.
         """
         line = self._pending_tell + str(text)
         self._pending_tell = ""
-        self._api.note(line)
+        if self._player_scripts:
+            self._api.note(line)
+        else:
+            self._api.echo(line)
         if line.strip() and self._api.line_speech():
             self._api.speak(line)
 

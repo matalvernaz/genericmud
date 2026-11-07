@@ -711,7 +711,7 @@ The ones worth knowing:
 | MUSHclient | What it does here |
 | --- | --- |
 | `Send("look")` | sends one command, as `mud.command` does |
-| `Note("text")`, `Tell("text")`, `ColourNote(...)` | shows a line in the output window and speaks it |
+| `Note("text")`, `Tell("text")`, `ColourNote(...)` | shows a line in the output window, speaks it and keeps it in the session log (a soundpack's notes are not logged) |
 | `print("text")` | shows the line and never keeps it in the session log, where `Note` does; Lua's `print` goes to the output window, not to a console nobody can see |
 | `GetVariable`, `SetVariable`, `DeleteVariable` | the same values `mud.get_var`, `mud.set_var`, and `mud.delete_var` use |
 | `DoAfter(seconds, "command")` | runs a command later |
