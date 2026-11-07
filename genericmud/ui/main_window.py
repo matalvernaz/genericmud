@@ -89,6 +89,21 @@ class GenericMudFrame(SavedWorldsMixin, SoundpackSetupMixin, SelfUpdateMixin, wx
             wx.ID_ANY, "Connection &settings...", "Automatic reconnect settings for all worlds",
         )
         close_item = file_menu.Append(wx.ID_ANY, "Close &Tab\tCtrl+W")
+        # No mnemonic letter: every Alt+letter worth having is a session binding, and a
+        # menu's own letters are one more thing to collide with. The keys are in the tooltips
+        # and in Help, Keyboard Shortcuts.
+        move_up_item = file_menu.Append(
+            wx.ID_ANY,
+            "Move This Tab Up",
+            "Move this world one place earlier in the row; Alt+Shift+Up does the same",
+        )
+        move_down_item = file_menu.Append(
+            wx.ID_ANY,
+            "Move This Tab Down",
+            "Move this world one place later in the row; Alt+Shift+Down does the same",
+        )
+        self._move_up_item = move_up_item
+        self._move_down_item = move_down_item
         export_item = file_menu.Append(
             wx.ID_ANY, "&Export This World...",
             "Save this world's rules, scripts, sounds, and connection details as one zip",
@@ -200,6 +215,8 @@ class GenericMudFrame(SavedWorldsMixin, SoundpackSetupMixin, SelfUpdateMixin, wx
         self.Bind(wx.EVT_MENU, self._on_connection_settings, connection_settings_item)
         self.Bind(wx.EVT_MENU_OPEN, self._on_menu_open)  # label read aloud must be current
         self.Bind(wx.EVT_MENU, self._on_close_tab, close_item)
+        self.Bind(wx.EVT_MENU, lambda _e: self._move_tab(-1), move_up_item)
+        self.Bind(wx.EVT_MENU, lambda _e: self._move_tab(1), move_down_item)
         self.Bind(wx.EVT_MENU, self._on_manage_packs, packs_item)
         self.Bind(wx.EVT_MENU, self._on_setup_pack, setup_item)
         self.Bind(wx.EVT_MENU, self._on_browse_online, browse_item)
@@ -255,7 +272,9 @@ class GenericMudFrame(SavedWorldsMixin, SoundpackSetupMixin, SelfUpdateMixin, wx
             self._announce_tab(index)
 
     def handle_tab_action(self, action: str) -> bool:
-        """Do a window-side keymap action ("tab:select:3"); False when it isn't one of ours.
+        """Do a window-side keymap action ("tab:select:3", "tab:move:up").
+
+        False when it isn't one of ours.
 
         Called by a session panel for a combo the keymap binds to a ``tab:`` action, before
         the engine gets a chance to swallow or mis-send it.
@@ -270,6 +289,8 @@ class GenericMudFrame(SavedWorldsMixin, SoundpackSetupMixin, SelfUpdateMixin, wx
             except ValueError:
                 return True  # a mistyped keymap entry: swallowed, not typed at the MUD
             self._select_tab(number)
+        elif verb == "move":
+            self._move_where(argument.strip().lower())
         return True
 
     def _select_tab(self, number: int) -> None:
@@ -293,6 +314,74 @@ class GenericMudFrame(SavedWorldsMixin, SoundpackSetupMixin, SelfUpdateMixin, wx
         count = self.book.GetPageCount()
         name = self.book.GetPage(index).world.name
         self.announce(f"{name}, tab {index + 1} of {count}")
+
+    def _move_where(self, where: str) -> None:
+        """Carry out "tab:move:up", "down", "first", "last" or a tab number."""
+        if where in ("up", "down"):
+            self._move_tab(-1 if where == "up" else 1)
+        elif where == "first":
+            self._move_tab_to(0)
+        elif where == "last":
+            self._move_tab_to(self.book.GetPageCount() - 1)
+        else:
+            try:
+                number = int(where)
+            except ValueError:
+                return  # a mistyped keymap entry: swallowed, not typed at the MUD
+            self._move_tab_to(number - 1)
+
+    def _move_tab(self, step: int) -> None:
+        """Move the tab in front one place earlier (-1) or later (1)."""
+        count = self.book.GetPageCount()
+        if count == 0:
+            self.announce("No worlds are open.")
+            return
+        if count == 1:
+            self.announce("Only one world is open, so there is nothing to reorder.")
+            return
+        index = self.book.GetSelection()
+        target = index + step
+        name = self.book.GetPage(index).world.name
+        # The end of the row is a place, not a wobbly edge: say so rather than jump the tab
+        # round to the other end, which would undo an arrangement by surprise. Alt+Shift+1
+        # is the one-press way to the top for a tab that is far down.
+        if target < 0:
+            self.announce(f"{name} is already the first tab.")
+            return
+        if target >= count:
+            self.announce(f"{name} is already the last tab.")
+            return
+        self._move_tab_to(target)
+
+    def _move_tab_to(self, target: int) -> None:
+        """Put the tab in front at place ``target``, counting from zero, and keep it in front."""
+        count = self.book.GetPageCount()
+        if count == 0:
+            self.announce("No worlds are open.")
+            return
+        if count == 1:
+            self.announce("Only one world is open, so there is nothing to reorder.")
+            return
+        if not 0 <= target < count:
+            self.announce(f"Only {count} worlds open.")
+            return
+        index = self.book.GetSelection()
+        panel = self.book.GetPage(index)
+        name = panel.world.name
+        if target == index:
+            # Asked for the place it is already in: answering is the point, as when a tab
+            # number switches to the tab you are on.
+            self.announce(f"{name} is already tab {index + 1} of {count}.")
+            return
+        # A Simplebook has no MovePage, so the page comes out and goes back at the new place.
+        # RemovePage does not destroy the window, so the session keeps running through this.
+        self.book.RemovePage(index)
+        self.book.InsertPage(target, panel, name)
+        self.book.ChangeSelection(target)
+        self._update_active()
+        self._update_focus()
+        panel.input.SetFocus()
+        self.announce(f"Moved {name} to tab {target + 1} of {count}.")
 
     def open_session(self, world: World) -> None:
         panel = SessionPanel(
@@ -410,7 +499,7 @@ class GenericMudFrame(SavedWorldsMixin, SoundpackSetupMixin, SelfUpdateMixin, wx
         return self.book.GetPage(index)
 
     def _refresh_connection_item(self) -> None:
-        """Point the File item at what it will actually do for the active tab."""
+        """Point the File menu's tab items at what they can actually do."""
         panel = self._active_panel()
         if panel is not None:
             label = _connection_menu_label(panel.is_connected() or panel.is_connecting())
@@ -419,6 +508,11 @@ class GenericMudFrame(SavedWorldsMixin, SoundpackSetupMixin, SelfUpdateMixin, wx
         # No tab open: nothing to toggle, so the item greys out instead of advertising a
         # reconnect with no session behind it.
         self._connection_item.Enable(panel is not None)
+        # Reordering needs a row to reorder in. Refreshed by the same calls that already keep
+        # the File menu honest, including its own opening.
+        movable = self.book.GetPageCount() > 1
+        self._move_up_item.Enable(movable)
+        self._move_down_item.Enable(movable)
 
     def _on_menu_open(self, event: wx.MenuEvent) -> None:
         # Refreshed as the menu opens rather than pushed on every status change: the label

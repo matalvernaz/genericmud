@@ -256,12 +256,16 @@ See [command input details](docs/command-entry.md).
 own tab. **Ctrl+Tab** and **Ctrl+Shift+Tab** switch between them and say which
 world you landed in; **Alt+1** through **Alt+9** (and **Alt+0** for the tenth) go
 straight to a tab, counting in the order you opened them, unless the world's
-soundpack or your own hotkeys use those keys. On a Mac they're left free, since
-Option and a number types characters there. Out of the box only the tab you're
-on speaks; the others stay quiet but keep running — triggers still fire and
-sounds still play, so you miss nothing. **View → Silence other worlds** lets them
-all speak. To reach across, `/to` sends a command to another tab by its world
-name: `/to alter aeon look`.
+soundpack or your own hotkeys use those keys. **Alt+Shift+Up** and
+**Alt+Shift+Down** move the tab you're in one place earlier or later, and
+**Alt+Shift+1** through **Alt+Shift+0** put it straight in a place, 0 being the
+tenth; each says where it landed, and a tab already at either end says so rather
+than wrapping round to the other end. Both moves are in the File menu as well. On
+a Mac the numbered keys are left free, since Option and a number types characters
+there. Out of the box only the tab you're on speaks; the others stay quiet but
+keep running — triggers still fire and sounds still play, so you miss nothing.
+**View → Silence other worlds** lets them all speak. To reach across, `/to` sends a
+command to another tab by its world name: `/to alter aeon look`.
 
 The window title can name the world you're in — **View → World name in the window
 title** — so Alt+Tab and the taskbar read as `genericMud - [Shards of Valdrenne]`
@@ -706,6 +710,8 @@ View, **Alt+H** Help.
 | Ctrl+W | Close this tab |
 | Ctrl+Tab / Ctrl+Shift+Tab | Next / previous session (says which one) |
 | Alt+1..9 / Alt+0 | Switch to that world, in the order the tabs were opened |
+| Alt+Shift+Up / Alt+Shift+Down | Move this tab one place earlier / later |
+| Alt+Shift+1..9 / Alt+Shift+0 | Move this tab straight to that place, 0 being the tenth |
 | Ctrl+Q | Exit |
 | Enter | Standard: send the box; editable mode: execute the current logical line |
 | Shift+Enter | Standard native window: add a line; editable mode: execute line/selection in place |

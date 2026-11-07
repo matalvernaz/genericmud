@@ -268,6 +268,10 @@ async def test_ctrl_d_and_menu_offer_to_stop_pending_connections(monkeypatch, st
         _connection_item=SimpleNamespace(
             GetItemLabel=lambda: "", SetItemLabel=labels.append, Enable=lambda value: None,
         ),
+        # The same refresh also greys out the two items that move a tab, which need a book.
+        book=SimpleNamespace(GetPageCount=lambda: 1),
+        _move_up_item=SimpleNamespace(Enable=lambda value: None),
+        _move_down_item=SimpleNamespace(Enable=lambda value: None),
     )
     main_window.GenericMudFrame._refresh_connection_item(frame)
     main_window.GenericMudFrame._on_disconnect(frame, None)
