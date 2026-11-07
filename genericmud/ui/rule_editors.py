@@ -221,7 +221,9 @@ class TriggerEditorDialog(_RuleEditorBase):
         # Separate from the line handling above on purpose: what is worth reading now is not
         # always worth keeping in the file, and what is worth keeping is not always worth
         # hearing. A repeating notice is the case this exists for.
-        self._omit_log = wx.CheckBox(self, label="Lea&ve this line out of the session log")
+        self._omit_log = wx.CheckBox(
+            self, label="Leave t&his line out of the session log"
+        )
         self._omit_log.SetName("Leave this line out of the session log")
         self._omit_log.SetValue(trigger.omit_log)
         grid.Add(wx.StaticText(self, label=""))

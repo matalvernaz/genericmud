@@ -143,3 +143,25 @@ def test_a_trigger_matched_line_is_read_normally_even_when_it_is_not_logged():
     line = engine.process_line(Line("Starting database backup."))
     assert spoken == ["matched"]
     assert line.plain_text == "Starting database backup."
+
+
+def test_a_pack_trigger_with_omit_from_log_keeps_the_line_out():
+    # The flag comes from the plugin's XML, not from a call to add_trigger, so this is what
+    # pins the pass-through in mushclient_compat: without it the pack's trigger matches and
+    # the line is written down anyway.
+    from genericmud.scripting.api import ScriptApi
+    from genericmud.scripting.mushclient_compat import MushclientPack
+
+    sink = RecordingSink()
+    engine = AutomationEngine(sink)
+    pack = MushclientPack(ScriptApi(engine, source="m"))
+    pack.load_source(
+        "<muclient><plugin name='p' id='aaaaaaaaaaaaaaaaaaaaaaaa'/>"
+        "<script><![CDATA[ImportXML([[<triggers><trigger enabled='y' "
+        "match='starting backup' omit_from_log='y'/></triggers>]])]]></script>"
+        "</muclient>"
+    )
+    pack.dispatch_line("starting backup")  # the app tells the packs before the engine
+    line = Line("starting backup")
+    engine.process_line(line)
+    assert line.omit_from_log is True

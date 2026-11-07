@@ -53,6 +53,7 @@ def _rule_summary(kind: str, rule) -> str:
             f"send {commands}" if commands else "",
             "interrupts speech" if rule.interrupt else "",
             {"speech": "silence line", "line": "remove line"}.get(rule.gag, ""),
+            "left out of the log" if getattr(rule, "omit_log", False) else "",
             f"channel {rule.channel}" if rule.channel else "",
         ) if part]
         how = rule.match_kind()
