@@ -534,7 +534,8 @@ mud.delete_timer("tick")
 
 `every` is the gap between fires. `offset` is MUSHclient's head start: the number of seconds
 *before* the interval is up that the first fire comes, which is how two timers on one interval
-take turns instead of both going off at once. `group` puts it in a group with other rules, so
+take turns instead of both going off at once; it has to be more than 0 and less than the wait,
+or the call fails with that reason. `group` puts it in a group with other rules, so
 one call switches them all. `while_disconnected` is MUSHclient's ActiveWhenClosed: the timer
 keeps its clock when the world drops, which only makes sense for what a rule can do without a
 MUD to send to -- a note, a log line, a value, a script.

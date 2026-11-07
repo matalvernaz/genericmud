@@ -746,3 +746,19 @@ def test_the_manager_reads_each_unlabelled_timer_by_its_own_place(tmp_path):
     assert engine.set_group_enabled("meals", False) == 1
     apply_engine_state(rules, engine)
     assert [timer.enabled for timer in rules.timers] == [True, False]
+
+
+def test_lua_refuses_an_offset_that_is_not_a_head_start(tmp_path):
+    # A negative offset used to push the first fire later, and one at or past the wait made it
+    # fire at once, both without a word; the editor refuses the same values with a reason.
+    pytest.importorskip("lupa")
+    from genericmud.scripting.lua_runtime import LuaPackRuntime
+
+    engine = AutomationEngine(RecordingSink())
+    runtime = LuaPackRuntime(ScriptApi(engine, source="probe"))
+    for offset in ("-5", "120", "200"):
+        with pytest.raises(Exception, match="offset"):
+            runtime.run_source(
+                f'mud.add_timer("bad", 120, function() end, {{every=120, offset={offset}}})'
+            )
+        assert engine.named_timer("bad") is None

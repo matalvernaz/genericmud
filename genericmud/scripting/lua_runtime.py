@@ -454,6 +454,15 @@ class MudTable:
                 if options["while_disconnected"] is not None:
                     while_disconnected = bool(options["while_disconnected"])
 
+            first = float(delay)
+            if offset and not 0 < offset < first:
+                # A head start inside the wait, as the editor insists: refused with the reason,
+                # never bent into a later fire or an immediate one.
+                raise ValueError(
+                    f"mud.add_timer: the offset ({offset:g} seconds) has to be more than 0 and "
+                    f"less than the wait ({first:g} seconds)"
+                )
+
             def fire() -> None:
                 # Under the guard, like mud.timer's callback: a Lua error is reported to the
                 # player and the timer survives it, instead of dying into the crash log.
@@ -461,7 +470,7 @@ class MudTable:
 
             return self._api.add_named_timer(
                 str(name),
-                max(float(delay) - offset, 0.0),
+                first - offset,
                 fire,
                 every=every,
                 group=group,
