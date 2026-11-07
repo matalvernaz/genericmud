@@ -451,7 +451,7 @@ class AutomationManagerDialog(wx.Dialog):
             for index, rule in enumerate(collection):
                 if rule is except_rule:
                     continue
-                live = engine_rule_state(engine, kind, rule)
+                live = engine_rule_state(engine, kind, rule, place=index)
                 if live is not None and live != rule.enabled:
                     collection[index] = replace(rule, enabled=live)
 

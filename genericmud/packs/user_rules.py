@@ -696,17 +696,17 @@ def _check_timer_offsets(rules: UserRules) -> None:
 
 
 def engine_rule_state(
-    engine: AutomationEngine, kind: str, rule: object
+    engine: AutomationEngine, kind: str, rule: object, *, place: int = 0
 ) -> bool | None:
     """What the engine has for one rule of this world, or None if it has no such rule.
 
-    ``kind`` is the manager's word for it. A rule that is disabled in the file was never
-    registered, so it has no engine state and its file copy stays the truth.
+    ``kind`` is the manager's word for it. ``place`` is the rule's place in its list, which is
+    how an unlabelled timer is named; the other kinds don't need it.
     """
     if kind in ("trigger", "alias"):
         key: object = getattr(rule, "label", "")
     elif kind == "timer":
-        key = timer_name(rule)  # type: ignore[arg-type]
+        key = timer_name(rule, place)  # type: ignore[arg-type]
     elif kind == "key":
         key = getattr(rule, "key", "")
     elif kind == "data":
@@ -727,8 +727,8 @@ def apply_engine_state(rules: UserRules, engine: AutomationEngine) -> None:
         ("trigger", rules.triggers), ("alias", rules.aliases), ("timer", rules.timers),
         ("key", rules.keys), ("data", rules.watches),
     ):
-        for rule in collection:
-            live = engine_rule_state(engine, kind, rule)
+        for place, rule in enumerate(collection):
+            live = engine_rule_state(engine, kind, rule, place=place)
             if live is not None and rule.enabled != live:
                 rule.enabled = live
 
@@ -759,8 +759,8 @@ def register_rules(api: ScriptApi, rules: UserRules) -> None:
     for key in rules.keys:
         if key.enabled and key.key:
             _register_key(api, key)
-    for timer in rules.timers:
-        _register_timer(api, timer)
+    for place, timer in enumerate(rules.timers):
+        _register_timer(api, timer, place=place)
     for watch in rules.watches:
         if watch.enabled and watch.name.strip():
             _register_watch(api, watch)
@@ -938,9 +938,10 @@ def _register_timer(
 
     A draft with no label still gets a name of its own (its place in the file), so every timer
     is findable: the manager and the script calls work the same whether the player named it or
-    not.
+    not. A timer the file says is off is registered too, switched off, so its group or its label
+    can still switch it on.
     """
-    if not t.enabled or not t.send.strip():
+    if not t.send.strip():
         return
     daily = bool(t.at.strip())
     at = at_time(t.at) if daily else None

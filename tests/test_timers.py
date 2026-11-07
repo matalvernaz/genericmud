@@ -684,3 +684,65 @@ def test_lua_takes_the_offset_too(tmp_path):
     assert timer is not None
     assert timer.delay == 60  # the wait before the first fire
     assert timer.every == 120  # the interval itself is untouched
+
+
+def test_two_unlabelled_timers_on_one_interval_both_run_from_the_rules_file(tmp_path):
+    # Named by their place in the file, through register_rules itself. Called without the
+    # place, every unlabelled timer was "#1", and the second replaced and stopped the first.
+    sink, engine, clock = _engine_with_clock()
+    engine.connected = True
+    api = ScriptApi(engine, source=user_rules.SOURCE, base_dir=str(tmp_path))
+    user_rules.register_rules(
+        api,
+        UserRules(
+            timers=[
+                UserTimer(every=60, send="drink water"),
+                UserTimer(every=60, offset=30, send="eat bread"),
+            ]
+        ),
+    )
+    assert len({timer.name for timer in engine._named_timers}) == 2
+    assert len(clock.live()) == 2
+    clock.fire(0)
+    clock.fire(0)
+    assert sorted(sink.sent) == ["drink water", "eat bread"]
+
+
+def test_a_timer_off_in_the_file_can_be_switched_on_by_its_group_or_its_label(tmp_path):
+    # Registered in the off state, as triggers and aliases are: a timer the engine never heard
+    # of could not be switched back on, so a group a script had parked stayed parked.
+    sink, engine, clock = _engine_with_clock()
+    api = ScriptApi(engine, source=user_rules.SOURCE, base_dir=str(tmp_path))
+    user_rules.register_rules(
+        api,
+        UserRules(
+            timers=[
+                UserTimer(label="potion", every=30, send="quaff", group="combat", enabled=False),
+                UserTimer(label="shield", every=30, send="cast shield", enabled=False),
+            ]
+        ),
+    )
+    assert clock.live() == []
+    assert engine.set_group_enabled("combat", True) == 1
+    assert engine.named_timer("potion").enabled is True
+    assert engine.set_enabled("shield", True) is True
+    assert len(clock.live()) == 2
+
+
+def test_the_manager_reads_each_unlabelled_timer_by_its_own_place(tmp_path):
+    # The engine names an unlabelled timer by its place in the file, so the state the manager
+    # copies back has to be asked for by that place too, or the second timer reads the first's.
+    from genericmud.packs.user_rules import apply_engine_state
+
+    sink, engine, clock = _engine_with_clock()
+    api = ScriptApi(engine, source=user_rules.SOURCE, base_dir=str(tmp_path))
+    rules = UserRules(
+        timers=[
+            UserTimer(every=60, send="drink water", group="thirst"),
+            UserTimer(every=60, send="eat bread", group="meals"),
+        ]
+    )
+    user_rules.register_rules(api, rules)
+    assert engine.set_group_enabled("meals", False) == 1
+    apply_engine_state(rules, engine)
+    assert [timer.enabled for timer in rules.timers] == [True, False]
