@@ -438,6 +438,7 @@ def _command_action(
     send_to: str = "world",
     variable: str = "",
     carry_words: bool = False,
+    name: str = "",
 ) -> tuple[tuple[str, ...], Callable[[MatchContext | None], bool]]:
     """A contained action and whether it has any text, delivering to the rule's send-to target.
 
@@ -485,7 +486,7 @@ def _command_action(
             # Added after expansion, so the player's own words go out as typed and are never
             # read as a template.
             expanded[-1] = f"{expanded[-1].rstrip()} {ctx.wildcards[1]}"
-        deliver(api, expanded, send_to, ctx, variable=variable)
+        deliver(api, expanded, send_to, ctx, variable=variable, rule_name=name)
         return True
 
     return commands, run
@@ -554,6 +555,7 @@ def deliver(
     ctx: MatchContext | None = None,
     *,
     variable: str = "",
+    rule_name: str = "",
 ) -> None:
     """Put the expanded text where the rule says (MUSHclient's "send to" targets).
 
@@ -580,7 +582,10 @@ def deliver(
     elif kind == "variable":
         name = variable.strip()
         if not name:
-            return  # register_rules refuses a variable target with no name, so this is unreached
+            # register_rules refuses this for a rule that is on; one that was off and has been
+            # switched on by its group or a script gets here, and says why instead of nothing.
+            _no_variable_name(api, rule_name or "with no label")
+            return
         api.set_var(name, "\n".join(lines))
     elif kind == "script":
         line = ctx.line.plain_text if ctx is not None else ""
@@ -601,6 +606,21 @@ def deliver(
     else:
         for line in lines:
             api.send(line)
+
+
+def _no_variable_name(api: ScriptApi, rule_name: str) -> None:
+    """A rule stores to a variable it never names: say so once per rule, and trace it."""
+    detail = f"the rule {rule_name} has no variable name"
+    said = getattr(api, "_variable_refusals", None)
+    if said is None:
+        said = set()
+        api._variable_refusals = said  # noqa: SLF001 - one set per session's api
+    if api.diag is not None:
+        api.diag.event("user_rule.no_variable", source=api.source or SOURCE, rule=rule_name)
+    if detail in said:
+        return
+    said.add(detail)
+    api.speak(f"Automation text not stored: {detail}.", channel="system")
 
 
 def _script_failed(api: ScriptApi, error: Exception) -> None:
@@ -643,6 +663,11 @@ def _rule_name(rule: object) -> str:
     pattern = str(getattr(rule, "pattern", "") or "").strip()
     if pattern:
         return pattern
+    combo = str(getattr(rule, "key", "") or "").strip()  # a hotkey
+    if combo:
+        return combo
+    if isinstance(rule, UserWatch) and rule.name.strip():  # a MUD data rule, by what it watches
+        return rule.name.strip()
     at = str(getattr(rule, "at", "") or "").strip()
     if at:
         return f"at {at}"
@@ -663,6 +688,8 @@ def _check_variable_targets(rules: UserRules) -> None:
         *(t for t in rules.triggers if t.enabled and t.pattern),
         *(a for a in rules.aliases if a.enabled and a.pattern),
         *(t for t in rules.timers if t.enabled),
+        *(k for k in rules.keys if k.enabled and k.key),
+        *(w for w in rules.watches if w.enabled and w.name.strip()),
     ]
     for rule in live:
         if not str(rule.send).strip():
@@ -784,7 +811,7 @@ def _trigger_pattern(t: UserTrigger) -> tuple[str, bool]:
 def _register_trigger(api: ScriptApi, t: UserTrigger, *, place: int = 0) -> None:
     gag = t.gag if t.gag in _GAG_CHOICES else "none"
     commands, send_commands = _command_action(
-        api, t.send, send_to=t.send_to, variable=t.variable
+        api, t.send, send_to=t.send_to, variable=t.variable, name=_rule_name(t)
     )
     has_actions = bool(t.sound or t.speak or commands or t.stop_channel or t.interrupt)
 
@@ -976,7 +1003,7 @@ def _register_timer(
                 )
             return
         said_disconnected = False
-        deliver(api, list(parts), t.send_to, variable=t.variable)
+        deliver(api, list(parts), t.send_to, variable=t.variable, rule_name=_rule_name(t))
 
     # A timer that names a time of day has no fixed period -- its wait is "until the next
     # 03:00" -- so it asks the clock each time; an interval timer just repeats.
@@ -1020,7 +1047,7 @@ def _timer_refused(api: ScriptApi, t: UserTimer, reason: str) -> None:
 
 def _register_alias(api: ScriptApi, a: UserAlias, *, place: int = 0) -> None:
     commands, send_commands = _command_action(
-        api, a.send, send_to=a.send_to, variable=a.variable
+        api, a.send, send_to=a.send_to, variable=a.variable, name=_rule_name(a)
     )
 
     def fire(ctx: MatchContext) -> None:
@@ -1061,7 +1088,8 @@ def _register_alias(api: ScriptApi, a: UserAlias, *, place: int = 0) -> None:
         return
     places_words = any(_FIRST_CAPTURE_RE.search(command) for command in commands)
     _, send_with_words = _command_action(
-        api, a.send, send_to=a.send_to, variable=a.variable, carry_words=not places_words
+        api, a.send, send_to=a.send_to, variable=a.variable, carry_words=not places_words,
+        name=_rule_name(a),
     )
 
     def fire_with_words(ctx: MatchContext) -> None:
@@ -1099,7 +1127,7 @@ def data_text(value: object) -> str:
 
 def _register_watch(api: ScriptApi, w: UserWatch) -> None:
     _, send_commands = _command_action(
-        api, w.send, send_to=w.send_to, variable=w.variable
+        api, w.send, send_to=w.send_to, variable=w.variable, name=_rule_name(w)
     )
 
     def fire(name: str, value: object) -> None:
@@ -1127,7 +1155,9 @@ def _register_watch(api: ScriptApi, w: UserWatch) -> None:
 
 
 def _register_key(api: ScriptApi, k: UserKey) -> None:
-    _, send_commands = _command_action(api, k.send, send_to=k.send_to, variable=k.variable)
+    _, send_commands = _command_action(
+        api, k.send, send_to=k.send_to, variable=k.variable, name=_rule_name(k)
+    )
 
     def fire(_ctx: MatchContext) -> None:
         if k.sound:

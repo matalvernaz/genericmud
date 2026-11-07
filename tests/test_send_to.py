@@ -216,6 +216,42 @@ def test_a_variable_target_without_a_name_is_refused(tmp_path):
         _rule(tmp_path, UserTrigger(pattern="backup", send="look", send_to="variable"))
 
 
+def test_a_hotkey_or_data_rule_storing_to_no_variable_is_refused_by_name(tmp_path):
+    # Hotkeys and MUD data rules take a variable target too, so they are checked too: the key
+    # used to be swallowed and store nothing, with no word of why.
+    api = ScriptApi(AutomationEngine(RecordingSink()), source=user_rules.SOURCE)
+    with pytest.raises(ValueError, match="ctrl.shift.f9 stores to a variable but has no"):
+        user_rules.register_rules(
+            api, UserRules(keys=[UserKey(key="ctrl+shift+f9", send="look", send_to="variable")])
+        )
+    with pytest.raises(ValueError, match="Char.Vitals.hp stores to a variable but has no"):
+        user_rules.register_rules(
+            api,
+            UserRules(watches=[UserWatch(name="Char.Vitals.hp", send="${value}",
+                                         send_to="variable")]),
+        )
+
+
+def test_a_rule_switched_on_later_with_no_variable_name_says_so(tmp_path):
+    # A draft that is off may be half finished, but a group can switch it on: then it says why
+    # it stored nothing, once, instead of doing nothing.
+    sink = RecordingSink()
+    engine = AutomationEngine(sink)
+    api = ScriptApi(engine, source=user_rules.SOURCE, base_dir=str(tmp_path))
+    user_rules.register_rules(
+        api,
+        UserRules(
+            triggers=[UserTrigger(pattern="backup", send="look", send_to="variable",
+                                  group="g", enabled=False)]
+        ),
+    )
+    engine.set_group_enabled("g", True)
+    engine.process_line(Line("backup"))
+    engine.process_line(Line("backup"))
+    said = [text for text, _channel, _interrupt in sink.spoken if "variable" in text]
+    assert said == ["Automation text not stored: the rule backup has no variable name."]
+
+
 def test_a_disabled_rule_may_be_half_finished(tmp_path):
     # A draft left with the target but no name must not stop the rules that do work loading.
     sink, engine = _rule(
