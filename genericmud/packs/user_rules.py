@@ -518,11 +518,13 @@ def register_rules(api: ScriptApi, rules: UserRules) -> None:
                 channel.name, speak=channel.speak, display=channel.display,
                 interrupt=channel.interrupt,
             )
+    # A rule the file says is off is registered anyway, in the off state: a group or a script
+    # has to be able to switch it back on, and a rule the engine never heard of cannot be.
     for trigger in rules.triggers:
-        if trigger.enabled and trigger.pattern:
+        if trigger.pattern:
             _register_trigger(api, trigger)
     for alias in rules.aliases:
-        if alias.enabled and alias.pattern:
+        if alias.pattern:
             _register_alias(api, alias)
     for key in rules.keys:
         if key.enabled and key.key:
@@ -576,7 +578,7 @@ def _register_trigger(api: ScriptApi, t: UserTrigger) -> None:
         send_commands(ctx)
 
     pattern, regex = _trigger_pattern(t)
-    api.add_trigger(
+    rule = api.add_trigger(
         pattern,
         fire if has_actions else None,
         regex=regex,
@@ -588,6 +590,8 @@ def _register_trigger(api: ScriptApi, t: UserTrigger) -> None:
         name=t.label.strip(),
         group=t.group.strip(),
     )
+    if rule is not None:
+        rule.enabled = t.enabled
 
 
 # A hotkey's speech answers a key the player just pressed, like a review key does, so it
@@ -716,7 +720,7 @@ def _register_alias(api: ScriptApi, a: UserAlias) -> None:
         if a.speak and sent:
             api.speak(_speech(api, a.speak, ctx))
 
-    api.add_alias(
+    rule = api.add_alias(
         a.pattern,
         fire,
         regex=a.regex,
@@ -724,6 +728,8 @@ def _register_alias(api: ScriptApi, a: UserAlias) -> None:
         name=a.label.strip(),
         group=a.group.strip(),
     )
+    if rule is not None:
+        rule.enabled = a.enabled
     # A plain alias also takes more words typed after it. Not one that only speaks: it has no
     # command for the words to join, and taking the line would stop it reaching the MUD.
     plain = (
@@ -743,10 +749,12 @@ def _register_alias(api: ScriptApi, a: UserAlias) -> None:
         if a.speak and sent:
             api.speak(_speech(api, a.speak, ctx))
 
-    api.add_alias(
+    extra = api.add_alias(
         extra_words_pattern(a.pattern), fire_with_words, regex=True, source=SOURCE,
         priority=EXTRA_WORDS_PRIORITY, fallback=True,
     )
+    if extra is not None:
+        extra.enabled = a.enabled
 
 
 def data_text(value: object) -> str:

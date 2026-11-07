@@ -116,3 +116,43 @@ def test_the_list_says_which_group_a_rule_is_in():
 
     summary = _rule_summary("trigger", UserTrigger(pattern="backup", group="combat", send="x"))
     assert "(group combat)" in summary
+
+
+def test_a_rule_disabled_in_the_file_can_be_switched_on_by_its_group(tmp_path):
+    # A rule the file says is off used to be left out of the engine entirely, so nothing could
+    # ever switch it back on: no group, no label, no script. It is registered off instead.
+    sink, engine = _world(
+        tmp_path,
+        triggers=[
+            UserTrigger(pattern="potion", send="drink potion", enabled=False, group="combat")
+        ],
+    )
+    engine.process_line(Line("potion"))
+    assert sink.sent == []  # off is off
+
+    assert engine.set_group_enabled("combat", True) == 1
+    engine.process_line(Line("potion"))
+    assert sink.sent == ["drink potion"]
+
+
+def test_a_disabled_rule_with_a_label_can_be_switched_on_by_name(tmp_path):
+    sink, engine = _world(
+        tmp_path,
+        triggers=[UserTrigger(pattern="potion", send="drink potion", enabled=False, label="drink")],
+    )
+    engine.process_line(Line("potion"))
+    assert sink.sent == []
+    assert engine.set_enabled("drink", True) is True
+    engine.process_line(Line("potion"))
+    assert sink.sent == ["drink potion"]
+
+
+def test_a_disabled_alias_is_registered_off_and_asks_for_nothing(tmp_path):
+    sink, engine = _world(
+        tmp_path,
+        aliases=[UserAlias(pattern="kk", send="kill orc", enabled=False, group="combat")],
+    )
+    assert engine.process_input("kk") == ["kk"]  # off: it falls through to the MUD untouched
+    assert engine.set_group_enabled("combat", True) == 1
+    assert engine.process_input("kk") == []  # the alias takes it now
+    assert sink.sent == ["kill orc"]
