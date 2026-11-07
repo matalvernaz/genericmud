@@ -385,6 +385,46 @@ def test_a_rule_whose_own_text_is_a_command_is_not_refused(tmp_path):
     assert posted, "the player's own client command should still be staged"
 
 
+def test_a_capture_cannot_type_a_command_on_a_later_line_of_a_block(tmp_path):
+    # The box sends each line as a command of its own, so each line is checked against the
+    # player's own words for that line. Checked as one joined text, the line break counted as a
+    # control character in the player's words too, and every rule of two or more lines let its
+    # captures through.
+    from genericmud.app import EngineApp
+    from genericmud.packs import PackStore
+    from genericmud.packs.user_rules import save_rules
+    from genericmud.voice.router import VoiceRouter
+    from tests.helpers import RecordingBackend
+
+    posted: list[dict] = []
+    backend = RecordingBackend()
+    app = EngineApp(
+        VoiceRouter(backend, clock=lambda: 0.0),
+        send=[].append, post=posted.append, keymap={},
+        packs=PackStore(tmp_path / "soundpacks"), name="Test World",
+    )
+    pack_dir = app.user_rules_dir()
+    save_rules(
+        pack_dir,
+        UserRules(
+            triggers=[
+                UserTrigger(pattern="pages: *", send="reply ${1}\n${1}", send_to="command"),
+                UserTrigger(pattern="says: *", send="say ok\nreply ${1}", send_to="command"),
+            ]
+        ),
+    )
+    app.reload_user_rules()
+
+    app.engine.process_line(Line("pages: /trigger * = say owned"))
+    app.engine.process_line(Line("says: hi;/alias x = quit"))
+    assert not posted
+    assert any("command box" in said for said in backend.spoken)
+
+    # Captures that type nothing of their own still arrive as the player's block.
+    app.engine.process_line(Line("pages: hello"))
+    assert [message.get("text") for message in posted] == ["reply hello\nhello"]
+
+
 def test_a_capture_that_would_type_a_command_is_refused_and_says_why(tmp_path):
     from genericmud.app import EngineApp
     from genericmud.packs import PackStore

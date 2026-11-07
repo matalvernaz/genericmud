@@ -512,7 +512,14 @@ def _command_refusal(
         authored = _expand_commands(api, commands, _without_captures(ctx))
     except ValueError:  # a template that cannot be filled without the captures
         authored = list(commands)
-    return check("\n".join(expanded), "\n".join(authored))
+    # Line by line: the box sends each line as a command of its own. Joined, the line break
+    # is not printable, so the player's own text always failed the check as well and every
+    # rule of two or more lines let its captures through.
+    for typed, own in zip(expanded, authored, strict=True):
+        refusal = check(typed, own)
+        if refusal is not None:
+            return refusal
+    return None
 
 
 def _refused_once(api: ScriptApi, refusal: str, spoken: set[str]) -> bool:
