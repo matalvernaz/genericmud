@@ -206,3 +206,37 @@ def test_the_list_says_a_rules_order_and_says_nothing_at_the_default():
     assert "order" not in default
     alias = _rule_summary("alias", UserAlias(pattern="sh", order=5, send="shoot"))
     assert "Alias, order 5" in alias
+
+
+def test_your_rules_go_before_a_vipmud_or_lua_packs_at_the_same_order(tmp_path):
+    # VIPMud and Lua packs register at priority 0, the same place as an unordered rule of yours,
+    # and the tie went to the pack: its alias took the command and its trigger ran first.
+    # Yours win the tie now, whichever was registered first.
+    from genericmud.scripting.lua_runtime import LuaPackRuntime
+    from genericmud.scripting.vipmud_dialect import VipMudPack
+
+    for packs_first in (False, True):
+        sink = RecordingSink()
+        engine = AutomationEngine(sink)
+
+        def yours(engine=engine) -> None:
+            api = ScriptApi(engine, source=user_rules.SOURCE, base_dir=str(tmp_path))
+            user_rules.register_rules(
+                api,
+                UserRules(
+                    aliases=[UserAlias(pattern="k", send="kick")],
+                    triggers=[UserTrigger(pattern="tells you", send="reply mine")],
+                ),
+            )
+
+        def packs(engine=engine) -> None:
+            VipMudPack(ScriptApi(engine, source="vip")).load_source("#alias k {kill kobold}")
+            LuaPackRuntime(ScriptApi(engine, source="lua", base_dir=str(tmp_path))).run_source(
+                'mud.trigger("tells you", function() mud.send("reply pack") end)'
+            )
+
+        for step in (packs, yours) if packs_first else (yours, packs):
+            step()
+        assert engine.process_input("k") == []
+        engine.process_line(Line("Bob tells you hi"))
+        assert sink.sent == ["kick", "reply mine", "reply pack"], packs_first

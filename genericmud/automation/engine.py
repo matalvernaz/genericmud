@@ -204,6 +204,9 @@ class _Rule:
     # silence another pack's or the player's own. Without one, a stop ends the whole line.
     stop_scope: str | None = None
     tiebreak: str = ""  # orders rules of equal priority (MUSHclient sorts them by match text)
+    # The player's own rule, from the Automation Manager: at equal priority it goes before a
+    # soundpack's, so your alias takes the command and your trigger is heard first.
+    player: bool = False
     timed_out: bool = False  # switched off because its pattern ran past the match budget
     # An alias that takes the command whenever it matches, even when it keeps evaluating
     # (MUSHclient sends what was typed only when no alias matched at all).
@@ -220,9 +223,9 @@ class _Rule:
     text: str = field(default="", compare=False)
 
 
-def _rule_order(rule: _Rule) -> tuple[int, str]:
-    """Highest priority first; equal priorities by tiebreak, then in the order added."""
-    return -rule.priority, rule.tiebreak
+def _rule_order(rule: _Rule) -> tuple[int, bool, str]:
+    """Highest priority first; then the player's own rules; then by tiebreak, then as added."""
+    return -rule.priority, not rule.player, rule.tiebreak
 
 
 def _wildcards(match: re.Match[str]) -> list[str]:
@@ -550,6 +553,7 @@ class AutomationEngine:
         stop_scope: str | None = None,
         tiebreak: str = "",
         group: str = "",
+        player: bool = False,
     ) -> _Rule:
         rule = _Rule(
             compile_pattern(pattern, regex),
@@ -567,6 +571,7 @@ class AutomationEngine:
             text=pattern,
             stop_scope=stop_scope,
             tiebreak=tiebreak,
+            player=player,
         )
         self._triggers.append(rule)
         self._triggers.sort(key=_rule_order)
@@ -587,6 +592,7 @@ class AutomationEngine:
         consumes: bool = False,
         fallback: bool = False,
         group: str = "",
+        player: bool = False,
     ) -> _Rule:
         # process_input anchors every alias at the start; a wildcard alias is anchored at the
         # end too, so it has to be the whole command. Regex aliases keep whatever their
@@ -594,7 +600,7 @@ class AutomationEngine:
         rule = _Rule(compile_pattern(pattern, regex, whole=True), callback, priority, name, True,
                      source=source, keep_evaluating=keep_evaluating, tiebreak=tiebreak,
                      stop_scope=stop_scope, consumes=consumes, fallback=fallback,
-                     group=group, text=pattern)
+                     group=group, text=pattern, player=player)
         self._aliases.append(rule)
         self._aliases.sort(key=_rule_order)
         return rule

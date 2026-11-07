@@ -817,12 +817,14 @@ def _register_trigger(api: ScriptApi, t: UserTrigger, *, place: int = 0) -> None
         # A lower order number is tried first, so the engine's higher-priority-first becomes a
         # sign change; equal orders fall back to the pattern, which is MUSHclient's order too.
         # MUSHclient's sequence is 1-10000, lower first, and packs register as -sequence;
-        # DEFAULT_ORDER - order puts an unordered player rule at 0, above every pack rule, which
-        # is where player rules sat before orders existed.
+        # DEFAULT_ORDER - order puts an unordered player rule at 0, above a MUSHclient pack's
+        # rules; VIPMud and Lua packs register at 0 too, and player=True wins that tie, which is
+        # where player rules sat at connect before orders existed.
         priority=DEFAULT_ORDER - int(t.order),
         # Equal orders fall back to the pattern text, then to the rule's place in the file, so two
         # rules matching the same text keep their order across a save and reload.
         tiebreak=f"{t.pattern}\x00{place:04d}",
+        player=True,  # ahead of a soundpack's trigger at the same priority
         # A rule that stops the search stops it for the player's own rules, never for a pack's:
         # stop_scope keeps one player rule from silencing a soundpack. That is what MUSHclient
         # means by stopping evaluation inside one plugin.
@@ -1037,6 +1039,7 @@ def _register_alias(api: ScriptApi, a: UserAlias, *, place: int = 0) -> None:
         group=a.group.strip(),
         priority=DEFAULT_ORDER - int(a.order),
         tiebreak=f"{a.pattern}\x00{place:04d}",
+        player=True,  # ahead of a soundpack's alias at the same priority
         # An alias that stops stops the whole search, pack aliases included, which is what this
         # client did before orders existed: your first matching alias takes the command.
         stop_scope=None,
