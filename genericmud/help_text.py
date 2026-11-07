@@ -66,16 +66,16 @@ output box drops you back into the command box.
 More than one MUD:
 Ctrl+N opens another new world and Ctrl+O opens another saved world, each in
 its own tab. Ctrl+Tab switches tabs and says which world you landed in, and
-Alt+1 to Alt+0 go straight to the first to tenth tab, in the order you opened
-them, unless the world's soundpack or your own hotkeys use those keys. Alt+Shift+Up
-and Alt+Shift+Down move the tab you're in a place earlier or later, and
-Alt+Shift+1 to Alt+Shift+0 put it straight in a place, 0 being the tenth; each says
-where it landed, and a tab already at either end says so. Both moves are in the
-File menu. On a Mac the numbered keys are left free, since Option and a number
-types characters there. Out of the box only the tab you're on speaks — the others
-keep playing quietly, triggers and all; View menu, Silence other worlds, lets
-them all speak. View menu, World name in the window title, puts the world you're
-in into the window's title.
+Alt+1 to Alt+0 go straight to the first to tenth tab by its place, which is the
+order you opened them until you move one, unless the world's soundpack or your own
+hotkeys use those keys. Alt+Shift+Up and Alt+Shift+Down move the tab you're in a
+place earlier or later, and Alt+Shift+1 to Alt+Shift+0 put it straight in a place,
+0 being the tenth; each says where it landed, and a tab already at either end says
+so. Both moves are in the File menu. On a Mac the numbered keys are left free,
+since Option and a number types characters there. Out of the box only the tab
+you're on speaks — the others keep playing quietly, triggers and all; View menu,
+Silence other worlds, lets them all speak. View menu, World name in the window
+title, puts the world you're in into the window's title.
 
 Making it talk your way:
 Ctrl+Shift+F is follow mode: when you move rooms, speech skips straight to the
@@ -272,7 +272,7 @@ Ctrl+D            Disconnect, or reconnect a disconnected tab
 Ctrl+W            Close this tab
 Ctrl+Tab          Next session (says which one)
 Ctrl+Shift+Tab    Previous session
-Alt+1 to Alt+0    Switch to that world, in the order the tabs were opened
+Alt+1 to Alt+0    Switch to the world in that place in the row
 Alt+Shift+Up      Move this tab one place earlier
 Alt+Shift+Down    Move this tab one place later
 Alt+Shift+1 to 0  Move this tab straight to that place, 0 being the tenth

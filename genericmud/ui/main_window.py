@@ -94,12 +94,12 @@ class GenericMudFrame(SavedWorldsMixin, SoundpackSetupMixin, SelfUpdateMixin, wx
         # and in Help, Keyboard Shortcuts.
         move_up_item = file_menu.Append(
             wx.ID_ANY,
-            "Move This Tab Up",
+            "Move This Tab &Up",
             "Move this world one place earlier in the row; Alt+Shift+Up does the same",
         )
         move_down_item = file_menu.Append(
             wx.ID_ANY,
-            "Move This Tab Down",
+            "Move This Tab D&own",
             "Move this world one place later in the row; Alt+Shift+Down does the same",
         )
         self._move_up_item = move_up_item
@@ -374,10 +374,19 @@ class GenericMudFrame(SavedWorldsMixin, SoundpackSetupMixin, SelfUpdateMixin, wx
             self.announce(f"{name} is already tab {index + 1} of {count}.")
             return
         # A Simplebook has no MovePage, so the page comes out and goes back at the new place.
-        # RemovePage does not destroy the window, so the session keeps running through this.
+        # RemovePage does not destroy the window, so the session keeps running through this --
+        # but it does move wx's own selection to a neighbour and show that neighbour, and
+        # InsertPage does not move the selection along, so the page has to be inserted already
+        # selected. ChangeSelection after the fact left the wrong world's panel on screen while
+        # the announcement named the right one.
         self.book.RemovePage(index)
-        self.book.InsertPage(target, panel, name)
-        self.book.ChangeSelection(target)
+        self.book.InsertPage(target, panel, name, select=True)
+        if self.book.GetSelection() != target:
+            self.book.SetSelection(target)
+        # What the Simplebook believes and what is on screen can differ, so say it plainly:
+        # the page asked for is the shown one and every other is hidden.
+        for place in range(self.book.GetPageCount()):
+            self.book.GetPage(place).Show(place == target)
         self._update_active()
         self._update_focus()
         panel.input.SetFocus()

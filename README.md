@@ -255,8 +255,8 @@ See [command input details](docs/command-entry.md).
 **Ctrl+N** opens another new world and **Ctrl+O** another saved one, each in its
 own tab. **Ctrl+Tab** and **Ctrl+Shift+Tab** switch between them and say which
 world you landed in; **Alt+1** through **Alt+9** (and **Alt+0** for the tenth) go
-straight to a tab, counting in the order you opened them, unless the world's
-soundpack or your own hotkeys use those keys. **Alt+Shift+Up** and
+straight to a tab by its place, which is the order you opened them until you move one,
+unless the world's soundpack or your own hotkeys use those keys. **Alt+Shift+Up** and
 **Alt+Shift+Down** move the tab you're in one place earlier or later, and
 **Alt+Shift+1** through **Alt+Shift+0** put it straight in a place, 0 being the
 tenth; each says where it landed, and a tab already at either end says so rather
@@ -709,7 +709,7 @@ View, **Alt+H** Help.
 | Ctrl+D | Disconnect, or reconnect a disconnected tab |
 | Ctrl+W | Close this tab |
 | Ctrl+Tab / Ctrl+Shift+Tab | Next / previous session (says which one) |
-| Alt+1..9 / Alt+0 | Switch to that world, in the order the tabs were opened |
+| Alt+1..9 / Alt+0 | Switch to the world in that place in the row |
 | Alt+Shift+Up / Alt+Shift+Down | Move this tab one place earlier / later |
 | Alt+Shift+1..9 / Alt+Shift+0 | Move this tab straight to that place, 0 being the tenth |
 | Ctrl+Q | Exit |
