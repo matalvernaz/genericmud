@@ -8,6 +8,7 @@ since a focus move alone says nothing.
 
 from __future__ import annotations
 
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -33,6 +34,14 @@ class _Page:
         self.world = SimpleNamespace(name=name)
         self.book = None  # the book that holds it, set below
         self.input = _Input(self)
+        self._shown = True
+
+    def Show(self, show: bool = True) -> bool:  # noqa: N802 - wx API name
+        self._shown = show
+        return True
+
+    def IsShown(self) -> bool:  # noqa: N802 - wx API name
+        return self._shown
 
 
 class _Book:
@@ -52,6 +61,9 @@ class _Book:
     def GetPage(self, index: int) -> _Page:  # noqa: N802 - wx API name
         return self.pages[index]
 
+    def SetSelection(self, index: int) -> None:  # noqa: N802 - wx API name
+        self._selected = index
+
     def ChangeSelection(self, index: int) -> None:  # noqa: N802 - wx API name
         self._selected = index
 
@@ -62,7 +74,11 @@ class _Book:
         if self._selected >= len(self.pages):
             self._selected = max(0, len(self.pages) - 1)
 
-    def InsertPage(self, index: int, page: _Page, _title: str) -> None:  # noqa: N802
+    def InsertPage(  # noqa: N802 - wx API name
+        self, index: int, page: _Page, _title: str, select: bool = True
+    ) -> None:
+        # The book is told which page to show, as the real one is.
+        self._selected = index
         self.pages.insert(index, page)
 
 
@@ -379,3 +395,55 @@ def test_elsewhere_alt_and_a_number_switches_tabs(monkeypatch):
     keys = load_keymap("vipmud")
     assert keys["alt+1"] == "tab:select:1"
     assert keys["alt+0"] == "tab:select:10"
+
+
+# --- a real wx book, because the fake one cannot show a page ------------------
+
+
+def _shown_pages(book) -> list[str]:
+    return [
+        book.GetPage(i).world.name
+        for i in range(book.GetPageCount())
+        if book.GetPage(i).IsShown()
+    ]
+
+
+def test_a_move_to_an_earlier_place_shows_the_world_it_says_it_moved():
+    # The fake book treats RemovePage as taking an item out of a list. A real Simplebook also
+    # moves its own selection to a neighbour and shows that neighbour, which is what left the
+    # wrong world's panel on screen while the announcement named the right one.
+    if sys.platform == "darwin":
+        pytest.skip("wx needs a framework-build Python on macOS")
+    try:
+        app = wx.App(False)
+    except BaseException as error:  # noqa: BLE001 - wx raises SystemExit with no display
+        pytest.skip(f"wx can't start here: {error}")
+    parent = wx.Frame(None)
+    book = wx.Simplebook(parent)
+    try:
+        for name in ("Alpha", "Beta", "Gamma", "Delta"):
+            panel = wx.Panel(book)
+            panel.world = SimpleNamespace(name=name)
+            panel.input = SimpleNamespace(SetFocus=lambda: None)
+            book.AddPage(panel, name, select=True)
+        frame = SimpleNamespace(book=book, said=[])
+        frame.announce = frame.said.append
+        frame._update_active = lambda: None
+        frame._update_focus = lambda: None
+        frame._move_tab_to = lambda target: GenericMudFrame._move_tab_to(frame, target)
+
+        book.ChangeSelection(2)  # Gamma in front, as in the review
+        book.GetPage(2).Show(True)
+        frame._move_tab_to(1)  # Alt+Shift+Up
+        assert _shown_pages(book) == ["Gamma"]
+        assert book.GetSelection() == 1
+        assert frame.said == ["Moved Gamma to tab 2 of 4."]
+
+        frame._move_tab_to(3)
+        frame._move_tab_to(0)  # Alt+Shift+1 back to the front
+        assert _shown_pages(book) == ["Gamma"]
+        assert book.GetSelection() == 0
+        assert frame.said[-1] == "Moved Gamma to tab 1 of 4."
+    finally:
+        parent.Destroy()
+        del app
