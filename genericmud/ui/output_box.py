@@ -96,6 +96,16 @@ class OutputBoxMixin:
         elif kind == protocol.INPUT_MASKED:
             self._set_input_masked(bool(message.get("masked")))
         elif kind == protocol.INPUT_TEXT:
+            if message.get("only_if_empty") and self.input.GetValue().strip():
+                # A rule's text must not throw away a half-typed command. MUSHclient's
+                # SetCommand does nothing in that case; here it says why instead of going quiet.
+                self.app.voice.speak(
+                    "The command box has something in it, so the automation text was not put "
+                    "there.",
+                    channel="system",
+                    interrupt=False,
+                )
+                return
             self._fill_command(str(message.get("text", "")))
         elif kind == protocol.MENU:
             self._choose_from_menu(message)

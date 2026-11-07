@@ -308,3 +308,13 @@ def test_the_window_tells_the_session_when_the_socket_opens():
     connected_at = start.index("await self._connection.connect(self.world.host")
     opened_at = start.index("self.app.after_connect()")
     assert opened_at > connected_at
+
+
+def test_a_rule_text_does_not_replace_a_command_the_player_is_writing():
+    # MUSHclient's SetCommand does nothing when the command line holds text; the window is the
+    # only place that knows what is in the box, so the message says "only if empty" and the
+    # window checks it and says why rather than going quiet.
+    handler = ui_source("OutputBoxMixin._handle_message")
+    assert 'message.get("only_if_empty")' in handler
+    assert "self.input.GetValue().strip()" in handler
+    assert "The command box has something in it" in handler

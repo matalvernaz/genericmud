@@ -219,3 +219,115 @@ def test_the_labels_survive_a_saved_rules_file(tmp_path):
     loaded = load_rules(tmp_path)
     assert loaded.triggers[0].label == "watch-backups"
     assert loaded.aliases[0].label == "quick-shoot"
+
+
+def test_to_the_command_box_asks_to_leave_a_typed_command_alone():
+    # MUSHclient's SetCommand does nothing when the command line holds text; the box gets the
+    # same request, so a rule firing mid-sentence cannot replace what the player is writing.
+    sink = RecordingSink()
+    engine = AutomationEngine(sink)
+    api = ScriptApi(engine, source=user_rules.SOURCE)
+    user_rules.register_rules(
+        api,
+        UserRules(triggers=[UserTrigger(pattern="backup", send="drink water", send_to="command")]),
+    )
+    engine.process_line(Line("backup"))
+    assert sink.typed == ["drink water"]
+    assert sink.typed_only_if_empty == [True]
+
+
+def test_typed_refusal_is_the_check_a_link_and_a_rule_share():
+    from genericmud.app.links import typed_refusal
+
+    assert typed_refusal("/alias x = quit", ";") == "it would type a genericMud command"
+    assert typed_refusal("reply hi;look", ";") == "it would type more than one command"
+    assert typed_refusal("reply hello", ";") is None
+
+
+def test_a_rule_whose_own_text_is_a_command_is_not_refused(tmp_path):
+    # Refused only when the capture is what did it: "send to command" is the player's own
+    # field, so what they wrote there is theirs to decide.
+    from genericmud.app import EngineApp
+    from genericmud.packs import PackStore
+    from genericmud.packs.user_rules import save_rules
+    from genericmud.voice.router import VoiceRouter
+    from tests.helpers import RecordingBackend
+
+    posted: list[dict] = []
+    backend = RecordingBackend()
+    app = EngineApp(
+        VoiceRouter(backend, clock=lambda: 0.0),
+        send=[].append, post=posted.append, keymap={},
+        packs=PackStore(tmp_path / "soundpacks"), name="Test World",
+    )
+    pack_dir = app.user_rules_dir()
+    save_rules(
+        pack_dir,
+        UserRules(triggers=[UserTrigger(pattern="backup", send="/help", send_to="command")]),
+    )
+    app.reload_user_rules()
+    app.engine.process_line(Line("backup"))
+    assert posted, "the player's own client command should still be staged"
+
+
+def test_a_capture_that_would_type_a_command_is_refused_and_says_why(tmp_path):
+    from genericmud.app import EngineApp
+    from genericmud.packs import PackStore
+    from genericmud.packs.user_rules import save_rules
+    from genericmud.voice.router import VoiceRouter
+    from tests.helpers import RecordingBackend
+
+    posted: list[dict] = []
+    backend = RecordingBackend()
+    app = EngineApp(
+        VoiceRouter(backend, clock=lambda: 0.0),
+        send=[].append, post=posted.append, keymap={},
+        packs=PackStore(tmp_path / "soundpacks"), name="Test World",
+    )
+    pack_dir = app.user_rules_dir()
+    save_rules(
+        pack_dir,
+        UserRules(
+            triggers=[
+                UserTrigger(pattern="pages: *", send="${1}", send_to="command"),
+                UserTrigger(pattern="says: *", send="reply ${1}", send_to="command"),
+            ]
+        ),
+    )
+    app.reload_user_rules()
+
+    # The capture is the whole staged text and starts a client command.
+    app.engine.process_line(Line("pages: /alias x = quit"))
+    assert not posted
+    assert any("command box" in said for said in backend.spoken)
+
+    # A second command hidden behind the separator, where the author wrote no separator.
+    app.engine.process_line(Line("says: hi;look"))
+    assert not posted
+
+    # The same line with nothing dangerous in it does reach the box.
+    app.engine.process_line(Line("says: hello"))
+    assert posted
+
+
+def test_a_rules_file_from_before_the_new_fields_is_copied_once(tmp_path):
+    # Going back a version after this one has written labels and destinations would turn those
+    # rules into commands for the MUD; the copy is what lets a player go back.
+    old = '{"version": 1, "triggers": [{"pattern": "backup", "send": "look"}]}'
+    (tmp_path / "rules.json").write_text(old, encoding="utf-8")
+    save_rules(
+        tmp_path, UserRules(triggers=[UserTrigger(pattern="backup", send="look", label="b")])
+    )
+    backup = tmp_path / "rules.json.before-send-to.bak"
+    assert backup.exists()
+    assert backup.read_text(encoding="utf-8") == old
+
+    # Once is enough: later saves leave the copy alone.
+    save_rules(tmp_path, UserRules(triggers=[UserTrigger(pattern="other", send="score")]))
+    assert backup.read_text(encoding="utf-8") == old
+
+
+def test_a_rules_file_that_already_has_the_new_fields_gets_no_copy(tmp_path):
+    save_rules(tmp_path, UserRules(triggers=[UserTrigger(pattern="a", send="x", label="one")]))
+    save_rules(tmp_path, UserRules(triggers=[UserTrigger(pattern="b", send="y")]))
+    assert not (tmp_path / "rules.json.before-send-to.bak").exists()

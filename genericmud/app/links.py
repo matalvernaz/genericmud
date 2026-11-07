@@ -22,6 +22,24 @@ def _menu_note(link: Link) -> str:
     return f" (menu of {len(link.choices)})" if link.choices else ""
 
 
+def typed_refusal(command: str, separator: str) -> str | None:
+    """Why text that would land in the command box as the player's typing may not, or None.
+
+    Shared by a MUD's own links and by a rule's "send to command": both put text where the
+    player's Enter will treat it as their own typing, so neither may start a client command or
+    hide a second command behind the separator.
+    """
+    if command.lstrip().startswith(CLIENT_PREFIX):
+        return "it would type a genericMud command"
+    if separator and separator in command:
+        return "it would type more than one command"
+    if len(command) > _MAX_TYPED_LINK:
+        return "what it would type is too long for a command"
+    if not command.isprintable():
+        return "what it would type has control characters in it"
+    return None
+
+
 class LinksMixin:
     """Reviewing and following MUD links, and checking commands they offer to type.
 
@@ -195,16 +213,7 @@ class LinksMixin:
         a trigger or an alias to fire later, and not a second command hidden behind the
         separator, which the player would send without meaning to.
         """
-        if command.lstrip().startswith(CLIENT_PREFIX):
-            return "it would type a genericMud command"
-        separator = self.command_separator
-        if separator and separator in command:
-            return "it would type more than one command"
-        if len(command) > _MAX_TYPED_LINK:
-            return "what it would type is too long for a command"
-        if not command.isprintable():
-            return "what it would type has control characters in it"
-        return None
+        return typed_refusal(command, self.command_separator)
 
     def _open_link(self, url: str) -> None:
         """Open an <A HREF> link in the browser, announcing it because focus moves."""

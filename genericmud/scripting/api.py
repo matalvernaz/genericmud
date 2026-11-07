@@ -69,6 +69,9 @@ class ScriptApi:
         self._sounds_root_value: str | None = None  # _sounds_root's answer for that key
         self._active_timers = 0  # pending pack timers, bounded by _MAX_ACTIVE_TIMERS
         self._timer_refusal_noted = False  # the diagnostic log hears about the first refusal
+        # Set by the app for a world's rules: why staged text may not go in the command box,
+        # asked with the expanded text and with the captures left out. None means "no opinion".
+        self.command_text_refusal = None
         self._execute_depth = 0
 
     @property
@@ -189,9 +192,9 @@ class ScriptApi:
     def echo(self, text: str, channel: str = "main") -> None:
         self._engine.sink.echo(str(text), channel)
 
-    def type_text(self, text: str) -> None:
+    def type_text(self, text: str, *, only_if_empty: bool = False) -> None:
         """Put text in the player's command box, unsent (MUSHclient's "send to command")."""
-        self._engine.sink.type_text(str(text))
+        self._engine.sink.type_text(str(text), only_if_empty=only_if_empty)
 
     def log_line(self, text: str) -> None:
         """Write a line to the session log without showing it (MUSHclient's "send to log")."""

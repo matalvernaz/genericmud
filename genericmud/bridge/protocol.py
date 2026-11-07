@@ -166,7 +166,7 @@ def menu(text: str, choices: list[tuple[str, str]]) -> dict[str, Any]:
     return {"type": MENU, "text": text, "choices": [list(choice) for choice in choices]}
 
 
-def input_text(text: str) -> dict[str, Any]:
+def input_text(text: str, *, only_if_empty: bool = False) -> dict[str, Any]:
     """Put ``text`` in the command box, replacing what is there; nothing is sent.
 
     A link that carries half a command is the case this exists for: the player finishes it,

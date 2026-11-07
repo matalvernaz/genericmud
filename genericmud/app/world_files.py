@@ -110,9 +110,28 @@ class WorldFilesMixin:
             return
         self.engine.remove_source(user_rules.SOURCE)
         api = ScriptApi(self.engine, source=user_rules.SOURCE, base_dir=str(pack_dir))
+        # A rule's "send to command" puts text where Enter makes it the player's typing, so it
+        # passes the same check a MUD's link does -- but only when a capture is what made it
+        # unsafe, since the player's own text may say what it likes.
+        api.command_text_refusal = self._rule_command_refusal
         # A rule's "send to script" reaches this world's Lua through the api it calls on.
         api.scripts = self.rule_scripts(pack_dir)
         user_rules.register_rules(api, rules)
+
+    def _rule_command_refusal(self, typed: str, authored: str) -> str | None:
+        """Why a rule's staged text may not go in the command box, or None.
+
+        ``typed`` is what would land there, ``authored`` the same text with every capture left
+        out. If the player's own words already do what is refused, it was meant.
+        """
+        from genericmud.app.links import typed_refusal
+
+        refusal = typed_refusal(typed, self.command_separator)
+        if refusal is None:
+            return None
+        if typed_refusal(authored, self.command_separator) is not None:
+            return None
+        return refusal
 
     def rule_scripts(self, pack_dir):
         """The runner a rule's "send to script" uses: this world's Lua, and its loaded scripts."""

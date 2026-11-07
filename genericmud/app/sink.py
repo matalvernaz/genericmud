@@ -60,8 +60,10 @@ class AppSink(EngineSink):
         if log:
             self._log_note(text)  # the world's "log notes" setting decides whether it lands
 
-    def type_text(self, text: str) -> None:
-        self._post(protocol.input_text(text))
+    def type_text(self, text: str, *, only_if_empty: bool = False) -> None:
+        # only_if_empty is what a rule's "send to command" asks for: MUSHclient's SetCommand
+        # leaves a command line that already holds text alone, and so does this.
+        self._post(protocol.input_text(text, only_if_empty=only_if_empty))
 
     def log_line(self, text: str) -> None:
         self._log_line(text)

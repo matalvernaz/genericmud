@@ -19,6 +19,7 @@ class RecordingSink(EngineSink):
     echoed: list[tuple[str, str]] = field(default_factory=list)
     filed: list[tuple[str, str]] = field(default_factory=list)
     typed: list[str] = field(default_factory=list)  # put in the command box, unsent
+    typed_only_if_empty: list[bool] = field(default_factory=list)  # ... and whether it may replace
     logged: list[str] = field(default_factory=list)  # written to the log without being shown
     spoken: list[tuple[str, str, bool]] = field(default_factory=list)
     played: list[dict[str, Any]] = field(default_factory=list)
@@ -44,8 +45,9 @@ class RecordingSink(EngineSink):
     def echo(self, text: str, channel: str = "main", *, log: bool = False) -> None:
         self.echoed.append((text, channel))
 
-    def type_text(self, text: str) -> None:
+    def type_text(self, text: str, *, only_if_empty: bool = False) -> None:
         self.typed.append(text)
+        self.typed_only_if_empty.append(only_if_empty)
 
     def log_line(self, text: str) -> None:
         self.logged.append(text)

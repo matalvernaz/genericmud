@@ -189,9 +189,44 @@ def load_rules(pack_dir: Path) -> UserRules:
         return UserRules()
 
 
+# The name says what the copy is for: the version that wrote it understood none of these.
+_BEFORE_SEND_TO = "rules.json.before-send-to.bak"
+
+
 def save_rules(pack_dir: Path, rules: UserRules) -> None:
     pack_dir = Path(pack_dir)
+    _keep_the_old_file_once(pack_dir)
     atomic_write_text(rules_path(pack_dir), rules.to_json())
+
+
+def _keep_the_old_file_once(pack_dir: Path) -> None:
+    """Copy a rules file from before the send-to fields, once, before overwriting it.
+
+    A release without them drops the keys it does not know, so going back to it after this
+    version has written labels and destinations turns every such rule into plain commands for
+    the MUD. One copy taken before the first save is what makes that reversible.
+    """
+    path = rules_path(pack_dir)
+    backup = path.with_name(_BEFORE_SEND_TO)
+    if backup.exists() or not path.exists():
+        return
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if not _has_a_send_to_field(data):
+        shutil.copy2(path, backup)
+
+
+def _has_a_send_to_field(data: object) -> bool:
+    """Whether this parsed rules file already carries the newer fields."""
+    if isinstance(data, dict):
+        if "send_to" in data:
+            return True
+        return any(_has_a_send_to_field(value) for value in data.values())
+    if isinstance(data, list):
+        return any(_has_a_send_to_field(value) for value in data)
+    return False
 
 
 def copy_sound_into_pack(pack_dir: Path, source_path: str) -> str:
@@ -315,6 +350,11 @@ def _command_action(
                 spoken_errors.add(detail)
                 api.speak(f"Automation text not used: {detail}", channel="system")
             return False
+        refusal = _command_refusal(api, commands, expanded, ctx, send_to)
+        if refusal is not None:
+            if not _refused_once(api, refusal, spoken_errors):
+                return False
+            return False
         if carry_words and expanded and ctx is not None and len(ctx.wildcards) > 1:
             # Added after expansion, so the player's own words go out as typed and are never
             # read as a template.
@@ -323,6 +363,55 @@ def _command_action(
         return True
 
     return commands, run
+
+
+def _command_refusal(
+    api: ScriptApi,
+    commands: tuple[str, ...],
+    expanded: list[str],
+    ctx: MatchContext | None,
+    send_to: str,
+) -> str | None:
+    """Why this rule's text may not go into the command box, or None if it may.
+
+    Only when the capture is what made it wrong: the player's own text may start a command or
+    hold the separator, because they wrote it and can see what it says.
+    """
+    if send_to_kind(send_to) != "command":
+        return None
+    check = getattr(api, "command_text_refusal", None)
+    if check is None:
+        return None
+    try:
+        authored = _expand_commands(api, commands, _without_captures(ctx))
+    except ValueError:  # a template that cannot be filled without the captures
+        authored = list(commands)
+    return check("\n".join(expanded), "\n".join(authored))
+
+
+def _refused_once(api: ScriptApi, refusal: str, spoken: set[str]) -> bool:
+    """Say why once, and trace it every time."""
+    if api.diag is not None:
+        api.diag.event(
+            "user_rule.command_refused", source=api.source or SOURCE, reason=refusal
+        )
+    if refusal in spoken:
+        return False
+    spoken.add(refusal)
+    api.speak(f"Automation text not put in the command box: {refusal}.", channel="system")
+    return True
+
+
+def _without_captures(ctx: MatchContext | None) -> MatchContext | None:
+    """The same match with every capture empty, so what the player wrote can be read alone."""
+    if ctx is None:
+        return None
+    return MatchContext(
+        line=ctx.line,
+        wildcards=[""] * len(ctx.wildcards),
+        named={name: "" for name in ctx.named},
+        engine=ctx.engine,
+    )
 
 
 def deliver(
@@ -337,7 +426,7 @@ def deliver(
     if kind == "command":
         # The box holds several lines now, so a stack arrives as a block to finish and send,
         # which is the point of putting it there rather than sending it.
-        api.type_text("\n".join(lines))
+        api.type_text("\n".join(lines), only_if_empty=True)
     elif kind == "output":
         for line in lines:
             api.note(line)

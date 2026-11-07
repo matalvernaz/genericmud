@@ -75,8 +75,11 @@ class EngineSink:
         """
     def file_line(self, text: str, channel: str) -> None:
         """Keep ``text`` in the scrollback under ``channel``, without showing or speaking it."""
-    def type_text(self, text: str) -> None:
-        """Put ``text`` in the player's command box, unsent (MUSHclient's "send to command")."""
+    def type_text(self, text: str, *, only_if_empty: bool = False) -> None:
+        """Put ``text`` in the player's command box, unsent (MUSHclient's "send to command").
+
+        ``only_if_empty`` leaves a half-typed command alone, which is what a rule asks for.
+        """
 
     def log_line(self, text: str) -> None:
         """Write ``text`` to the session log without showing it (MUSHclient's "send to log")."""
