@@ -423,6 +423,22 @@ def test_switching_a_rule_the_engine_no_longer_has_says_so():
     assert engine.set_live_enabled(object(), False) is False
 
 
+def test_switching_a_rule_a_script_has_since_dropped_says_so():
+    # The manager acts on the list it drew, so the engine has to say when a rule on it is gone,
+    # or the button reports a switch that changed nothing.
+    engine = AutomationEngine(RecordingSink())
+    api = ScriptApi(engine, source="user-script:1")
+    trigger = api.add_trigger("backup", lambda _ctx: None)
+    api.add_key("f2", lambda _ctx: None)
+    watch = api.add_data_watch("Char.Vitals.hp", lambda _name, _value: None)
+    timer = api.add_named_timer("tick", 5, lambda: None, every=5)
+    binding = engine.live_rules(("user-script:",))
+    handles = [rule.handle for rule in binding]
+    engine.remove_source("user-script:1")
+    assert all(engine.set_live_enabled(handle, False) is False for handle in handles)
+    assert len(handles) == 4 and trigger in handles and watch in handles and timer in handles
+
+
 def test_a_script_can_name_and_group_the_rules_it_makes(tmp_path):
     # What the manager shows as "from your scripts" only reads well if a script can say what its
     # rules are called and which set they belong to, as MUSHclient's AddTriggerEx can.

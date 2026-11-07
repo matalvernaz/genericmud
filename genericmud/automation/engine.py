@@ -687,9 +687,10 @@ class AutomationEngine:
         """Every rule the engine is running whose source starts with one of ``prefixes``.
 
         The manager lists these as the rules your scripts made: a script's ``mud.trigger``,
-        ``mud.alias``, ``mud.key``, ``mud.timer``, ``mud.add_timer`` or ``mud.on_data`` has no
-        file behind it, so without this a trigger a script got wrong is invisible -- it either
-        fires when it should not or does nothing, and the diagnostic log is the only clue.
+        ``mud.alias``, ``mud.key``, ``mud.add_timer`` or ``mud.on_data`` has no file behind it
+        (a ``mud.timer`` is an anonymous one-shot with nothing to list or switch), so without
+        this a trigger a script got wrong is invisible -- it either fires when it should not or
+        does nothing, and the diagnostic log is the only clue.
         """
         def wanted(source: str) -> bool:
             return not prefixes or any(source.startswith(prefix) for prefix in prefixes)
@@ -735,14 +736,18 @@ class AutomationEngine:
         By handle rather than by name, because a rule a script made need not have a name at all,
         and a name it did give is not a promise that it kept it.
         """
-        if isinstance(handle, _NamedTimer):
+        def held(collection) -> bool:
+            # By identity: two rules can be equal field for field and still be different rules.
+            return any(item is handle for item in collection)
+
+        if isinstance(handle, _NamedTimer) and held(self._named_timers):
             handle.set_enabled(enabled)
-        elif isinstance(handle, _KeyBinding):
+        elif isinstance(handle, _KeyBinding) and held(self._key_bindings):
             handle.enabled = enabled
             self._rebuild_keys()
-        elif isinstance(handle, _DataWatch):
+        elif isinstance(handle, _DataWatch) and held(self._data_watches):
             handle.enabled = enabled
-        elif isinstance(handle, _Rule):
+        elif isinstance(handle, _Rule) and (held(self._triggers) or held(self._aliases)):
             handle.enabled = enabled
         else:
             return False
