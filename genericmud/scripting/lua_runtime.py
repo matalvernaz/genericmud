@@ -555,6 +555,17 @@ class LuaPackRuntime:
     def run_source(self, code: str):
         return self._guard.run_strict(self._lua.execute, code)
 
+    def run_with_match(self, code: str, *, line: str, wildcards) -> None:
+        """Run a rule's inline code, with the match as its parameters rather than its globals.
+
+        As globals they overwrote whatever a script had called ``line`` or ``wildcards`` every
+        time a rule fired, and a world's scripts share one state.
+        """
+        function = self.run_source(
+            "return function(line, wildcards)\n" + str(code) + "\nend"
+        )
+        self._guard.run(function, str(line), self.table_of(list(wildcards)))
+
     def run_file(self, path: str):
         with open(path, encoding="utf-8") as handle:
             return self.run_source(handle.read())

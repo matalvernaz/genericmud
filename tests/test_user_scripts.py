@@ -96,3 +96,27 @@ def test_validation_rejects_invalid_lua_without_writing(tmp_path):
     with pytest.raises(LuaError):
         user_scripts.validate_script(pack_dir, "this is not valid Lua !!!")
     assert user_scripts.list_scripts(pack_dir) == []
+
+
+def test_a_rule_finds_the_worlds_scripts_on_the_first_connect(tmp_path):
+    # Connect reloads rules before scripts, so the runner a rule calls through is built before
+    # any script has loaded. Before this it never heard about them, and a rule sending
+    # "on_backup" ran that as code and spoke a Lua syntax error.
+    from genericmud.model.buffer import Line
+    from genericmud.packs.user_rules import UserRules, UserTrigger, save_rules
+
+    app, _sent, backend = _app(tmp_path)
+    pack_dir = app.user_rules_dir()
+    user_scripts.save_script(
+        pack_dir, "10-hello.lua", 'function on_backup() mud.speak("backup seen") end'
+    )
+    save_rules(
+        pack_dir,
+        UserRules(
+            triggers=[UserTrigger(pattern="backup", send="on_backup", send_to="script")]
+        ),
+    )
+    app.reload_user_rules()  # connect's order: the rules, then the scripts
+    app.reload_user_scripts()
+    app.engine.process_line(Line("backup"))
+    assert "backup seen" in backend.spoken

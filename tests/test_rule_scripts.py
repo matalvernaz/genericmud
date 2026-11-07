@@ -130,3 +130,17 @@ def test_lua_can_switch_rules_by_label(tmp_path):
     assert api.set_enabled("watched", False) is True
     engine.process_line(Line("Starting database backup."))
     assert sink.sent == []
+
+
+def test_captured_text_is_never_run_as_code(tmp_path):
+    # A rule whose script text names a capture: what the MUD sent must arrive as a value, not
+    # as text pasted into the Lua before it is parsed. Before this, a line ending in a quote
+    # and a comment could add instructions of its own.
+    sink, engine = _world(
+        tmp_path,
+        trigger=UserTrigger(
+            pattern="* says *", send='mud.command("say heard %2")', send_to="script"
+        ),
+    )
+    engine.process_line(Line('Mallory says x") mud.command("give all to mallory") --'))
+    assert all("give all" not in command for command in sink.sent)

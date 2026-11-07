@@ -155,7 +155,7 @@ class _RuleEditorBase(wx.Dialog):
 
     def _send_to_choice(self, grid: wx.FlexGridSizer, current: str) -> wx.Choice:
         """The "send to" box: one response text, one destination (MUSHclient's arrangement)."""
-        grid.Add(wx.StaticText(self, label="Send it &to:"), 0, wx.ALIGN_CENTER_VERTICAL)
+        grid.Add(wx.StaticText(self, label="Sen&d it to:"), 0, wx.ALIGN_CENTER_VERTICAL)
         choice = wx.Choice(self, choices=list(SEND_TO_LABELS))
         choice.SetName("Send it to")
         choice.SetSelection(
@@ -212,7 +212,7 @@ class TriggerEditorDialog(_RuleEditorBase):
         grid.Add(browse)
         self._volume = self._slider(grid, "&Volume (0-100):", trigger.volume, 0, 100)
         self._pan = self._slider(grid, "&Pan (-100 left to 100 right):", trigger.pan, -100, 100)
-        self._loop = wx.CheckBox(self, label="&Loop the sound until stopped")
+        self._loop = wx.CheckBox(self, label="Loop the sound &until stopped")
         self._loop.SetValue(trigger.loop)
         grid.Add(wx.StaticText(self, label=""))
         grid.Add(self._loop)

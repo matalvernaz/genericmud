@@ -62,8 +62,9 @@ class RuleScripts:
             # different Lua runtimes"), and every script file has its own state.
             function(line, runtime.table_of(list(wildcards)))
             return
-        self._runtime.set_match(line, wildcards)  # `line` and `wildcards` for inline code
-        self._runtime.run_source(source)
+        # Wrapped in a function, so `line` and `wildcards` are its parameters: as globals
+        # they overwrote whatever a script had called by either name, every time a rule fired.
+        self._runtime.run_with_match(source, line=line, wildcards=wildcards)
 
     def _lookup(self, name: str):
         """The runtime and a Lua function of that name from the loaded scripts, or None."""

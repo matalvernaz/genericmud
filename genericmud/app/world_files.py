@@ -150,6 +150,12 @@ class WorldFilesMixin:
             self.engine.remove_source(item.source)
         self._user_script_runtimes = loaded
         self._user_script_generation = next_generation
+        # The runner a rule's "send to script" calls through is built by reload_user_rules,
+        # which the app runs before this on connect. Hand it the scripts that just loaded, or a
+        # rule sending "on_backup" runs that as code and speaks a Lua syntax error instead.
+        runner = getattr(self, "_rule_scripts", None)
+        if runner is not None:
+            runner.set_scripts(loaded)
         if self._diag is not None:
             self._diag.event(
                 "user_scripts.reloaded", count=len(loaded), generation=next_generation

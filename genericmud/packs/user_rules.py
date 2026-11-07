@@ -284,6 +284,21 @@ def _command_action(
     ``carry_words`` puts the match's first capture, the words typed after a plain alias, on
     the end of the last line.
     """
+    if send_to_kind(send_to) == "script":
+        # Code, not a template. Expanding ${1} or %1 here would paste whatever the MUD sent
+        # into the Lua before it is parsed, so a line like `Mallory says x") mud.command(...
+        # would run as the player. Inline code reads `line` and `wildcards` instead, which
+        # arrive as values rather than as text to be parsed.
+        script = text if text.strip() else ""
+
+        def run_script(ctx: MatchContext | None = None) -> bool:
+            if not script:
+                return False
+            deliver(api, [script], send_to, ctx)
+            return True
+
+        return ((script,) if script else ()), run_script
+
     commands = _commands(text, keep_spaces=send_to_kind(send_to) == "command")
     spoken_errors: set[str] = set()
 
