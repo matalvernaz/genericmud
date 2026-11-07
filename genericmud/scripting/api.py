@@ -577,8 +577,12 @@ class ScriptApi:
         """Drop a previously-registered alias by name."""
         self._engine.remove_alias(name)
 
-    def add_key(self, key: str, callback: Callback, *, group: str = "") -> None:
-        self._engine.add_key(key, callback, source=self._source, group=str(group))
+    def add_key(
+        self, key: str, callback: Callback, *, group: str = "", enabled: bool = True
+    ) -> None:
+        self._engine.add_key(
+            key, callback, source=self._source, group=str(group), enabled=enabled
+        )
 
     def remove_key(self, key: str) -> None:
         """Drop this source's binding of ``key``."""

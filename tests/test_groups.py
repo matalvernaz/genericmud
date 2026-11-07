@@ -451,3 +451,39 @@ def test_a_script_can_name_and_group_the_rules_it_makes(tmp_path):
     assert engine.set_enabled("heal-watch", False) is True
     assert engine.is_rule_enabled("trigger", "heal-watch") is False
     assert engine.set_group_enabled("combat", False) == 3
+
+
+def test_a_hotkey_and_a_data_rule_off_in_the_file_come_on_with_their_group(tmp_path):
+    # Registered in the off state, as triggers, aliases and timers are, so a group a script
+    # parked (and the manager then saved as off) can still be switched back on.
+    sink = RecordingSink()
+    engine = AutomationEngine(sink)
+    api = ScriptApi(engine, source=user_rules.SOURCE, base_dir=str(tmp_path))
+    user_rules.register_rules(
+        api,
+        UserRules(
+            keys=[UserKey(key="ctrl+shift+f9", send="flee", group="combat", enabled=False)],
+            watches=[
+                UserWatch(name="Char.Vitals.hp", send="say hp ${value}", group="combat",
+                          only_changes=False, enabled=False)
+            ],
+        ),
+    )
+    engine.connected = True
+    assert engine.has_key("ctrl+shift+f9") is False
+    engine.data_arrived("gmcp", "Char.Vitals.hp", 90)
+    assert sink.sent == []
+    assert engine.set_group_enabled("combat", True) == 2
+    assert engine.press_key("ctrl+shift+f9") is True
+    engine.data_arrived("gmcp", "Char.Vitals.hp", 80)
+    assert sink.sent == ["flee", "say hp 80"]
+
+
+def test_a_hotkey_off_in_the_file_leaves_the_combo_to_a_pack_that_binds_it(tmp_path):
+    engine = AutomationEngine(RecordingSink())
+    fired: list[str] = []
+    engine.add_key("f2", lambda _ctx: fired.append("pack"), source="pack")
+    api = ScriptApi(engine, source=user_rules.SOURCE, base_dir=str(tmp_path))
+    user_rules.register_rules(api, UserRules(keys=[UserKey(key="f2", send="flee", enabled=False)]))
+    engine.press_key("f2")
+    assert fired == ["pack"]

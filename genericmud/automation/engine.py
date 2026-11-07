@@ -830,10 +830,17 @@ class AutomationEngine:
         self._aliases = [rule for rule in self._aliases if rule.name != name]
 
     def add_key(
-        self, key: str, callback: Callback, *, source: str = "", group: str = ""
+        self, key: str, callback: Callback, *, source: str = "", group: str = "",
+        enabled: bool = True,
     ) -> None:
-        """Bind a combo. ``group`` lets one EnableGroup switch it with the other rules."""
-        self._key_bindings.append(_KeyBinding(key.lower(), source, callback, group))
+        """Bind a combo. ``group`` lets one EnableGroup switch it with the other rules.
+
+        A binding added switched off is kept but not effective, so a group or its name can
+        switch it on later, and meanwhile the combo stays with whatever owned it before.
+        """
+        self._key_bindings.append(
+            _KeyBinding(key.lower(), source, callback, group, enabled=bool(enabled))
+        )
         self._rebuild_keys()
 
     def _rebuild_keys(self) -> None:

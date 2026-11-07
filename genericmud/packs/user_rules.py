@@ -757,12 +757,12 @@ def register_rules(api: ScriptApi, rules: UserRules) -> None:
         if alias.pattern:
             _register_alias(api, alias, place=place)
     for key in rules.keys:
-        if key.enabled and key.key:
+        if key.key:
             _register_key(api, key)
     for place, timer in enumerate(rules.timers):
         _register_timer(api, timer, place=place)
     for watch in rules.watches:
-        if watch.enabled and watch.name.strip():
+        if watch.name.strip():
             _register_watch(api, watch)
 
 
@@ -1106,9 +1106,10 @@ def _register_watch(api: ScriptApi, w: UserWatch) -> None:
             api.speak(_speech(api, w.speak, ctx), interrupt=w.interrupt)
         send_commands(ctx)
 
-    api.add_data_watch(
+    watch = api.add_data_watch(
         w.name.strip(), fire, only_changes=w.only_changes, group=w.group.strip()
     )
+    watch.enabled = bool(w.enabled)  # off in the file: kept, so its group can switch it on
 
 
 def _register_key(api: ScriptApi, k: UserKey) -> None:
@@ -1121,4 +1122,4 @@ def _register_key(api: ScriptApi, k: UserKey) -> None:
             api.speak(_speech(api, k.speak), channel=_KEY_REPLY_CHANNEL, interrupt=True)
         send_commands()  # to the target the rule names: the MUD unless it says otherwise
 
-    api.add_key(k.key, fire, group=k.group.strip())
+    api.add_key(k.key, fire, group=k.group.strip(), enabled=k.enabled)
