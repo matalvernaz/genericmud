@@ -221,6 +221,25 @@ def load_rules(pack_dir: Path) -> UserRules:
 _BEFORE_SEND_TO = "rules.json.before-send-to.bak"
 
 
+def drop_spent_one_shots(rules: UserRules, spent: set[str]) -> list[str]:
+    """Take out the one-shots that have already fired; returns the names it removed.
+
+    MUSHclient's one-shot timer deletes itself when it fires, and its world file is written from
+    the live list, so the timer is gone from that file at the next save. This is that, for a
+    player's own rules: what has run once is not saved to run again.
+    """
+    removed: list[str] = []
+    kept: list[UserTimer] = []
+    for place, timer in enumerate(rules.timers):
+        name = timer_name(timer, place)
+        if timer.one_shot and name in spent:
+            removed.append(name)
+        else:
+            kept.append(timer)
+    rules.timers = kept
+    return removed
+
+
 def save_rules(pack_dir: Path, rules: UserRules) -> None:
     pack_dir = Path(pack_dir)
     _keep_the_old_file_once(pack_dir)
@@ -662,9 +681,22 @@ def seconds_until(target: time, *, now: datetime | None = None) -> float:
     return next_daily_wait(target, now=now)[1]
 
 
-def _register_timer(api: ScriptApi, t: UserTimer, *, now=datetime.now) -> None:
-    """Schedule one timer, and reschedule it after each fire unless it is a one-shot."""
-def _register_timer(api: ScriptApi, t: UserTimer, *, now=datetime.now) -> None:
+def timer_name(t: UserTimer, place: int = 0) -> str:
+    """The name a timer is registered under: its label, or one made from its schedule.
+
+    The place in the file is part of a made-up name because two timers may keep the same clock --
+    two sixty-second timers taking turns is the example -- and a name two timers share leaves one
+    of them unreachable and lets the other overwrite it on every reload.
+    """
+    label = t.label.strip()
+    if label:
+        return label
+    return f"timer {t.at or f'{float(t.every):g}s'} #{place + 1}"
+
+
+def _register_timer(
+    api: ScriptApi, t: UserTimer, *, now=datetime.now, place: int = 0
+) -> None:
     """Schedule one timer under a name, so a label or a group can switch it later.
 
     A draft with no label still gets a name of its own (its place in the file), so every timer
@@ -692,7 +724,7 @@ def _register_timer(api: ScriptApi, t: UserTimer, *, now=datetime.now) -> None:
     daily = at is not None and not t.one_shot
     every = None if t.one_shot or at is not None else float(t.every)
     delay = next_daily_wait(at, now=now())[1] if at is not None else float(t.every)
-    name = t.label.strip() or f"timer {t.at or f'{t.every:g}s'}"
+    name = timer_name(t, place)
     api.add_named_timer(
         name,
         delay,

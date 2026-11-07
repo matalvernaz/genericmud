@@ -160,7 +160,8 @@ in one call.
 A timer (Timers in the Automation Manager) acts on a clock rather than on a line:
 every so often, or once a day at a time such as 03:00. What it does is the same
 question the other rules answer, so it can send commands, fill your command box, write
-a note, or run Lua. Do it once only makes it a one-shot.
+a note, or run Lua. Do it once only makes it a one-shot: it runs once and is then
+removed, here and from the saved rules the next time they are saved.
 
 Trigger, alias, and hotkey command fields accept one command per line. ${1}
 means the first matched part. ${script:attack} reads a value saved by a script.

@@ -448,8 +448,13 @@ class LuaPackRuntime:
                     group = str(options["group"])
                 if options["enabled"] is not None:
                     enabled = bool(options["enabled"])
+            def fire() -> None:
+                # Under the guard, like mud.timer's callback: a Lua error is reported to the
+                # player and the timer survives it, instead of dying into the crash log.
+                self._run_callback(callback, None)
+
             return self._api.add_named_timer(
-                str(name), float(delay), callback, every=every, group=group, enabled=enabled
+                str(name), float(delay), fire, every=every, group=group, enabled=enabled
             )
 
         return add

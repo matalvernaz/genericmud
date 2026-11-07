@@ -350,7 +350,7 @@ def test_a_daily_timer_asks_the_clock_for_its_next_wait(tmp_path):
     engine = AutomationEngine(sink)
     api = ScriptApi(engine, source=user_rules.SOURCE, base_dir=str(tmp_path))
     user_rules.register_rules(api, UserRules(timers=[UserTimer(at="03:00", send="look")]))
-    timer = engine.named_timer("timer 03:00")
+    timer = engine.named_timer("timer 03:00 #1")
     assert timer is not None
     assert timer.next_delay is not None  # not a fixed repeat: the wait moves each day
     assert 0 < timer.next_delay() <= 86400
@@ -371,3 +371,206 @@ def test_lua_names_the_three_timer_calls_mushclient_has(tmp_path):
     assert engine.named_timer("lua-tick").enabled is False
     runtime.run_source('mud.delete_timer("lua-tick")')
     assert engine.named_timer("lua-tick") is None
+
+
+# --- the fake clock the review asked for: handles that can be cancelled -----------------
+
+
+class _Handle:
+    def __init__(self, clock: _Clock, delay: float, callback) -> None:
+        self.clock = clock
+        self.delay = delay
+        self.callback = callback
+        self.cancelled = False
+
+    def cancel(self) -> None:
+        self.cancelled = True
+
+
+class _Clock:
+    """A sink whose schedule() hands back a cancellable handle, so "armed" can be tested."""
+
+    def __init__(self) -> None:
+        self.pending: list[_Handle] = []
+
+    def schedule(self, delay, callback, **_ignored):
+        handle = _Handle(self, delay, callback)
+        self.pending.append(handle)
+        return handle
+
+    def live(self) -> list[_Handle]:
+        return [handle for handle in self.pending if not handle.cancelled]
+
+    def fire(self, index: int = 0) -> None:
+        live = self.live()
+        handle = live[index]
+        handle.cancelled = True  # it has fired
+        handle.callback()
+
+
+def _engine_with_clock():
+    from genericmud.automation.engine import AutomationEngine
+
+    class Sink(RecordingSink):
+        def __init__(self) -> None:
+            super().__init__()
+            self.clock = _Clock()
+
+        def schedule(self, delay, callback, **_ignored):
+            return self.clock.schedule(delay, callback)
+
+    sink = Sink()
+    return sink, AutomationEngine(sink), sink.clock
+
+
+def test_a_reload_stops_the_timers_it_replaces_instead_of_leaving_them_behind():
+    # A timer switched off or deleted and saved used to be cancelled behind its own back: it
+    # stayed in the list, its handle counted as armed, and after a reconnect it was back.
+    sink, engine, clock = _engine_with_clock()
+    api = ScriptApi(engine, source="user-rule:1")
+    api.add_named_timer("drink", 10, lambda: sink.sent.append("drink water"), every=10)
+    assert len(clock.live()) == 1
+    engine.remove_source("user-rule:1")
+    assert engine.named_timer("drink") is None
+    assert clock.live() == []
+
+
+def test_replacing_a_timer_by_name_stops_the_one_it_replaces():
+    # mud.add_timer("tick", ...) three times is how a script restarts a timer; the first two
+    # used to keep firing with nothing able to reach them.
+    sink, engine, clock = _engine_with_clock()
+    api = ScriptApi(engine, source="probe")
+    for _ in range(3):
+        api.add_named_timer("tick", 10, lambda: sink.sent.append("tick"), every=10)
+    live = clock.live()
+    assert len(live) == 1
+    live[0].callback()
+    assert sink.sent == ["tick"]
+
+
+def test_switching_on_a_timer_that_is_already_on_does_not_restart_it():
+    # A prompt trigger switching its group on every ten seconds would otherwise reset a
+    # thirty-second timer before it ever fired.
+    sink, engine, clock = _engine_with_clock()
+    api = ScriptApi(engine, source="probe")
+    api.add_named_timer("heal", 30, lambda: None, every=30)
+    first = clock.live()[0]
+    assert engine.set_timer_enabled("heal", True) is True
+    assert clock.live() == [first]  # the same pending handle, not a new one
+
+
+def test_a_one_shot_is_deleted_when_it_fires():
+    # What MUSHclient does with a one-shot timer, and the reason there is no "finished" flag to
+    # keep: a timer that has fired is not there any more, so nothing can list it as on, reach it
+    # by name, or start it again from its group.
+    sink, engine, clock = _engine_with_clock()
+    api = ScriptApi(engine, source="probe")
+    api.add_named_timer("once", 5, lambda: sink.sent.append("once"), every=None, group="combat")
+    clock.fire()
+    assert sink.sent == ["once"]
+    assert clock.live() == []
+    assert engine.named_timer("once") is None
+    engine.set_group_enabled("combat", True)  # nothing left to start
+    assert clock.live() == []
+
+
+def test_a_daily_timer_asks_the_clock_when_it_is_armed_again():
+    # Registered at 01:00 for 03:00, disconnected from 02:30 to 02:45: it should fire at 03:00,
+    # not 04:45. The wait is asked for at arm time, not kept from registration.
+    from datetime import datetime, time
+
+    sink, engine, clock = _engine_with_clock()
+    asked: list[datetime] = []
+
+    def next_delay() -> float:
+        asked.append(datetime.now())
+        return 1234.0
+
+    api = ScriptApi(engine, source="probe")
+    api.add_named_timer("dawn", 7200, lambda: None, next_delay=next_delay, enabled=False)
+    engine.set_timer_enabled("dawn", True)
+    assert asked, "arming must ask the clock"
+    assert clock.live()[0].delay == 1234.0
+    assert time(0, 0) < datetime.now().time()
+
+
+def test_a_fired_timer_does_not_leave_its_handle_being_tracked():
+    # A one-second timer that ran for an hour used to leave 3,601 tracked handles behind.
+    sink, engine, clock = _engine_with_clock()
+    api = ScriptApi(engine, source="probe")
+    api.add_named_timer("tick", 1, lambda: None, every=1)
+    for _ in range(50):
+        clock.fire()
+    assert len(engine._timer_handles) == 1  # only the one still pending
+
+
+def test_named_timers_have_the_floor_and_the_ceiling():
+    from genericmud.automation.engine import MAX_NAMED_TIMERS, MIN_TIMER_DELAY
+
+    sink, engine, clock = _engine_with_clock()
+    api = ScriptApi(engine, source="probe")
+    api.add_named_timer("fast", 0, lambda: None, every=0)
+    assert clock.live()[0].delay >= MIN_TIMER_DELAY
+
+    for number in range(MAX_NAMED_TIMERS + 5):
+        api.add_named_timer(f"t{number}", 60, lambda: None)
+    assert len(engine._named_timers) == MAX_NAMED_TIMERS
+
+
+def test_a_lua_add_timer_callback_that_raises_is_reported_and_survives(tmp_path):
+    pytest.importorskip("lupa")
+    from genericmud.scripting.lua_runtime import LuaPackRuntime
+
+    sink, engine, clock = _engine_with_clock()
+    runtime = LuaPackRuntime(ScriptApi(engine, source="probe"))
+    runtime.run_source(
+        'mud.add_timer("boom", 5, function() error("boom") end, {every=5})'
+    )
+    clock.fire()
+    # The error is the guard's business, not the crash log's: it is spoken, and the timer lives.
+    assert any("Lua script error" in said for said, *_ in sink.spoken)
+    assert engine.named_timer("boom") is not None
+    assert clock.live(), "a repeating timer must survive a callback that raised"
+
+
+def test_two_unlabelled_timers_with_one_schedule_get_their_own_names(tmp_path):
+    # Two sixty-second timers taking turns are both "every 60 seconds", and sharing one name
+    # left one of them unreachable and the other overwritten on every reload.
+    from genericmud.packs.user_rules import timer_name
+
+    first = UserTimer(every=60, send="look")
+    second = UserTimer(every=60, send="score")
+    assert timer_name(first, 0) != timer_name(second, 1)
+    assert timer_name(first, 0).startswith("timer 60s")
+
+
+def test_a_spent_one_shot_is_dropped_from_the_saved_rules():
+    # MUSHclient's one-shot deletes itself when it fires, and its world file is written from the
+    # live list, so the file loses it at the next save. This is that, for a world's rules.
+    from genericmud.packs.user_rules import UserRules, drop_spent_one_shots, timer_name
+
+    once = UserTimer(every=60, send="look", one_shot=True)
+    always = UserTimer(every=60, send="score")
+    rules = UserRules(timers=[once, always])
+    removed = drop_spent_one_shots(rules, {timer_name(once, 0)})
+    assert removed == [timer_name(once, 0)]
+    assert rules.timers == [always]
+
+
+def test_a_timer_that_is_not_a_one_shot_is_never_dropped():
+    from genericmud.packs.user_rules import UserRules, drop_spent_one_shots, timer_name
+
+    repeating = UserTimer(every=60, send="score")
+    rules = UserRules(timers=[repeating])
+    assert drop_spent_one_shots(rules, {timer_name(repeating, 0)}) == []
+    assert rules.timers == [repeating]
+
+
+def test_the_engine_remembers_a_spent_one_shot_and_forgets_it_on_reload(tmp_path):
+    sink, engine, clock = _engine_with_clock()
+    api = ScriptApi(engine, source="user", base_dir=str(tmp_path))
+    api.add_named_timer("once", 5, lambda: None, every=None)
+    clock.fire()
+    assert engine.spent_one_shots == {"once": "user"}
+    engine.remove_source("user")  # the manager has saved by now
+    assert engine.spent_one_shots == {}

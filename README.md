@@ -528,7 +528,9 @@ The shortcut has to be a word of its own, so `sh` never takes `shout`.
 
 A **timer** fires every so often (`every 30 seconds`) or once a day at a time
 (`03:00`), and answers the same question the other rules do: a text and a **Send it to**
-target. **Do it once only** makes it a one-shot. It has a **Label** and a **Group**
+target. **Do it once only** makes it a one-shot: it runs once and is then removed, from the running
+automation and from the saved rules when they are next saved, which is what MUSHclient does with
+a one-shot timer. It has a **Label** and a **Group**
 like triggers and aliases, so a script switches it by name or with its group.
 
 Timers are named things in the engine, which is what makes that possible, and the names

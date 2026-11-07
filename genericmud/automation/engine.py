@@ -230,6 +230,12 @@ def _named(match: re.Match[str]) -> dict[str, str]:
     return {name: value if value is not None else "" for name, value in match.groupdict().items()}
 
 
+# One named timer may not wait less than this, and there may be no more than this many:
+# the same floor and ceiling the unnamed timers have had since they existed.
+MIN_TIMER_DELAY = 0.01
+MAX_NAMED_TIMERS = 1000
+
+
 class _NamedTimer:
     """One named timer: when to fire, what to do, and whether it is on.
 
@@ -267,7 +273,10 @@ class _NamedTimer:
         self.disarm()
         if not self.enabled:
             return
-        self._pending = self._engine.schedule_timer(self.delay, self._fire, source=self.source)
+        # A time-of-day timer asks the clock when it is armed, not when it was made: armed at
+        # 01:00 for 03:00, then paused from 02:30 to 02:45, it has to fire at 03:00.
+        delay = self.next_delay() if self.next_delay is not None else self.delay
+        self._pending = self._engine.schedule_timer(delay, self._fire, source=self.source)
 
     def disarm(self) -> None:
         if self._pending is not None:
@@ -278,7 +287,9 @@ class _NamedTimer:
             self._pending = None
 
     def _fire(self) -> None:
-        self._pending = None
+        spent, self._pending = self._pending, None
+        if spent is not None:
+            self._engine.discard_timer(spent)  # it has fired; there is nothing to cancel
         if not self.enabled:
             return
         self.callback()
@@ -292,13 +303,29 @@ class _NamedTimer:
             self._pending = self._engine.schedule_timer(
                 self.every, self._fire, source=self.source
             )
+        else:
+                # A one-shot has done its job, so it goes -- which is what MUSHclient does with one.
+            # Leaving it in the list would have it answer "on" to the manager and "yes" to
+            # is_rule_enabled, and switching its group would start it running again. The name is
+            # remembered so the saved rules can lose it too.
+            self._engine.note_spent_one_shot(self.name, self.source)
+            self._engine.remove_named_timer(self.name)
 
-    def set_enabled(self, enabled: bool) -> None:
-        self.enabled = enabled
-        if enabled:
+    def set_enabled(self, enabled: bool) -> bool:
+        """Switch the timer on or off; True when that changed something.
+
+        MUSHclient's EnableTimer returns early when nothing changes, and so does this: a prompt
+        trigger that switches its group on every ten seconds would otherwise restart every
+        timer in it, and a thirty-second timer would never fire.
+        """
+        if bool(enabled) == self.enabled:
+            return False
+        self.enabled = bool(enabled)
+        if self.enabled:
             self.arm()
         else:
             self.disarm()
+        return True
 
 
 def _cancel_pending(entry: tuple[object, str, Callable[[], None] | None]) -> None:
@@ -368,7 +395,11 @@ def _heard(
 class AutomationEngine:
     def __init__(self, sink: EngineSink | None = None, *, sound: SoundBus | None = None) -> None:
         self.sink = sink or EngineSink()
-        self._named_timers: list[_NamedTimer] = []  # named timers, findable by name and group
+        # named timers, findable by name and group
+        self._named_timers: list[_NamedTimer] = []
+        # timer name -> source, for one-shots that have fired: the manager drops those from
+        # the rules it saves, the way MUSHclient's own timer list loses them.
+        self.spent_one_shots: dict[str, str] = {}
         self._triggers: list[_Rule] = []
         self._aliases: list[_Rule] = []
         self._keys: dict[str, Callback] = {}  # effective binding (last writer wins)
@@ -492,15 +523,40 @@ class AutomationEngine:
         one-shot). MUSHclient's timer model: a named thing with a group, an on/off switch and
         a send-to action, which a script or a rule can start and stop.
         """
+        if len(self._named_timers) >= MAX_NAMED_TIMERS and self.named_timer(name) is None:
+            # The same ceiling the unnamed timers have: thousands of pending timers starve the
+            # event loop, and a script that adds one per line would get there.
+            if self.diag is not None:
+                self.diag.event(
+                    "timer.refused", source=source or "?", limit=MAX_NAMED_TIMERS
+                )
+            return None
         timer = _NamedTimer(
             self, name, delay, callback, every=every, next_delay=next_delay,
             group=group, source=source,
         )
+        timer.delay = max(MIN_TIMER_DELAY, float(delay))
+        # Replacing a timer by name has to stop the one it replaces: otherwise the old handle
+        # keeps firing and nothing can reach it, and mud.add_timer("tick", ...) three times
+        # leaves three timers running.
+        replaced = self.named_timer(name)
+        if replaced is not None:
+            replaced.disarm()
         self._named_timers = [t for t in self._named_timers if t.name != name]
         self._named_timers.append(timer)
-        if enabled:
+        timer.enabled = bool(enabled)
+        if timer.enabled:
             timer.arm()
         return timer
+
+    def note_spent_one_shot(self, name: str, source: str) -> None:
+        """Remember that a one-shot has fired, so the rules it came from can drop it.
+
+        MUSHclient deletes a one-shot timer when it fires, and its world file is written from the
+        live list, so the timer is gone from that file at the next save. This is that memory: the
+        manager takes the names for its own rules and saves the file without them.
+        """
+        self.spent_one_shots[str(name)] = str(source)
 
     def named_timer(self, name: str) -> _NamedTimer | None:
         for timer in self._named_timers:
@@ -540,8 +596,7 @@ class AutomationEngine:
                 rule.enabled = enabled
                 changed += 1
         for timer in self._named_timers:
-            if timer.group == group:
-                timer.set_enabled(enabled)
+            if timer.group == group and timer.set_enabled(enabled):
                 changed += 1
         return changed
 
@@ -628,6 +683,18 @@ class AutomationEngine:
             self._keys = {key: callback for key, _source, callback in self._key_bindings}
         self._data_watches = [watch for watch in self._data_watches if watch.source != source]
         self.channels.remove_source(source)
+        # A named timer is a rule of the reloading source too: cancel it and forget it, or the
+        # old one stays in the list looking armed (its handle was cancelled behind its back) and
+        # answers "is this rule on?" as if it were still running.
+        # What this source's one-shots have already done is no longer news once its rules are
+        # written and reloaded.
+        self.spent_one_shots = {
+            name: origin for name, origin in self.spent_one_shots.items() if origin != source
+        }
+        retired = [timer for timer in self._named_timers if timer.source == source]
+        self._named_timers = [t for t in self._named_timers if t.source != source]
+        for timer in retired:
+            timer.disarm()
         self.cancel_source_timers(source)
 
     def delete_var(self, name: str) -> None:

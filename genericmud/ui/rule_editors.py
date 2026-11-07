@@ -526,7 +526,16 @@ class DataRuleEditorDialog(_RuleEditorBase):
 
 
 class TimerEditorDialog(_RuleEditorBase):
-    def __init__(self, parent: wx.Window, timer: UserTimer) -> None:
+    def __init__(
+        self,
+        parent: wx.Window,
+        timer: UserTimer,
+        *,
+        labels: set[str] | None = None,
+    ) -> None:
+        # The labels already taken, so two timers cannot be saved under one name: that name is
+        # how a script and a group reach a timer, and the engine keeps one timer per name.
+        self._taken_labels = {label for label in (labels or set()) if label}
         super().__init__(
             parent, title="Timer", style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER
         )
@@ -535,6 +544,9 @@ class TimerEditorDialog(_RuleEditorBase):
         grid = self._grid()
         self._label = self._text(
             grid, "&Label (a script turns it off and on by this name):", timer.label
+        )
+        self._group = self._text(
+            grid, "&Group (rules sharing a name switch together):", timer.group
         )
         self._kind = wx.RadioBox(
             self, label="&When it fires",
@@ -587,6 +599,7 @@ class TimerEditorDialog(_RuleEditorBase):
             one_shot=self._one_shot.GetValue(),
             send=self._send.GetValue().strip(),
             send_to=SEND_TO_CHOICES[self._send_to.GetSelection()],
+            group=self._group.GetValue().strip(),
             omit_log=self._omit_log.GetValue(),
         )
 
@@ -601,6 +614,13 @@ class TimerEditorDialog(_RuleEditorBase):
 
     def _refusal(self) -> tuple[str, wx.Window] | None:
         """Why this timer cannot be saved yet, in the words the player needs."""
+        label = self._label.GetValue().strip()
+        if label and label in self._taken_labels:
+            return (
+                f"Another timer is already called {label!r}. A timer's label is how a script "
+                "and a group reach it, so two timers cannot share one.",
+                self._label,
+            )
         if self._kind.GetSelection() == 1:
             if at_time(self._at.GetValue()) is None:
                 return (

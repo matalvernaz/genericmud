@@ -12,6 +12,7 @@ import wx
 
 from genericmud import help_text
 from genericmud.automation.engine import AutomationEngine
+from genericmud.packs import user_rules
 from genericmud.packs.user_rules import (
     UserAlias,
     UserChannel,
@@ -356,6 +357,19 @@ class AutomationManagerDialog(wx.Dialog):
     def _save_and_reload_rules(self, select: int | None = None) -> bool:
         if self._pack_dir is None:
             return False
+        # A one-shot that has fired is not saved to run again, which is what MUSHclient does with
+        # one: its timer list loses it when it fires, so its file loses it at the next save.
+        engine = getattr(getattr(self._panel, "app", None), "engine", None)
+        if engine is not None:
+            spent = {
+                name
+                for name, origin in engine.spent_one_shots.items()
+                if origin == user_rules.SOURCE
+            }
+            removed = user_rules.drop_spent_one_shots(self._rules, spent) if spent else []
+            app = getattr(self._panel, "app", None)
+            if removed and app is not None and app.diag is not None:
+                app.diag.event("user_rules.one_shots_spent", names=removed)
         try:
             register_rules(
                 ScriptApi(
@@ -389,7 +403,12 @@ class AutomationManagerDialog(wx.Dialog):
         elif kind == "data":
             dialog = DataRuleEditorDialog(self, self._pack_dir, rule, variables=variables)
         elif kind == "timer":
-            dialog = TimerEditorDialog(self, rule)
+            taken = {
+                other.label.strip()
+                for other in self._rules.timers
+                if other is not rule and other.label.strip()
+            }
+            dialog = TimerEditorDialog(self, rule, labels=taken)
         else:
             dialog = ChannelEditorDialog(self, rule)
         try:

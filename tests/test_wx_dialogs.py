@@ -2083,3 +2083,34 @@ def test_a_daily_timer_cannot_keep_an_interval_in_its_pocket(frame):
         assert (saved.at, saved.every) == ("12:00", 0.0)
     finally:
         dialog.Destroy()
+
+
+def test_the_timer_editor_keeps_its_group(frame):
+    from genericmud.packs.user_rules import UserTimer
+    from genericmud.ui.rule_editors import TimerEditorDialog
+
+    dialog = TimerEditorDialog(frame, UserTimer(send="look", every=5, group="combat"))
+    try:
+        assert dialog._group.GetValue() == "combat"
+        assert dialog.result().group == "combat"
+        dialog._group.SetValue("movement")
+        assert dialog.result().group == "movement"
+    finally:
+        dialog.Destroy()
+
+
+def test_the_timer_editor_refuses_a_label_another_timer_has(frame):
+    from genericmud.packs.user_rules import UserTimer
+    from genericmud.ui.rule_editors import TimerEditorDialog
+
+    dialog = TimerEditorDialog(frame, UserTimer(send="look", every=5), labels={"drink"})
+    try:
+        dialog._label.SetValue("drink")
+        refusal = dialog._refusal()
+        assert refusal is not None
+        assert "already called" in refusal[0]
+        assert refusal[1] is dialog._label
+        dialog._label.SetValue("drink-water")
+        assert dialog._refusal() is None
+    finally:
+        dialog.Destroy()
