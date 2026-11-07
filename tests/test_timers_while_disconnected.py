@@ -272,3 +272,53 @@ def test_the_editor_keeps_the_flag(tmp_path):
 
     listed = _rule_summary("timer", timer)
     assert "runs while disconnected" in listed
+
+
+def test_rules_saved_while_disconnected_leave_one_timer_not_two():
+    # A save while the world is down reloads the rules: the old timer is in the paused list,
+    # and the new one used to start at once and then meet the old one coming back on
+    # reconnect, so the command went out twice as often.
+    engine, sink = _engine()
+    fired: list[str] = []
+    api = ScriptApi(engine, source="user")
+    api.add_named_timer("score", 60, lambda: fired.append("old"), every=60)
+    engine.suspend_timers()
+    engine.remove_source("user")
+    api.add_named_timer("score", 60, lambda: fired.append("new"), every=60)
+    assert [h for h in sink.handles if not h.cancelled] == []  # waits for the world
+    engine.resume_timers()
+    live = [h for h in sink.handles if not h.cancelled]
+    assert len(live) == 1
+    live[0].fire()
+    assert fired == ["new"]
+
+
+def test_a_timer_switched_on_while_disconnected_waits_for_the_world():
+    engine, sink = _engine()
+    api = ScriptApi(engine, source="user")
+    api.add_named_timer("potion", 30, lambda: None, every=30, enabled=False)
+    engine.suspend_timers()
+    assert engine.set_enabled("potion", True) is True
+    assert [h for h in sink.handles if not h.cancelled] == []
+    engine.resume_timers()
+    assert len([h for h in sink.handles if not h.cancelled]) == 1
+
+
+def test_a_timer_that_cannot_send_says_so_once_while_the_world_is_down(tmp_path):
+    # While a reconnect is being tried, or with "keep running" ticked, a timer's commands have
+    # nowhere to go. Dropping them without a word was the one failure nobody could hear.
+    sink, engine = _timer_rules(
+        tmp_path, UserTimer(label="alert", every=5, send="look", run_disconnected=True)
+    )
+    _delay, callback = sink.scheduled[0]
+    callback()
+    callback()
+    said = [text for text, _channel, _interrupt in sink.spoken if "disconnected" in text]
+    assert said == ["Timer alert did not send look: the world is disconnected."]
+    engine.connected = True
+    callback()
+    assert sink.sent == ["look"]
+    engine.connected = False
+    callback()
+    said = [text for text, _channel, _interrupt in sink.spoken if "disconnected" in text]
+    assert len(said) == 2  # said again for the next time the world goes down

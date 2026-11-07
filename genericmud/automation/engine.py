@@ -309,6 +309,13 @@ class _NamedTimer:
         self.disarm()
         if not self.enabled:
             return
+        if self._engine.timers_suspended and not self.while_disconnected:
+            # The world is down: start with the other paused timers when it comes back, not
+            # now. A timer made or switched on during the outage otherwise runs straight away
+            # and then meets its own old copy when the paused ones resume.
+            if self not in self._engine._paused_timers:
+                self._engine._paused_timers.append(self)
+            return
         # A time-of-day timer asks the clock when it is armed, not when it was made: armed at
         # 01:00 for 03:00, then paused from 02:30 to 02:45, it has to fire at 03:00.
         delay = self.next_delay() if self.next_delay is not None else self.delay
@@ -521,6 +528,8 @@ class AutomationEngine:
         self._timer_handles: list[_PendingTimer] = []
         # The named timers a disconnect paused, so resume_timers() can start them again.
         self._paused_timers: list[_NamedTimer] = []
+        # True between suspend_timers() and resume_timers(): a timer armed then waits with them.
+        self.timers_suspended = False
 
     # --- registration ---
 
@@ -915,6 +924,8 @@ class AutomationEngine:
         }
         retired = [timer for timer in self._named_timers if timer.source == source]
         self._named_timers = [t for t in self._named_timers if t.source != source]
+        # A reload while the world is down must not leave the old copy waiting to resume.
+        self._paused_timers = [t for t in self._paused_timers if t.source != source]
         for timer in retired:
             timer.disarm()
         self.cancel_source_timers(source)
@@ -1123,6 +1134,7 @@ class AutomationEngine:
             timer for timer in self._named_timers
             if timer.enabled and timer.armed and not timer.while_disconnected
         ]
+        self.timers_suspended = True
         for timer in newly_paused:
             timer.disarm()  # takes its handle out of the tracking list too
         # Added, never replaced: a world that says it dropped twice must not lose the timers the
@@ -1136,6 +1148,7 @@ class AutomationEngine:
     def resume_timers(self) -> None:
         """The world is back: start the paused timers again, each with its wait from now."""
         paused, self._paused_timers = self._paused_timers, []
+        self.timers_suspended = False
         for timer in paused:
             timer.arm()
 

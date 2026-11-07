@@ -178,6 +178,9 @@ offset is how many seconds before its interval is up it fires, so two timers on 
 same interval take turns. Keep running while the world is disconnected lets it keep its
 clock while nothing is connected: then it can still note, log, store a value or run a
 script, which is how it speaks, but commands have nowhere to go.
+A timer whose commands can't be sent because the world is down says so, once each time.
+Other timers pause when the world disconnects and carry on when it is back. While
+genericMud is still trying to reconnect, timers keep running.
 
 Trigger, alias, and hotkey command fields accept one command per line. ${1}
 means the first matched part. ${script:attack} reads a value saved by a script.

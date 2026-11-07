@@ -539,8 +539,9 @@ one call switches them all. `while_disconnected` is MUSHclient's ActiveWhenClose
 keeps its clock when the world drops, which only makes sense for what a rule can do without a
 MUD to send to -- a note, a log line, a value, a script.
 
-A named timer that does not ask to keep going waits for the world to come back and then carries
-on from that moment. A one-shot `mud.timer` is gone: a dropped connection cancels it, because
+A named timer that does not ask to keep going pauses when the world disconnects and carries on
+from the moment it comes back. While genericMud is still trying to reconnect, named timers keep
+their clocks; a timer rule whose commands can't be sent then says so once. A one-shot `mud.timer` is gone: a dropped connection cancels it, because
 there is nothing to resume it into.
 
 For a timer at a time of day, use a rule in the Automation Manager (Ctrl+B): its **At this
