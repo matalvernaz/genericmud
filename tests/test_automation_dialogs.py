@@ -794,3 +794,33 @@ def test_a_second_press_while_a_switch_is_on_its_way_says_so(
         assert _on_loop(loop, lambda: engine.named_timer("b").enabled) is False
     finally:
         manager.Destroy()
+
+
+def test_deleting_an_unlabelled_timer_leaves_the_others_their_own_state(
+    frame, tmp_path, monkeypatch
+):
+    # Unlabelled timers are named by their place in the file. Deleting one moves the rest up,
+    # so asking the engine by place after the delete, before the reload had run, gave a timer
+    # the state of the one deleted above it, and the save wrote that down.
+    from genericmud.packs.user_rules import UserRules, UserTimer, load_rules
+
+    rules = UserRules(
+        timers=[UserTimer(every=60, send="drink water"), UserTimer(every=60, send="eat bread")]
+    )
+    panel, engine, loop = _live_session(tmp_path, rules)
+    assert engine.set_timer_enabled("timer 60s #2", False) is True  # a script parked it
+    spoken: list[str] = []
+    monkeypatch.setattr(wx, "MessageBox", lambda *_args, **_kwargs: wx.YES)
+    manager = _manager(frame, panel, "timer", monkeypatch, spoken)
+    try:
+        assert _rows(manager)[1].startswith("Disabled. ")
+        manager._list.SetSelection(0)
+        manager._on_delete(None)
+        assert [timer.enabled for timer in load_rules(tmp_path).timers] == [False]
+        assert _rows(manager)[0].startswith("Disabled. ")
+        loop.run()  # the session reloads the saved rules
+        manager._refresh()
+        assert _rows(manager)[0].startswith("Disabled. ")
+        assert [timer.enabled for timer in load_rules(tmp_path).timers] == [False]
+    finally:
+        manager.Destroy()

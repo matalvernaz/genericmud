@@ -290,6 +290,10 @@ class AutomationManagerDialog(wx.Dialog):
         self._announce = announce or (lambda _text: None)
         self._pack_dir = panel.app.user_rules_dir() if panel.app is not None else None
         self._rules = load_rules(self._pack_dir) if self._pack_dir else UserRules()
+        # An unlabelled timer is known to the engine by its place in the file. Once a timer is
+        # deleted the places here no longer match the engine's until its reload has run, and
+        # asking by place in between would give a timer the state of the one that moved away.
+        self._timer_places_stale = False
         self._selections: dict[str, int] = {}
         # The script rules the list shows, as read from the session when it was drawn: a row
         # and its button act on the rule the player heard, even if a script has since changed
@@ -521,6 +525,8 @@ class AutomationManagerDialog(wx.Dialog):
             ("timer", self._rules.timers), ("key", self._rules.keys),
             ("data", self._rules.watches),
         ):
+            if kind == "timer" and self._timer_places_stale:
+                continue  # read before the places moved; the reload has not caught up yet
             for index, rule in enumerate(collection):
                 if rule is except_rule:
                     continue
@@ -630,6 +636,9 @@ class AutomationManagerDialog(wx.Dialog):
         """
         if self._pack_dir is None:
             return False
+        # The engine's word first, while the places still match: dropping a spent one-shot
+        # below moves the timers after it.
+        self._sync_from_engine(except_rule=just_edited)
         # A one-shot that has fired is not saved to run again, which is what MUSHclient does with
         # one: its timer list loses it when it fires, so its file loses it at the next save.
         engine = getattr(getattr(self._panel, "app", None), "engine", None)
@@ -640,10 +649,11 @@ class AutomationManagerDialog(wx.Dialog):
                 if origin == user_rules.SOURCE
             }
             removed = user_rules.drop_spent_one_shots(self._rules, spent) if spent else []
+            if removed:
+                self._timer_places_stale = True
             app = getattr(self._panel, "app", None)
             if removed and app is not None and app.diag is not None:
                 app.diag.event("user_rules.one_shots_spent", names=removed)
-        self._sync_from_engine(except_rule=just_edited)
         try:
             register_rules(
                 ScriptApi(
@@ -659,12 +669,26 @@ class AutomationManagerDialog(wx.Dialog):
                 wx.OK | wx.ICON_ERROR, self,
             )
             self._rules = load_rules(self._pack_dir)
+            self._timer_places_stale = False  # back to the file the engine is running
             self._refresh()
             return False
         if self._panel.app is not None:
-            self._panel._loop.call_soon_threadsafe(self._panel.app.reload_user_rules)
+            app = self._panel.app
+
+            def reload() -> None:  # loop thread
+                try:
+                    app.reload_user_rules()
+                finally:
+                    wx.CallAfter(self._timer_places_caught_up)
+
+            self._panel._loop.call_soon_threadsafe(reload)
         self._refresh(select, except_rule=just_edited)
         return True
+
+    def _timer_places_caught_up(self) -> None:
+        """The session has reloaded the saved rules, so a timer's place means the same again."""
+        if self:  # the manager may have closed while the reload ran
+            self._timer_places_stale = False
 
     def _edit_rule(self, kind: str, rule):
         variables = self._panel.variable_snapshot
@@ -842,7 +866,12 @@ class AutomationManagerDialog(wx.Dialog):
             wx.YES_NO | wx.ICON_QUESTION, self,
         ) != wx.YES:
             return
+        # Ask the engine while the places still match it: once a timer is gone, the ones after
+        # it move up, and the engine only learns their new places from the reload.
+        self._sync_from_engine()
         del self._collection(kind)[index]
+        if kind == "timer":
+            self._timer_places_stale = True
         if self._save_and_reload_rules(index):
             self._announce(f"{word} deleted.")
 
