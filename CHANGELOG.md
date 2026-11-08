@@ -8,6 +8,22 @@ fails the build on purpose.
 
 Entries start at 0.7.1. Earlier releases were tagged before this file existed.
 
+## 0.27.0 — 2026-11-08
+
+**Ignore capitals**, from MasterJake00
+
+* Triggers and aliases have an Ignore capitals box (Alt+Y), so a rule written `brady` also
+  catches "Brady pages:". It's ticked on every new rule. Rules you saved before this
+  version keep matching capitals exactly, the way MUSHclient and VIPMud match, until you
+  tick the box for them.
+
+**Soundpack updates**
+
+* Update in Manage soundpacks now says when a pack's download has nothing new, and leaves
+  the pack as it is. Before, it replaced the pack's folder with the same files and said
+  Updated, and anything the pack had saved in its own folder was lost. Packs that update
+  file by file, like Miriani-Next and Erion, aren't affected.
+
 ## 0.26.0 — 2026-11-07
 
 **Timers, groups, an order for your rules, and somewhere to send their text**, from MasterJake00
