@@ -216,9 +216,10 @@ A hotkey's Send it to box works the same way, so a key can write a note or store
 instead of sending a command.
 
 From your scripts lists the rules your Lua made with mud.trigger, mud.alias,
-mud.key, mud.timer, mud.add_timer or mud.on_data: what each one is, what it matches,
+mud.key, mud.add_timer or mud.on_data: what each one is, what it matches,
 and whether it is on. It can be read and switched off, never edited, because the
-script's own text is the only copy of a rule it made.
+script's own text is the only copy of a rule it made. There, Enter, Delete and Ctrl+N
+say so instead of acting. A mud.timer is not listed: it has no name, and it runs once.
 
 Choose Duplicate to start from a copy. Disable keeps an item saved without
 letting it run, and every editor has the same switch as the Enabled box at its top,

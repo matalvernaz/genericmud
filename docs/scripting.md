@@ -43,6 +43,8 @@ Keyboard shortcuts inside the manager:
 - **Enter** edits the selected item.
 - **Delete** deletes the selected item after confirmation.
 - **F2** renames the selected script.
+- Under **From your scripts**, Enter, Delete and Ctrl+N say why they don't apply
+  there: a rule a script made is changed in the script.
 
 ## Make an alias without writing code
 
@@ -824,10 +826,12 @@ Rules and timing:
 The alias and trigger options are `regex` and `priority`, plus `label` and `group`.
 A trigger can also use `channel`. A label is the name a rule is switched by --
 `mud.set_enabled("shoot", false)` -- and the manager reads it out first; a group is what
-`mud.set_group_enabled` switches as one. `mud.key` takes a `group` too, and a trigger or
-alias a script makes shows up in the manager under From your scripts, unless it has been
-switched off there. The `mud.add_timer` options are `every`, `offset`, `group`, `enabled`
-and `while_disconnected`. The only `mud.on_data` option is `changes`.
+`mud.set_group_enabled` switches as one. `mud.key` takes a `group` too. A trigger, alias,
+hotkey, `mud.add_timer` timer or `mud.on_data` rule a script makes shows up in the manager
+under From your scripts, where it can be switched off and on but not edited; a `mud.timer`
+has no name and runs once, so it is not listed there. The `mud.add_timer` options are
+`every`, `offset`, `group`, `enabled` and `while_disconnected`. The only `mud.on_data` option
+is `changes`.
 
 Commands and output:
 

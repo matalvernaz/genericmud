@@ -714,12 +714,15 @@ end)
 ```
 
 **From your scripts** lists the rules your Lua made -- `mud.trigger`, `mud.alias`,
-`mud.key`, `mud.timer`, `mud.add_timer`, `mud.on_data` -- one line each saying what it
+`mud.key`, `mud.add_timer`, `mud.on_data` -- one line each saying what it
 is, what it matches, whether it is on, and its group. It is read-only apart from
 Disable/Enable, and deliberately: the script's text is the only copy of a rule it
-made, so an edit here would be undone the next time the script loads. Without the
+made, so an edit here would be undone the next time the script loads. Enter, Delete
+and Ctrl+N say so there instead of doing nothing. Without the
 list a rule a script got wrong would be invisible -- it either fires when it should
-not or does nothing, and the diagnostic log is the only other clue.
+not or does nothing, and the diagnostic log is the only other clue. A `mud.timer` is
+not listed: it has no name, and it runs once and is gone. A timer you want to see and
+switch is a `mud.add_timer`.
 
 Read the [step-by-step automation and scripting guide](docs/scripting.md) for
 plain-language instructions, copyable examples, and the full Lua API. The same

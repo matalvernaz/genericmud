@@ -5,6 +5,7 @@ All six kinds in one dialog, with the script editor it opens.
 
 from __future__ import annotations
 
+import concurrent.futures
 from dataclasses import replace
 from pathlib import Path
 
@@ -54,6 +55,24 @@ _DESTINATION_WORDS = {
     "execute": ("run {text} as if typed", "runs {text} as if typed"),
     "script": ("run script {text}", "runs script {text}"),
     "variable": ("store {text} in variable {name}", "stores {text} in variable {name}"),
+}
+
+# Where a world's own scripts register their rules: its script files, and the code a rule sends
+# to a script. "From your scripts" lists what came from these.
+_SCRIPT_SOURCES = (user_scripts.SOURCE_PREFIX, rule_scripts.RULE_SOURCE)
+# How long the list waits for the session's loop to answer before saying it is busy, as long as
+# the variables window waits.
+_SESSION_ANSWER_TIMEOUT_S = 2.0
+# Why each way of making or changing a rule does nothing under "From your scripts". The script's
+# text is the only copy of a rule it made, so a change here would be undone when it next loads.
+_SCRIPT_RULE_REFUSALS = {
+    "new": "Rules from scripts can't be made here; write them in a script, under Scripts.",
+    "edit": "Rules from scripts can't be edited here; change the script.",
+    "duplicate": "Rules from scripts can't be duplicated here; change the script.",
+    "delete": (
+        "Rules from scripts can't be deleted here; change the script, or press Disable to "
+        "switch one off."
+    ),
 }
 
 
@@ -179,6 +198,12 @@ def _live_rule_line(rule) -> str:
     return f"{status}{named}{what} from a script{grouped}: {rule.summary}"
 
 
+def _live_rule_name(rule) -> str:
+    """A rule a script made, as an announcement names it: its name if it has one, and what it
+    matches, since two timers on one interval read the same without their names."""
+    return f"{rule.name}: {rule.summary}" if rule.name else rule.summary
+
+
 class AutomationManagerDialog(wx.Dialog):
     """Manage every kind of per-world automation in one accessible dialog."""
 
@@ -221,15 +246,18 @@ class AutomationManagerDialog(wx.Dialog):
         ),
         (
             "live", "From your scripts — what a script registered",
-            "Rules your Lua scripts made with mud.trigger, mud.alias, mud.key, mud.timer, "
-            "mud.add_timer or mud.on_data. They are listed here so a rule a script got wrong is "
-            "visible, and can be switched off. The script's own text stays where it is, so they "
-            "cannot be edited from this window.",
+            "Rules your Lua scripts made with mud.trigger, mud.alias, mud.key, mud.add_timer "
+            "or mud.on_data. They are listed here so a rule a script got wrong is visible, and "
+            "can be switched off. The script's own text stays where it is, so they cannot be "
+            "edited from this window. A mud.timer is not listed: it has no name, and it runs "
+            "once.",
         ),
     )
     _CATEGORY_WORDS = {
         "trigger": "Triggers", "alias": "Aliases", "key": "Hotkeys", "timer": "Timers",
-        "channel": "Channels", "script": "Scripts", "data": "MUD data", "live": "Script rules",
+        "channel": "Channels", "script": "Scripts", "data": "MUD data",
+        # Not "Script rules": S is the Show box's letter.
+        "live": "Your script rules",
     }
     _KIND_WORD = {
         "trigger": "Trigger", "alias": "Alias", "key": "Hotkey", "timer": "Timer",
@@ -263,6 +291,11 @@ class AutomationManagerDialog(wx.Dialog):
         self._pack_dir = panel.app.user_rules_dir() if panel.app is not None else None
         self._rules = load_rules(self._pack_dir) if self._pack_dir else UserRules()
         self._selections: dict[str, int] = {}
+        # The script rules the list shows, as read from the session when it was drawn: a row
+        # and its button act on the rule the player heard, even if a script has since changed
+        # the engine's own list.
+        self._live_shown: list = []
+        self._live_switch_waiting = False
 
         outer = wx.BoxSizer(wx.VERTICAL)
         introduction = wx.StaticText(
@@ -343,12 +376,19 @@ class AutomationManagerDialog(wx.Dialog):
         }[kind]
 
     def _refresh(
-        self, select: int | str | None = None, *, focus: bool = False, except_rule=None
+        self,
+        select: int | str | None = None,
+        *,
+        focus: bool = False,
+        except_rule=None,
+        live_rules: list | None = None,
     ) -> None:
         """Redraw the list for the category being shown.
 
         ``except_rule`` is a rule saved only now: the reload that gives the engine its new state
         is still waiting on the session's loop, so the engine's word for that one is out of date.
+        ``live_rules`` is the script rules as the session's loop has just read them, when the
+        caller has them; otherwise they are read here.
         """
         # A script may have switched something since the last look.
         self._sync_from_engine(except_rule=except_rule)
@@ -360,7 +400,16 @@ class AutomationManagerDialog(wx.Dialog):
         if kind == "script":
             labels = user_scripts.list_scripts(self._pack_dir) if self._pack_dir else []
         elif kind == "live":
-            labels = [_live_rule_line(rule) for rule in self._live_rules()]
+            shown = live_rules if live_rules is not None else self._read_live_rules()
+            if shown is None:
+                shown = []
+                number = [entry[0] for entry in self._CATEGORIES].index("live") + 1
+                self._announce(
+                    "The session is busy, so the rules your scripts made can't be listed now. "
+                    f"Press Ctrl+{number} to try again."
+                )
+            self._live_shown = shown
+            labels = [_live_rule_line(rule) for rule in shown]
         else:
             labels = [_rule_summary(kind, rule) for rule in self._collection(kind)]
         previous = self._selections.get(kind, 0)
@@ -414,8 +463,8 @@ class AutomationManagerDialog(wx.Dialog):
         self._buttons["rename"].Enable(has_item and is_script)
         self._buttons["reload"].Enable(is_script)
         self._buttons["folder"].Enable(is_script)
-        if has_item and from_script:
-            enabled = self._live_rules()[index].enabled
+        if has_item and from_script and index < len(self._live_shown):
+            enabled = self._live_shown[index].enabled  # the row as drawn, not a fresh read
             self._buttons["toggle"].SetLabel("Disa&ble" if enabled else "E&nable")
         elif has_item and not is_script:
             enabled = self._collection(kind)[index].enabled
@@ -479,16 +528,96 @@ class AutomationManagerDialog(wx.Dialog):
                 if live is not None and live != rule.enabled:
                     collection[index] = replace(rule, enabled=live)
 
-    def _live_rules(self) -> list:
-        """The rules this world's scripts registered, as the engine has them now.
+    def _read_live_rules(self) -> list | None:
+        """The rules this world's scripts registered, read on the session's loop thread.
 
-        Read fresh each time rather than kept: a script can add or drop one at any moment, and a
-        stale copy would list a rule that no longer runs.
+        Read there, not here: the engine belongs to that thread, where a script adds and drops
+        its rules, and a list read from under it could be half changed. The window waits for the
+        answer, as the variables window does (SessionPanel.variable_snapshot), so the list is
+        filled before the screen reader reads it. ``[]`` with no session; None when the loop is
+        busy with a soundpack's question or doesn't answer in time.
         """
         engine = getattr(getattr(self._panel, "app", None), "engine", None)
         if engine is None:
-            return []
-        return engine.live_rules((user_scripts.SOURCE_PREFIX, rule_scripts.RULE_SOURCE))
+            return []  # no session (a test, or a world still opening): nothing to ask
+        if getattr(self._panel, "_questions", None):
+            return None  # the loop is waiting on a soundpack's dialog, so it can't answer
+        answer: concurrent.futures.Future = concurrent.futures.Future()
+
+        def read() -> None:  # loop thread
+            if not answer.set_running_or_notify_cancel():
+                return  # the window stopped waiting
+            try:
+                answer.set_result(engine.live_rules(_SCRIPT_SOURCES))
+            except Exception as error:  # noqa: BLE001 - reported to the UI thread, not lost
+                answer.set_exception(error)
+
+        try:
+            self._panel._loop.call_soon_threadsafe(read)
+            return answer.result(timeout=_SESSION_ANSWER_TIMEOUT_S)
+        except Exception:  # noqa: BLE001 - a timeout, a closed loop or a failed read: say so
+            answer.cancel()
+            return None
+
+    def _switch_live_rule(self, index: int) -> None:
+        """Switch the script rule on that row, on the session's loop thread.
+
+        The row is the rule as it was read when the list was drawn. A script may have dropped it
+        since, so the loop checks the engine still runs it before switching it: switching a
+        timer the engine has let go of would start it again where nothing can reach it. What
+        happened comes back to this thread to be said.
+        """
+        if self._live_switch_waiting:
+            self._announce("Still switching the last one: the session hasn't answered yet.")
+            return
+        if index >= len(self._live_shown):
+            return  # can't happen: the rows are drawn from this list, and only with it
+        engine = getattr(getattr(self._panel, "app", None), "engine", None)
+        if engine is None:
+            return  # without a session the list is empty, so there is no row to act on
+        rule = self._live_shown[index]
+        wanted = not rule.enabled
+
+        def switch() -> None:  # loop thread
+            rows = None
+            try:
+                running = engine.live_rules(_SCRIPT_SOURCES)
+                if any(live.handle is rule.handle for live in running):
+                    engine.set_live_enabled(rule.handle, wanted)
+                    outcome: object = "switched"
+                else:
+                    outcome = "gone"
+                rows = engine.live_rules(_SCRIPT_SOURCES)
+            except Exception as error:  # noqa: BLE001 - said on the UI thread, not lost
+                outcome = error
+            wx.CallAfter(self._live_rule_switched, rule, wanted, outcome, rows)
+
+        self._live_switch_waiting = True
+        try:
+            self._panel._loop.call_soon_threadsafe(switch)
+        except RuntimeError as error:  # the loop has closed: the session is gone
+            self._live_switch_waiting = False
+            self._announce(f"Script rule {_live_rule_name(rule)} was not switched: {error}.")
+
+    def _live_rule_switched(self, rule, wanted: bool, outcome: object, rows) -> None:  # UI
+        """Say what the switch did, then redraw the list from the session's answer."""
+        self._live_switch_waiting = False
+        name = _live_rule_name(rule)
+        if outcome == "switched":
+            self._announce(f"Script rule {name} {'enabled' if wanted else 'disabled'}.")
+        elif outcome == "gone":
+            self._announce(
+                f"Script rule {name} was not switched: its script has removed it since the "
+                "list was read."
+            )
+        else:
+            self._announce(f"Script rule {name} was not switched: {outcome}")
+        if not self or self._kind() != "live":
+            return  # the manager has closed, or shows another category; nothing to redraw
+        place = next(
+            (spot for spot, live in enumerate(rows or []) if live.handle is rule.handle), None
+        )
+        self._refresh(place if place is not None else self._selected_index(), live_rules=rows)
 
     def _save_and_reload_rules(
         self, select: int | None = None, *, just_edited=None
@@ -624,7 +753,8 @@ class AutomationManagerDialog(wx.Dialog):
     def _on_new(self, _event: wx.CommandEvent) -> None:
         kind = self._kind()
         if kind == "live":
-            return  # a script's rule has no file to write a new one to
+            self._announce(_SCRIPT_RULE_REFUSALS["new"])
+            return
         if kind == "script":
             self._new_script()
             return
@@ -638,7 +768,8 @@ class AutomationManagerDialog(wx.Dialog):
 
     def _on_edit(self, _event: wx.CommandEvent) -> None:
         if self._kind() == "live":
-            return  # read-only: the script's own text is the only copy
+            self._announce(_SCRIPT_RULE_REFUSALS["edit"])
+            return
         if self._kind() == "script":
             self._edit_selected_script()
             return
@@ -653,7 +784,10 @@ class AutomationManagerDialog(wx.Dialog):
                 self._announce_rule_change(kind, result, f"{self._KIND_WORD[kind]} updated.")
 
     def _on_duplicate(self, _event: wx.CommandEvent) -> None:
-        if self._kind() == "live" or (index := self._selected_index()) is None:
+        if self._kind() == "live":
+            self._announce(_SCRIPT_RULE_REFUSALS["duplicate"])
+            return
+        if (index := self._selected_index()) is None:
             return
         kind = self._kind()
         if kind == "script":
@@ -680,16 +814,7 @@ class AutomationManagerDialog(wx.Dialog):
         if kind == "script" or (index := self._selected_index()) is None:
             return
         if kind == "live":
-            rule = self._live_rules()[index]
-            engine = getattr(getattr(self._panel, "app", None), "engine", None)
-            if engine is None or not engine.set_live_enabled(rule.handle, not rule.enabled):
-                return  # it went away since the list was drawn
-            self._announce_rule_change(
-                kind, rule,
-                f"{self._KIND_WORD[kind]} {rule.summary} "
-                f"{'enabled' if not rule.enabled else 'disabled'}.",
-            )
-            self._refresh(index)
+            self._switch_live_rule(index)
             return
         items = self._collection(kind)
         # The opposite of what the list said, which is what the button said it would do. It is
@@ -703,7 +828,8 @@ class AutomationManagerDialog(wx.Dialog):
 
     def _on_delete(self, _event: wx.CommandEvent) -> None:
         if self._kind() == "live":
-            return  # see _on_edit: switching one off is what the category is for
+            self._announce(_SCRIPT_RULE_REFUSALS["delete"])
+            return
         if self._kind() == "script":
             self._delete_script()
             return

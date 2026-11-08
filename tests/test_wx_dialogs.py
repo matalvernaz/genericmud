@@ -323,7 +323,9 @@ def test_the_manager_shows_a_rule_a_script_switched_off(frame, tmp_path):
         manager.Destroy()
 
 
-def test_the_manager_lists_the_rules_a_script_made_and_only_switches_them(frame, tmp_path):
+def test_the_manager_lists_the_rules_a_script_made_and_only_switches_them(
+    frame, tmp_path, monkeypatch
+):
     # A rule with no file behind it is invisible otherwise: a trigger a script got wrong either
     # fires when it should not or does nothing, and the diagnostic log is the only other clue.
     import types
@@ -341,6 +343,7 @@ def test_the_manager_lists_the_rules_a_script_made_and_only_switches_them(frame,
     api.add_named_timer("tick", 5, lambda: None, every=5)
     api.add_key("f2", lambda _ctx: None)
 
+    spoken: list[str] = []
     panel = types.SimpleNamespace(
         world=World("Test", "mud.example", 4000),
         app=types.SimpleNamespace(
@@ -348,9 +351,12 @@ def test_the_manager_lists_the_rules_a_script_made_and_only_switches_them(frame,
         ),
         variable_snapshot=None,
         _keymap=load_keymap("vipmud"),
-        _loop=types.SimpleNamespace(call_soon_threadsafe=lambda _fn, *_args: None),
+        # The list reads and switches these on the session's loop; this one runs what it is
+        # handed at once. test_automation_dialogs runs them on a real loop thread.
+        _loop=types.SimpleNamespace(call_soon_threadsafe=lambda fn, *args: fn(*args)),
     )
-    manager = automation_manager.AutomationManagerDialog(frame, panel)
+    monkeypatch.setattr(automation_manager.AutomationManagerDialog, "_last_category", 0)
+    manager = automation_manager.AutomationManagerDialog(frame, panel, announce=spoken.append)
     try:
         kinds = [entry[0] for entry in manager._CATEGORIES]
         manager._category.SetSelection(kinds.index("live"))
@@ -370,16 +376,19 @@ def test_the_manager_lists_the_rules_a_script_made_and_only_switches_them(frame,
 
         manager._list.SetSelection(0)
         manager._on_toggle(None)
+        wx.GetApp().ProcessPendingEvents()  # what the switch did comes back by wx.CallAfter
         assert engine.live_rules((user_scripts.SOURCE_PREFIX,))[0].enabled is False
         rows = [manager._list.GetString(index) for index in range(manager._list.GetCount())]
         assert rows[0].startswith("Disabled."), rows[0]
+        assert spoken == ["Script rule You see * disabled."]
 
-        # The keyboard paths that would edit one do nothing, and leave the list as it was.
+        # The keyboard paths that would edit one say why not, and leave the list as it was.
         manager._on_edit(None)
         manager._on_delete(None)
         manager._on_duplicate(None)
         manager._on_new(None)
         assert manager._list.GetCount() == 3
+        assert len(spoken) == 5
     finally:
         manager.Destroy()
 

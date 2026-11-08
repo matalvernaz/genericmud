@@ -7,8 +7,12 @@ real under xvfb, as in test_wx_dialogs.py; none is shown modally.
 
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
 import re
 import sys
+import threading
+import time
 
 import pytest
 
@@ -499,5 +503,294 @@ def test_a_rule_switched_back_on_in_its_editor_reads_as_on_at_once(frame, tmp_pa
         loop.run()
         manager._refresh()
         assert _rows(manager) == ["watched: Trigger: backup: send look"]
+    finally:
+        manager.Destroy()
+
+
+# --- "From your scripts": the rules a script registered --------------------------------------
+
+
+@pytest.fixture
+def session_loop():
+    """A session's asyncio loop on a thread of its own, the way wx_app runs it."""
+    loop = asyncio.new_event_loop()
+    thread = threading.Thread(target=loop.run_forever, daemon=True)
+    thread.start()
+    yield loop, thread
+    loop.call_soon_threadsafe(loop.stop)
+    thread.join(5)
+    loop.close()
+
+
+def _on_loop(loop, action):
+    """Do ``action`` on the loop's thread, where a script does its work, and wait for it."""
+    done: concurrent.futures.Future = concurrent.futures.Future()
+
+    def run() -> None:
+        try:
+            done.set_result(action())
+        except BaseException as error:  # noqa: BLE001 - raised again in the test
+            done.set_exception(error)
+
+    loop.call_soon_threadsafe(run)
+    return done.result(timeout=5)
+
+
+def _pump_until(condition, seconds: float = 5.0) -> bool:
+    """Let the window run its wx.CallAfter work until ``condition()``, for ``seconds`` at most."""
+    deadline = time.monotonic() + seconds
+    while not condition():
+        if time.monotonic() > deadline:
+            return False
+        wx.GetApp().ProcessPendingEvents()
+        time.sleep(0.01)
+    return True
+
+
+def _scripted_session(tmp_path, loop, make):
+    """A panel whose scripts made rules with ``make(api, engine)``, on the loop's thread."""
+    import types
+
+    from genericmud.automation.engine import AutomationEngine, EngineSink
+    from genericmud.config.keymap import load_keymap
+    from genericmud.config.worlds import World
+    from genericmud.scripting import user_scripts
+    from genericmud.scripting.api import ScriptApi
+
+    class LoopSink(EngineSink):
+        def schedule(self, delay, callback):
+            return loop.call_later(delay, callback)  # the session's own clock, as in the app
+
+    engine = AutomationEngine(LoopSink())
+    api = ScriptApi(
+        engine, source=f"{user_scripts.SOURCE_PREFIX}combat.lua", base_dir=str(tmp_path)
+    )
+    _on_loop(loop, lambda: make(api, engine))
+    panel = types.SimpleNamespace(
+        world=World("Test", "mud.example", 4000),
+        app=types.SimpleNamespace(
+            user_rules_dir=lambda: tmp_path, engine=engine, reload_user_rules=lambda: None,
+            diag=None,
+        ),
+        variable_snapshot=None,
+        _keymap=load_keymap("vipmud"),
+        _prefs=types.SimpleNamespace(numpad_compass=False),
+        _loop=loop,
+    )
+    return panel, engine, api
+
+
+def _two_timers(api, _engine) -> None:
+    api.add_trigger("You see *", lambda _ctx: None)
+    api.add_key("f2", lambda _ctx: None)
+    api.add_named_timer("a", 5, lambda: None, every=5)
+    api.add_named_timer("b", 7, lambda: None, every=7)
+
+
+def test_enabling_a_script_timer_from_the_list_starts_it_on_the_sessions_loop(
+    frame, tmp_path, monkeypatch, session_loop
+):
+    # Enable ran on the window's thread, so the timer was armed with a loop call made from the
+    # wrong thread: the loop slept on without hearing of it, and the timer did not fire until
+    # something else woke the session (in asyncio's debug mode, the call raised instead).
+    loop, loop_thread = session_loop
+    fired: list[float] = []
+
+    def make(api, engine) -> None:
+        api.add_named_timer("ping", 0.2, lambda: fired.append(time.monotonic()), every=0.2)
+        engine.set_timer_enabled("ping", False)  # the script switched it off
+
+    panel, engine, _api = _scripted_session(tmp_path, loop, make)
+    switched_on: list[int] = []
+    switch = engine.set_live_enabled
+
+    def recording_switch(handle, enabled):
+        switched_on.append(threading.get_ident())
+        return switch(handle, enabled)
+
+    monkeypatch.setattr(engine, "set_live_enabled", recording_switch)
+    spoken: list[str] = []
+    manager = _manager(frame, panel, "live", monkeypatch, spoken)
+    try:
+        assert _rows(manager) == ["Disabled. ping: Timer from a script: every 0.2 seconds"]
+        manager._list.SetSelection(0)
+        manager._on_list_selection(None)
+        assert manager._buttons["toggle"].GetLabel() == "E&nable"
+        manager._on_toggle(None)
+        assert _pump_until(lambda: spoken)
+        assert _pump_until(lambda: fired, seconds=3.0), "the timer never fired"
+        assert switched_on == [loop_thread.ident]  # on the session's thread, never the window's
+        assert spoken == ["Script rule ping: every 0.2 seconds enabled."]
+        assert _rows(manager) == ["ping: Timer from a script: every 0.2 seconds"]
+        assert manager._buttons["toggle"].GetLabel() == "Disa&ble"
+    finally:
+        manager.Destroy()
+        _on_loop(loop, lambda: engine.remove_named_timer("ping"))
+
+
+def test_a_row_whose_rule_a_script_dropped_switches_nothing_and_says_why(
+    frame, tmp_path, monkeypatch, session_loop
+):
+    # The switch read the engine's list afresh and used the row number from the list on screen:
+    # with timer a gone, Disable on a's row switched timer b off and said "Script rule every 7
+    # seconds disabled.", which was neither the rule chosen nor what happened to it.
+    loop, _thread = session_loop
+    panel, engine, api = _scripted_session(tmp_path, loop, _two_timers)
+    spoken: list[str] = []
+    manager = _manager(frame, panel, "live", monkeypatch, spoken)
+    try:
+        rows = _rows(manager)
+        assert rows[2] == "a: Timer from a script: every 5 seconds"
+        manager._list.SetSelection(2)
+        manager._on_list_selection(None)
+        _on_loop(loop, lambda: api.remove_named_timer("a"))  # the script deletes it meanwhile
+        manager._on_toggle(None)
+        assert _pump_until(lambda: spoken)
+        assert spoken == [
+            "Script rule a: every 5 seconds was not switched: its script has removed it since "
+            "the list was read."
+        ]
+        assert _on_loop(loop, lambda: engine.named_timer("b").enabled) is True
+        assert _rows(manager) == [rows[0], rows[1], rows[3]]  # read again, without it
+    finally:
+        manager.Destroy()
+
+
+def test_the_last_row_still_works_after_a_script_drops_a_rule_above_it(
+    frame, tmp_path, monkeypatch, session_loop
+):
+    # Arrowing onto the last row raised IndexError, and so did Disable: the fresh list the
+    # buttons read was a row shorter than the one on screen. Nothing was said.
+    loop, _thread = session_loop
+    panel, engine, api = _scripted_session(tmp_path, loop, _two_timers)
+    spoken: list[str] = []
+    manager = _manager(frame, panel, "live", monkeypatch, spoken)
+    try:
+        _on_loop(loop, lambda: api.remove_named_timer("a"))
+        manager._list.SetSelection(3)
+        manager._on_list_selection(None)
+        assert manager._buttons["toggle"].GetLabel() == "Disa&ble"
+        manager._on_toggle(None)
+        assert _pump_until(lambda: spoken)
+        assert spoken == ["Script rule b: every 7 seconds disabled."]
+        assert _on_loop(loop, lambda: engine.named_timer("b").enabled) is False
+        assert _rows(manager)[-1] == "Disabled. b: Timer from a script: every 7 seconds"
+        assert manager._list.GetSelection() == 2  # still on b, which moved up a row
+    finally:
+        manager.Destroy()
+
+
+def _key(code: int, *, control: bool = False) -> wx.KeyEvent:
+    event = wx.KeyEvent(wx.wxEVT_KEY_DOWN)
+    event.SetKeyCode(code)
+    event.SetControlDown(control)
+    return event
+
+
+def test_the_keys_that_would_change_a_script_rule_say_why_they_do_not(
+    frame, tmp_path, monkeypatch, session_loop
+):
+    # Enter, Delete, Ctrl+N and Duplicate did nothing at all on a rule a script made.
+    loop, _thread = session_loop
+    panel, _engine, _api = _scripted_session(
+        tmp_path, loop, lambda api, _engine: api.add_trigger("You see *", lambda _ctx: None)
+    )
+    spoken: list[str] = []
+    manager = _manager(frame, panel, "live", monkeypatch, spoken)
+    try:
+        manager._list.SetSelection(0)
+        manager._on_list_key(_key(wx.WXK_RETURN))
+        manager._on_list_key(_key(wx.WXK_DELETE))
+        manager._on_manager_key(_key(ord("N"), control=True))
+        manager._on_duplicate(None)
+        assert spoken == [
+            "Rules from scripts can't be edited here; change the script.",
+            "Rules from scripts can't be deleted here; change the script, or press Disable to "
+            "switch one off.",
+            "Rules from scripts can't be made here; write them in a script, under Scripts.",
+            "Rules from scripts can't be duplicated here; change the script.",
+        ]
+        assert _rows(manager) == ["Trigger from a script: You see *"]
+    finally:
+        manager.Destroy()
+
+
+def test_the_script_rules_list_has_a_letter_of_its_own_and_lists_what_it_says(
+    frame, tmp_path, monkeypatch, session_loop
+):
+    # "&Script rules:" shared S with "&Show:", and the category promised mud.timer, which makes
+    # a timer with no name that the list never shows.
+    loop, _thread = session_loop
+
+    def make(api, _engine) -> None:
+        api.add_trigger("You see *", lambda _ctx: None)
+        api.add_named_timer("tick", 30, lambda: None, every=30)
+        api.add_timer(30, lambda: None)  # what mud.timer(30, fn) makes
+
+    panel, _engine, _api = _scripted_session(tmp_path, loop, make)
+    manager = _manager(frame, panel, "live", monkeypatch, [])
+    try:
+        assert manager._items_label.GetLabel() == "&Your script rules:"
+        assert manager._list.GetName().startswith("Your script rules for this world")
+        assert _shortcut_clashes(manager, enabled_only=True) == {}
+        assert _rows(manager) == [
+            "Trigger from a script: You see *",
+            "tick: Timer from a script: every 30 seconds",
+        ]
+        description = manager._description.GetLabel().replace("\n", " ")
+        assert "mud.add_timer" in description
+        assert "A mud.timer is not listed" in description
+    finally:
+        manager.Destroy()
+
+
+@pytest.mark.parametrize("why", ["a soundpack's question", "no answer"])
+def test_the_script_rules_list_says_when_the_session_cannot_answer(
+    frame, tmp_path, monkeypatch, session_loop, why
+):
+    # The list is read on the session's loop now; a loop that can't answer must be heard about,
+    # not shown as an empty list.
+    from genericmud.ui import automation_manager
+
+    loop, _thread = session_loop
+    panel, _engine, _api = _scripted_session(
+        tmp_path, loop, lambda api, _engine: api.add_trigger("You see *", lambda _ctx: None)
+    )
+    if why == "a soundpack's question":
+        panel._questions = [object()]  # the loop is waiting on a pack's dialog
+    else:
+        panel._loop = _WaitingLoop()  # a loop that never gets round to it
+        monkeypatch.setattr(automation_manager, "_SESSION_ANSWER_TIMEOUT_S", 0.05)
+    spoken: list[str] = []
+    manager = _manager(frame, panel, "live", monkeypatch, spoken)
+    try:
+        assert spoken == [
+            "The session is busy, so the rules your scripts made can't be listed now. "
+            "Press Ctrl+8 to try again."
+        ]
+        assert _rows(manager) == []
+        assert manager._buttons["toggle"].IsEnabled() is False
+    finally:
+        manager.Destroy()
+
+
+def test_a_second_press_while_a_switch_is_on_its_way_says_so(
+    frame, tmp_path, monkeypatch, session_loop
+):
+    loop, _thread = session_loop
+    panel, engine, _api = _scripted_session(tmp_path, loop, _two_timers)
+    spoken: list[str] = []
+    manager = _manager(frame, panel, "live", monkeypatch, spoken)
+    try:
+        manager._list.SetSelection(3)
+        manager._on_list_selection(None)
+        manager._on_toggle(None)
+        manager._on_toggle(None)  # before the answer has come back
+        assert _pump_until(lambda: len(spoken) == 2)
+        assert spoken == [
+            "Still switching the last one: the session hasn't answered yet.",
+            "Script rule b: every 7 seconds disabled.",
+        ]
+        assert _on_loop(loop, lambda: engine.named_timer("b").enabled) is False
     finally:
         manager.Destroy()
