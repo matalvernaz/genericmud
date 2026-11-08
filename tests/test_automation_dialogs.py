@@ -824,3 +824,30 @@ def test_deleting_an_unlabelled_timer_leaves_the_others_their_own_state(
         assert [timer.enabled for timer in load_rules(tmp_path).timers] == [False]
     finally:
         manager.Destroy()
+
+
+def test_deleting_a_spent_one_shot_does_not_take_another_timer_with_it(
+    frame, tmp_path, monkeypatch
+):
+    # A spent one-shot is known by its place too. Dropped after a delete had moved the others
+    # up, the second timer took the first's place and its name, and was dropped as spent too.
+    from genericmud.packs import user_rules
+    from genericmud.packs.user_rules import UserRules, UserTimer, load_rules
+
+    rules = UserRules(
+        timers=[
+            UserTimer(every=60, send="vote", one_shot=True),
+            UserTimer(every=60, send="claim", one_shot=True, enabled=False),
+        ]
+    )
+    panel, engine, loop = _live_session(tmp_path, rules)
+    engine.note_spent_one_shot("timer 60s #1", user_rules.SOURCE)  # the first has fired
+    spent_off: list[str] = []
+    monkeypatch.setattr(wx, "MessageBox", lambda *_args, **_kwargs: wx.YES)
+    manager = _manager(frame, panel, "timer", monkeypatch, spent_off)
+    try:
+        manager._list.SetSelection(0)
+        manager._on_delete(None)
+        assert [timer.send for timer in load_rules(tmp_path).timers] == ["claim"]
+    finally:
+        manager.Destroy()

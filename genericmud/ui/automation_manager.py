@@ -625,14 +625,34 @@ class AutomationManagerDialog(wx.Dialog):
         )
         self._refresh(place if place is not None else self._selected_index(), live_rules=rows)
 
+    def _spent_one_shots(self) -> list[tuple[str, object]]:
+        """The timers here that are one-shots the engine has seen fire, with their names.
+
+        Asked by place, so only while the places still match the engine's: after a delete the
+        names would point at whichever timer moved into the gap.
+        """
+        engine = getattr(getattr(self._panel, "app", None), "engine", None)
+        if engine is None or self._timer_places_stale:
+            return []
+        spent = {
+            name for name, origin in engine.spent_one_shots.items() if origin == user_rules.SOURCE
+        }
+        if not spent:
+            return []
+        return [
+            (name, timer)
+            for place, timer in enumerate(self._rules.timers)
+            if timer.one_shot and (name := user_rules.timer_name(timer, place)) in spent
+        ]
+
     def _save_and_reload_rules(
-        self, select: int | None = None, *, just_edited=None
+        self, select: int | None = None, *, just_edited=None, spent=None
     ) -> bool:
         """Save the rules and reload them live.
 
         ``just_edited`` is the rule the dialog has only now returned; every other rule takes its
         on/off state from the engine first, so saving one rule cannot switch a script's decision
-        back on.
+        back on. ``spent`` is the fired one-shots as found before a delete moved the places.
         """
         if self._pack_dir is None:
             return False
@@ -640,20 +660,17 @@ class AutomationManagerDialog(wx.Dialog):
         # below moves the timers after it.
         self._sync_from_engine(except_rule=just_edited)
         # A one-shot that has fired is not saved to run again, which is what MUSHclient does with
-        # one: its timer list loses it when it fires, so its file loses it at the next save.
-        engine = getattr(getattr(self._panel, "app", None), "engine", None)
-        if engine is not None:
-            spent = {
-                name
-                for name, origin in engine.spent_one_shots.items()
-                if origin == user_rules.SOURCE
-            }
-            removed = user_rules.drop_spent_one_shots(self._rules, spent) if spent else []
-            if removed:
-                self._timer_places_stale = True
+        # one: its timer list loses it when it fires, so its file loses it at the next save. Taken
+        # out by identity, never by a place that a delete may have moved.
+        found = spent if spent is not None else self._spent_one_shots()
+        gone = [timer for _name, timer in found]
+        kept = [timer for timer in self._rules.timers if not any(timer is g for g in gone)]
+        if len(kept) != len(self._rules.timers):
+            self._rules.timers = kept
+            self._timer_places_stale = True
             app = getattr(self._panel, "app", None)
-            if removed and app is not None and app.diag is not None:
-                app.diag.event("user_rules.one_shots_spent", names=removed)
+            if app is not None and app.diag is not None:
+                app.diag.event("user_rules.one_shots_spent", names=[name for name, _ in found])
         try:
             register_rules(
                 ScriptApi(
@@ -867,12 +884,14 @@ class AutomationManagerDialog(wx.Dialog):
         ) != wx.YES:
             return
         # Ask the engine while the places still match it: once a timer is gone, the ones after
-        # it move up, and the engine only learns their new places from the reload.
+        # it move up, and the engine only learns their new places from the reload. The fired
+        # one-shots are found now for the same reason.
         self._sync_from_engine()
+        spent = self._spent_one_shots()
         del self._collection(kind)[index]
         if kind == "timer":
             self._timer_places_stale = True
-        if self._save_and_reload_rules(index):
+        if self._save_and_reload_rules(index, spent=spent):
             self._announce(f"{word} deleted.")
 
     def _request_script_reload(self) -> None:

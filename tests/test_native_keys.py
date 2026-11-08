@@ -267,6 +267,7 @@ def test_saved_hotkey_explains_compass_only_when_it_blocks_use(
     )
     manager._collection = lambda _kind: manager._rules.keys
     manager._sync_from_engine = lambda **_kwargs: None  # no live session in this fake
+    manager._spent_one_shots = lambda: []  # nor any fired one-shots to drop
     # The manager's save is called with the rule the dialog just returned, so that its own
     # Enabled answer is not overwritten by the engine's older state.
     manager._save_and_reload_rules = lambda select, **kwargs: (
