@@ -259,6 +259,9 @@ class AutomationManagerDialog(wx.Dialog):
         # Not "Script rules": S is the Show box's letter.
         "live": "Your script rules",
     }
+    # The list's letter is the first of its words, except where another control here already has
+    # that one: H is Automation help and S is the Show box.
+    _CATEGORY_SHORTCUTS = {"key": "Hot&keys", "script": "S&cripts"}
     _KIND_WORD = {
         "trigger": "Trigger", "alias": "Alias", "key": "Hotkey", "timer": "Timer",
         "channel": "Channel", "data": "MUD data rule", "live": "Script rule",
@@ -423,7 +426,7 @@ class AutomationManagerDialog(wx.Dialog):
             previous = labels.index(select)
         self._list.Set(labels)
         words = self._CATEGORY_WORDS[kind]
-        self._items_label.SetLabel(f"&{words}:")
+        self._items_label.SetLabel(f"{self._CATEGORY_SHORTCUTS.get(kind, '&' + words)}:")
         self._list.SetName(f"{words} for this world, {len(labels)} items")
         if labels:
             selection = min(max(previous, 0), len(labels) - 1)
@@ -469,10 +472,10 @@ class AutomationManagerDialog(wx.Dialog):
         self._buttons["folder"].Enable(is_script)
         if has_item and from_script and index < len(self._live_shown):
             enabled = self._live_shown[index].enabled  # the row as drawn, not a fresh read
-            self._buttons["toggle"].SetLabel("Disa&ble" if enabled else "E&nable")
+            self._buttons["toggle"].SetLabel("Disa&ble" if enabled else "Ena&ble")
         elif has_item and not is_script:
             enabled = self._collection(kind)[index].enabled
-            self._buttons["toggle"].SetLabel("Disa&ble" if enabled else "E&nable")
+            self._buttons["toggle"].SetLabel("Disa&ble" if enabled else "Ena&ble")
         else:
             self._buttons["toggle"].SetLabel("Disa&ble")
 

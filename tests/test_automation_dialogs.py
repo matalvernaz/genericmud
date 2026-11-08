@@ -452,7 +452,7 @@ def test_disable_in_the_manager_switches_the_rule_off_and_says_so(
         assert spoken == [f"{word} disabled."]
         assert getattr(load_rules(tmp_path), collection)[0].enabled is False
         assert _rows(manager)[0].startswith("Disabled. ")
-        assert manager._buttons["toggle"].GetLabel() == "E&nable"
+        assert manager._buttons["toggle"].GetLabel() == "Ena&ble"
 
         # The session catches up on its own loop, and the next look agrees with the file.
         loop.run()
@@ -615,7 +615,7 @@ def test_enabling_a_script_timer_from_the_list_starts_it_on_the_sessions_loop(
         assert _rows(manager) == ["Disabled. ping: Timer from a script: every 0.2 seconds"]
         manager._list.SetSelection(0)
         manager._on_list_selection(None)
-        assert manager._buttons["toggle"].GetLabel() == "E&nable"
+        assert manager._buttons["toggle"].GetLabel() == "Ena&ble"
         manager._on_toggle(None)
         assert _pump_until(lambda: spoken)
         assert _pump_until(lambda: fired, seconds=3.0), "the timer never fired"
@@ -849,5 +849,82 @@ def test_deleting_a_spent_one_shot_does_not_take_another_timer_with_it(
         manager._list.SetSelection(0)
         manager._on_delete(None)
         assert [timer.send for timer in load_rules(tmp_path).timers] == ["claim"]
+    finally:
+        manager.Destroy()
+
+
+# --- every automation dialog: a name for each control, and a letter of its own -------------
+
+# The trigger editor has more controls than it has letters to spare, and these three clashes
+# are older than its newest fields. Exactly these are allowed, so a new clash still fails.
+_KNOWN_CLASHES = {"TriggerEditorDialog": {"t": 2, "w": 2, "c": 2}}
+
+
+def _rule_editors(frame, pack_dir):
+    from genericmud.packs.user_rules import (
+        UserAlias,
+        UserChannel,
+        UserKey,
+        UserTimer,
+        UserTrigger,
+        UserWatch,
+    )
+    from genericmud.ui import rule_editors as editors
+
+    yield editors.TriggerEditorDialog(frame, pack_dir, UserTrigger(), variables=_no_variables)
+    yield editors.AliasEditorDialog(frame, UserAlias(), variables=_no_variables)
+    yield editors.KeyEditorDialog(frame, pack_dir, UserKey(), variables=_no_variables)
+    yield editors.DataRuleEditorDialog(frame, pack_dir, UserWatch(), variables=_no_variables)
+    yield editors.TimerEditorDialog(frame, UserTimer())
+    yield editors.ChannelEditorDialog(frame, UserChannel())
+
+
+def test_every_rule_editor_names_each_control_and_gives_it_a_letter_of_its_own(frame, tmp_path):
+    # The two things a change to these dialogs most often gets wrong, checked for every editor
+    # so they fail here rather than in review: a field without its label straight before it
+    # (the label is what names it everywhere but Windows), and two controls on one letter.
+    for dialog in _rule_editors(frame, tmp_path):
+        name = type(dialog).__name__
+        try:
+            for child, label, before in _tab_stops(dialog):
+                if child.GetId() in (wx.ID_OK, wx.ID_CANCEL):
+                    continue  # no letter on Windows, where the stock buttons have none
+                if isinstance(child, (wx.CheckBox, wx.Button, wx.RadioBox)):
+                    assert _MNEMONIC.search(label.replace("&&", "")), f"{name}: {label!r}"
+                    continue
+                assert before is not None and before.GetLabel().strip(), (
+                    f"{name}: a {type(child).__name__} has no label straight before it"
+                )
+                assert _MNEMONIC.search(before.GetLabel()), f"{name}: {before.GetLabel()!r}"
+            clashes = _shortcut_clashes(dialog)
+            counts = {letter: len(labels) for letter, labels in clashes.items()}
+            assert counts == _KNOWN_CLASHES.get(name, {}), f"{name}: {clashes}"
+        finally:
+            dialog.Destroy()
+
+
+def test_the_manager_gives_each_control_a_letter_of_its_own_in_every_category(
+    frame, tmp_path, monkeypatch
+):
+    # H was both the hotkey list and Automation help, S both the Show box and the script list,
+    # and N both New and the Enable a switched-off rule shows.
+    import types
+
+    from genericmud.packs.user_rules import UserRules, UserTrigger
+
+    panel, _engine, _loop = _live_session(
+        tmp_path, UserRules(triggers=[UserTrigger(pattern="backup", send="look", enabled=False)])
+    )
+    panel._loop = types.SimpleNamespace(call_soon_threadsafe=lambda fn, *args: fn(*args))
+    manager = _manager(frame, panel, "trigger", monkeypatch, [])
+    try:
+        for number, (kind, _label, _description) in enumerate(manager._CATEGORIES):
+            manager._category.SetSelection(number)
+            manager._on_category(None)
+            assert _shortcut_clashes(manager, enabled_only=True) == {}, kind
+            if kind in ("key", "script"):
+                assert manager._items_label.GetLabel() == {
+                    "key": "Hot&keys:", "script": "S&cripts:",
+                }[kind]
     finally:
         manager.Destroy()
