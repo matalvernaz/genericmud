@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from genericmud.ui.scrollback import FindState, anchor_after_append, find_line
+from genericmud.ui.scrollback import (
+    FindState,
+    anchor_after_append,
+    find_line,
+    line_at_position,
+    position_of_line,
+)
 
 
 def test_plain_append_leaves_the_anchor_alone():
@@ -80,3 +86,55 @@ def test_find_state_defaults_to_a_backwards_case_insensitive_search():
     assert state.term == ""
     assert state.forward is False
     assert state.case_sensitive is False
+
+# --- where a line begins in the control ---
+
+
+def test_a_lines_start_is_its_text_plus_two_characters_per_break():
+    # Windows stores a line break as two characters and GetValue() renders one, so a line's
+    # start is every preceding character of text plus two per break.
+    assert position_of_line(["abc", "de", "f"], 0) == 0
+    assert position_of_line(["abc", "de", "f"], 1) == 5
+    assert position_of_line(["abc", "de", "f"], 2) == 9
+    assert position_of_line(["abc", "de", "f"], 3) == 12  # past the end: the text's own end
+
+
+def test_a_position_and_a_line_number_agree_each_way():
+    lines = ["", "short", "x" * 3000, "tail"]
+    for index in (0, 1, 2, 3):
+        start = position_of_line(lines, index)
+        assert line_at_position(lines, start) == index
+        if lines[index]:
+            assert line_at_position(lines, start + len(lines[index]) - 1) == index
+
+
+def test_a_line_longer_than_the_controls_own_limit_still_round_trips():
+    # The whole point: Windows splits a 3,000-character line into three when asked for its line
+    # numbers, and this arithmetic does not.
+    long_line = "x" * 3000
+    lines = [long_line, "after it"]
+    assert line_at_position(lines, position_of_line(lines, 1)) == 1
+    assert position_of_line(lines, 1) == 3002
+
+
+def test_a_position_past_the_end_belongs_to_the_last_line():
+    assert line_at_position(["a", "b"], 10_000) == 1
+
+
+def test_find_ignores_trailing_spaces_at_either_end():
+    # A reader cannot see or aim at the end of a line, so a control that kept a stray space
+    # must not hide a line that is right there. The match is still whole-line: "you say hi" must
+    # not capture "and then you say hi again".
+    lines = ["you say hi   ", "and then you say hi again", "you say hi"]
+    assert find_line(lines, "you say hi", 3, forward=False) == 2
+    assert find_line(lines, "you say hi  ", 3, forward=False) == 2
+
+
+def test_the_break_width_is_what_the_platform_stores():
+    # Windows keeps a break as CRLF, GTK as one character; a caret counted with the wrong one
+    # shifts by a line for every line above it, which is how a Linux run caught this.
+    lines = ["abc", "de"]
+    assert position_of_line(lines, 1, width=2) == 5
+    assert position_of_line(lines, 1, width=1) == 4
+    assert line_at_position(lines, 4, width=2) == 0
+    assert line_at_position(lines, 4, width=1) == 1

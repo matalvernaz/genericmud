@@ -346,6 +346,9 @@ always in the output box.
   previous match. These work while the output box has focus, and each search
   starts from the line the caret is on, so arrowing back through the output and
   searching again carries on from where you are rather than from the last match.
+  The caret follows you onto the line it finds. A match older than the lines the
+  box keeps can't be reached, and says so instead of leaving the caret where it
+  was without a word.
 
 **Chat channels** get their own history. When your triggers route lines to
 channels (tells, gossip, auction...), **Ctrl+Alt+Left/Right** cycle between

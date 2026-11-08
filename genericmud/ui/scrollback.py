@@ -47,9 +47,14 @@ def find_line(
     ``current`` is the caret's line. Repeated searches begin strictly past it so they
     advance. ``from_edge`` is for a newly-submitted dialog search: it takes the first
     (forward) or last (backward) occurrence, matching the engine cursor's reset.
+
+    Trailing whitespace is ignored on both sides. A line's end is not something a reader can
+    see or aim at, and a control that has normalised an edge space would otherwise hide a line
+    that is right there on screen.
     """
     if not needle_line:
         return None
+    wanted = needle_line.rstrip()
     if from_edge:
         indices = range(len(lines)) if forward else range(len(lines) - 1, -1, -1)
     elif forward:
@@ -57,9 +62,53 @@ def find_line(
     else:
         indices = range(min(current, len(lines)) - 1, -1, -1)
     for i in indices:
-        if lines[i] == needle_line:
+        if lines[i].rstrip() == wanted:
             return i
     return None
+
+
+def break_width(control: object) -> int:
+    """How many characters a control stores for one line break: 2 on Windows, 1 on GTK.
+
+    Measured rather than assumed, because it differs by platform: Windows keeps a break as CRLF
+    so every position after it is one further along than the plain text suggests, and GTK keeps
+    one character. Getting it wrong shifts a caret by every line above it.
+    """
+    value = control.GetValue()
+    breaks = value.count("\n")
+    if not breaks:
+        return 1
+    extra = control.GetLastPosition() - len(value)
+    return 1 + max(0, extra) // breaks
+
+
+def position_of_line(lines: Sequence[str], index: int, *, width: int = 2) -> int:
+    """Where line ``index`` starts, in the control's own position units, or the text's end.
+
+    Counted from the text rather than asked of the control, because the control answers "where
+    does line N start?" through a Windows message that carries at most 1,024 characters: a
+    longer line is reported as several lines, so every line number after it is wrong. A MUD's
+    room descriptions run past that, and the caret then landed a few lines short of the line the
+    search had announced. The arithmetic is right at any length: each line's own characters, plus
+    what the control stores for its break (see :func:`break_width`).
+    """
+    index = max(0, min(index, len(lines)))
+    return sum(len(line) for line in lines[:index]) + width * index
+
+
+def line_at_position(lines: Sequence[str], position: int, *, width: int = 2) -> int:
+    """Which line a control position falls on, counted as :func:`position_of_line` counts.
+
+    The reader's own place is found this way too: their caret is a position, and converting it
+    through the control's line numbers has the same 1,024-character fault.
+    """
+    remaining = max(0, position)
+    for index, line in enumerate(lines):
+        cost = len(line) + width  # the line and the break after it, as the control stores them
+        if remaining < cost:
+            return index
+        remaining -= cost
+    return max(0, len(lines) - 1)
 
 
 @dataclass

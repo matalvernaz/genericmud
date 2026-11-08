@@ -12,7 +12,13 @@ from genericmud.ui.clipboard import _set_clipboard_text
 from genericmud.ui.command_buffer import CommandEntryCtrl
 from genericmud.ui.keyboard import _gtk_key_character, _key_combo
 from genericmud.ui.output_dialogs import ChooseDialog, CopyLineDialog, FindDialog
-from genericmud.ui.scrollback import anchor_after_append, find_line
+from genericmud.ui.scrollback import (
+    anchor_after_append,
+    break_width,
+    find_line,
+    line_at_position,
+    position_of_line,
+)
 
 _OUTPUT_CAP_LINES = 5000  # keep the native control bounded so NVDA/UIA stays responsive
 _FLUSH_INTERVAL_MS = 50  # batch output appends during floods
@@ -234,12 +240,14 @@ class OutputBoxMixin:
                 if self._pending:
                     self._flush_output()  # the caret's line may still be in the append batch
                 lines = self.output.GetValue().split("\n")
-                ok, column, caret_line = self.output.PositionToXY(
-                    self.output.GetInsertionPoint()
-                )
-                if not ok or not 0 <= caret_line < len(lines):
-                    caret_line = len(lines) - 1
-                    column = -1
+                position = self.output.GetInsertionPoint()
+                # Counted from the text, not through the control's line numbers: those come
+                # from a Windows message carrying 1,024 characters at most, so a long room
+                # description is answered as several lines and the reader's own line comes out
+                # wrong. That would follow the wrong line's link.
+                width = break_width(self.output)  # 2 on Windows, 1 on GTK
+                caret_line = line_at_position(lines, position, width=width)
+                column = position - position_of_line(lines, caret_line, width=width)
                 # The column goes too: a line can carry several links, and the one the reader
                 # means is the one under the caret. Without it the engine can only take the
                 # line's only link, which is why Enter did nothing on a line with two.
@@ -312,14 +320,17 @@ class OutputBoxMixin:
         """
         if self._pending:
             self._flush_output()  # the line under the caret may still be in the append batch
-        ok, _column, index = self.output.PositionToXY(self.output.GetInsertionPoint())
-        # The text ends with a newline, and the control counts the empty line after it: the
-        # last line by number is not a line of text, and the caret sitting there means "below
-        # everything I have", not "on the newest line".
-        lines = self.output.GetNumberOfLines() - 1
-        if not ok or lines <= 0 or index >= lines:
+        lines = self.output.GetValue().split("\n")
+        # GetRange hands back plain text, so counting its line breaks counts real lines. Asking
+        # the control for its line numbers instead would be wrong past a 1,024-character line,
+        # because that is all one answer from Windows carries: see scrollback.position_of_line.
+        before = self.output.GetRange(0, self.output.GetInsertionPoint())
+        index = before.count("\n")
+        # The text ends with a newline, and the caret can sit after it: that place is "below
+        # everything I have", not a line.
+        if index >= len(lines) - 1:
             return "", 0, True
-        return self.output.GetLineText(index), lines - 1 - index, False
+        return lines[index], len(lines) - 1 - index, False
 
     def _run_find(self, forward: bool, *, restart: bool = False) -> None:
         if self.app is None:
@@ -346,13 +357,15 @@ class OutputBoxMixin:
         """Put the output caret on the line the engine's scrollback search matched.
 
         The engine searches the whole buffer; this control only holds the last
-        _OUTPUT_CAP_LINES. A match older than that leaves the caret alone and the spoken
-        line is all the reader gets, which beats moving them somewhere wrong.
+        _OUTPUT_CAP_LINES, so a match older than that cannot be reached. The reader is told so
+        rather than left wondering: the caret silently staying put, under a line just announced,
+        read as the search having matched the wrong line.
 
-        The mapping runs in whole lines, converted at the edges with PositionToXY and
-        XYToPosition: insertion-point units and GetValue() string offsets disagree on
-        Windows (the native control counts a line break as two characters, GetValue
-        renders one), so a raw string offset lands the caret above the matched line.
+        The mapping counts characters, not lines. The control's own line numbers come from a
+        Windows message that carries 1,024 characters at most, so one long line -- a MUD's room
+        description, say -- is answered as several lines and every number after it is wrong. A
+        line's start is the text before it plus two characters per break, which is arithmetic
+        on the text and right at any length: see scrollback.position_of_line.
         """
         restart = self._find_restart
         self._find_restart = False
@@ -364,9 +377,8 @@ class OutputBoxMixin:
         if self._pending:
             self._flush_output()  # the matched line may still be in the append batch
         lines = self.output.GetValue().split("\n")
-        ok, _col, caret_line = self.output.PositionToXY(self.output.GetInsertionPoint())
-        if not ok:
-            caret_line = len(lines) - 1
+        width = break_width(self.output)  # 2 on Windows, 1 on GTK: measured, not assumed
+        caret_line = line_at_position(lines, self.output.GetInsertionPoint(), width=width)
         matched_line = message.get("text", "")
         line = find_line(
             lines,
@@ -387,10 +399,18 @@ class OutputBoxMixin:
                 from_edge=True,
             )
         if line is None:
+            # Not in this window at all: the engine matched a line the control has trimmed
+            # away. It was spoken; the caret has nowhere to go, and saying why is the
+            # difference between a search that explained itself and one that looks broken.
+            if self.app is not None and matched_line:
+                self.app.voice.speak(
+                    "The cursor stayed where it was: what you just heard is further back "
+                    "than the output keeps.",
+                    channel="system",
+                    interrupt=False,
+                )
             return
-        offset = self.output.XYToPosition(0, line)
-        if offset == -1:
-            return
+        offset = position_of_line(lines, line, width=width)
         self.output.SetInsertionPoint(offset)
         self.output.ShowPosition(offset)
 
