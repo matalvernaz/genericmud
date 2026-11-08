@@ -11,6 +11,7 @@ Changes written with an AI assistant are welcome. You're responsible for what yo
 - One change per pull request. Two unrelated fixes are two pull requests.
 - If your pull request builds on another open one, start its description with "Stacked on #N", and keep your own commits last so review can read just those.
 - For anything big, like a new protocol, a new window, or a change to how input or connections work, open an issue first and say what you plan to do.
+- Don't change what players already have without saying so: a default, a file format, what goes in the log, which rule runs first, or the Lua version their scripts run on. If your change does, say it in the first lines of the description, with what happens to someone who updates.
 
 ## Setting up and running the checks
 
@@ -44,7 +45,8 @@ node --check frontend/src/app.js
 
 ## Anything the MUD sends is untrusted
 
-- Text from the MUD must never turn into a genericMud command. That includes MXP and Pueblo links, menus and prompts, and GMCP and MSDP data. Text that the MUD puts into the command box may not start with the client prefix `/`, may not contain the world's command separator (`;` unless the world changes it), and may not contain control characters, and its length is capped.
+- Text from the MUD must never turn into a genericMud command. That includes MXP and Pueblo links, menus and prompts, and GMCP and MSDP data. Text that the MUD puts into the command box may not start with the client prefix `/`, may not contain the world's command separator (`;` unless the world changes it), and may not contain control characters, and its length is capped. Check each line, not the whole block: the box sends every line as its own command. `typed_refusal` in `genericmud/app/links.py` is the check links and rules share.
+- Never paste MUD text into code. A capture, a GMCP value or a line from the MUD that ends up in Lua is a way for anyone on the MUD to run Lua as the player. Code gets MUD text as values, the way a rule's Lua gets `line` and `wildcards`, never as source text to be parsed.
 - Parsers cap their work: sizes, counts, nesting depth, and anything else the server controls. Never compute something whose size the server chooses, like a huge exponent or an unbounded repeat, without a limit.
 - Don't send a plain web address to the MUD as a command, and only download what a protocol asks for, like GMCP media, through the existing download checks.
 
@@ -54,7 +56,9 @@ The engine runs on an asyncio loop in a background thread, and the wx window run
 
 ## Tests
 
-- Every fix comes with a test that fails without the fix. Check that it does, and say so in the pull request.
+- Every fix comes with a test that fails without the fix. Run it against the commit before your fix, and put the failure in the pull request.
+- Test the path the app really takes. If the app loads rules before scripts, so does the test; a test that builds things in a friendlier order can pass while the app is broken.
+- Use real wx controls under `xvfb-run` rather than fakes, when what you're testing is what the player sees or where focus goes. A fake that doesn't track which page is shown, or a fake clock whose timers can't be cancelled, can't catch the bugs it is there to catch.
 - Test what the player gets: the words spoken, where focus lands, what's in the command box. Not just internal state.
 - Give every async wait in a test a timeout, so a regression fails the test instead of hanging the whole suite.
 - Undo anything global a test changes, like keyboard layouts, environment variables, or files outside `tmp_path`.
@@ -70,6 +74,11 @@ The engine runs on an asyncio loop in a background thread, and the wx window run
 
 - Title: one plain sentence saying what changes for a player, like "A saved world can be deleted from the world list".
 - Description: what was wrong or missing; what a player does and hears now; how you tested it, including the test that failed before your fix; and anything you couldn't test, like a platform or a screen reader you don't have. The pull request template asks for these.
+
+## Answering review
+
+- Push your fixes as new commits on top, and push once when the round is done. On a stack, put the fixes on the top branch rather than rebasing every branch for each one: every push to a stack emails the maintainer once per pull request in it.
+- Reply once, on the top pull request of the stack (or on the one pull request), with what you changed for each point. One reply per round, not one per pull request.
 
 ## Where things live
 
