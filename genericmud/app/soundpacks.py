@@ -69,7 +69,9 @@ class SoundpacksMixin:
         """
         if self.packs is None:
             return None
-        result = activate_world(self.packs, world, self.engine)
+        result = activate_world(
+            self.packs, world, self.engine, log_notes=self.log_notes
+        )
         self._last_activation = result
         self._mush_packs = [
             pack for pack in result.packs.values() if isinstance(pack, MushclientPack)

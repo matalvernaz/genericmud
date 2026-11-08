@@ -493,3 +493,32 @@ def test_a_drop_that_reconnects_by_itself_leaves_the_timers_running(tmp_path):
         handle.callback()
     assert len(heartbeat) == 1
     assert _heartbeats(handles) == heartbeat
+
+
+def test_editing_a_world_tells_its_loaded_packs_about_log_notes(tmp_path):
+    # "Apply at once" is what the world's logging settings already promise, so a world edited
+    # while its tab is open reaches the packs already running rather than waiting for a reconnect.
+    # The behaviour itself -- a note that is or is not logged -- is tested in
+    # tests/test_mushclient_compat.py; this is the wiring from the world to the pack.
+    from genericmud.config.worlds import World
+
+    store = PackStore(tmp_path / "store")
+    src = tmp_path / "notes.xml"
+    src.write_text(
+        '<?xml version="1.0"?><muclient><aliases><alias match="hp" enabled="y" send_to="12">'
+        '<send>Note("HP")</send></alias></aliases></muclient>',
+        encoding="utf-8",
+    )
+    store.install(src, world="empire", trust=True)
+    vip = tmp_path / "empire.set"
+    vip.write_text("#alias hp {#say {You have 42 health.}}", encoding="utf-8")
+    store.install(vip, world="empire", trust=True)
+    app, _backend, _posted = _app(store)
+    app.activate_packs("empire")
+    (mush,) = app._mush_packs
+    (vip_pack,) = app._vip_packs
+    assert mush._log_notes is False and vip_pack._log_notes is False
+    app.apply_world_settings(World("Empire", "empire.example", 4000, log_notes=True))
+    assert mush._log_notes is True and vip_pack._log_notes is True
+    app.apply_world_settings(World("Empire", "empire.example", 4000, log_notes=False))
+    assert mush._log_notes is False and vip_pack._log_notes is False

@@ -57,6 +57,11 @@ this mode. VIPMud script-brace assembly is not implemented.
 A semicolon sends several commands at once, as in n;n;look; type it twice to
 send a real one. Each world can change the separator or turn it off in its
 details (Ctrl+O, then Edit), which also has its logging settings.
+"Keep soundpack notes in the session log" there is off unless you turn it on: the
+lines a soundpack shows itself, whether a MUSHclient pack's Note or a VIPMud
+pack's #Say, are shown and spoken either way, and this decides whether they are
+also written to the log. A note your own scripts make is always kept, since you
+wrote it.
 A world's details hold its username and password too, kept in your computer's
 own credential store, plus how that login is sent and any commands to type once
 you're connected.

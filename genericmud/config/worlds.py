@@ -54,6 +54,11 @@ class World:
     log_automatically: bool = False
     log_files: str = "session"
     log_commands: bool = True
+    # MUSHclient's "Log Notes", which is off there until a world turns it on. A soundpack's Note
+    # is shown and spoken either way; this decides whether it is also written to the session log.
+    # The world's own scripts are not covered: their Note is logged, as it has always been, since
+    # a player who writes "note level up" in their own script means it to be kept.
+    log_notes: bool = False
     # Show what you type in the output as well ("echo input", as MUSHclient calls it). Off by
     # default: it doubles every command into the scrollback. Nothing to do with the log above --
     # wanting one without the other is the normal case.
@@ -219,6 +224,7 @@ def load_worlds(path: Path | None = None) -> list[World]:
                 log_automatically=entry.get("log_automatically") is True,
                 log_files=normalize_log_files(entry.get("log_files")),
                 log_commands=entry.get("log_commands") is not False,
+                log_notes=entry.get("log_notes") is True,
                 echo_input=entry.get("echo_input") is True,
                 download_sounds=entry.get("download_sounds") is not False,
                 connect_method=normalize_connect_method(entry.get("connect_method")),
@@ -263,6 +269,8 @@ def save_worlds(worlds: list[World], path: Path | None = None) -> None:
             lines.append(f"log_files = {_quote(log_files)}")
         if not world.log_commands:
             lines.append("log_commands = false")
+        if world.log_notes:
+            lines.append("log_notes = true")
         if world.echo_input:
             lines.append("echo_input = true")
         if not world.download_sounds:

@@ -361,6 +361,13 @@ starts with the date and time. If you stop a log with Alt+Shift+L, it stays
 stopped until you close the tab. While the MUD is hiding your typing — which is
 how they ask for a password — the log records `***` instead of what you typed.
 
+A soundpack's own lines — a MUSHclient pack's `Note`, a VIPMud pack's `#Say` — are
+shown and spoken but stay out of the log unless you ask for them: **Keep soundpack
+notes in the session log**, in the world's details, is off by default, so a chatty
+pack can't fill your transcript. It is MUSHclient's Log Notes under another name,
+and it covers both kinds of pack. A note your own scripts make is always kept,
+since you wrote it.
+
 Logs are kept in two folders, so that reading one back and reporting a problem
 never mean sorting through the other:
 

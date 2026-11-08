@@ -222,6 +222,9 @@ class EngineApp(
         self.log_automatically = False
         self.log_files = "session"
         self.log_commands = True
+        # Whether a soundpack's Note is also written to the session log (MUSHclient's Log
+        # Notes). The world's own scripts are not covered: their notes are logged either way.
+        self.log_notes = False
         # Echo what you type into the output (MUSHclient's "echo input"). Off unless the world
         # asks for it, and separate from logging it: either one can be wanted without the other.
         self.echo_input = False
@@ -328,6 +331,11 @@ class EngineApp(
         self.log_automatically = world.log_automatically
         self.log_files = world.log_files
         self.log_commands = world.log_commands
+        # Felt at once by packs already loaded, not only at the next activation, the same way
+        # the logging settings above are: a world edited while a tab is open keeps its promise.
+        self.log_notes = world.log_notes
+        for pack in (*self._mush_packs, *self._vip_packs):
+            pack.set_log_notes(self.log_notes)
         self.echo_input = world.echo_input
         # How this session reached the world: an offer of an encrypted port has to know whether
         # this link is already encrypted, and whether the offered port is even a change.

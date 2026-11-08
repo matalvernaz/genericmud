@@ -576,10 +576,19 @@ def _normalize_key_spec(spec: object) -> str:
 
 class MushclientPack:
     def __init__(
-        self, api: ScriptApi, *, full_stdlib: bool = False, player_scripts: bool = False
+        self,
+        api: ScriptApi,
+        *,
+        full_stdlib: bool = False,
+        player_scripts: bool = False,
+        log_notes: bool = False,
     ) -> None:
         # The world's own scripting space rather than a soundpack: its notes are the player's.
         self._player_scripts = player_scripts
+        # MUSHclient's Log Notes, off until a world asks for it: whether this pack's Note also
+        # goes in the session log. Shown and spoken either way. Ignored for the world's own
+        # scripts, whose notes are logged as they always have been.
+        self._log_notes = log_notes
         self._api = api
         self._base_dir = api.base_dir
         # genericMud's own vocabulary, for the state that hosts the player's own scripts: they get
@@ -2194,7 +2203,7 @@ class MushclientPack:
         return _SCRIPT_ERROR_OK  # MUSHclient's Send answers eOK, and some packs Note() it
 
     def _note(self, text: object = "") -> None:
-        """MUSHclient's Note: a finished output line, and part of the session log.
+        """MUSHclient's Note: a finished output line, shown and spoken, and maybe logged.
 
         Spoken as well as shown. genericMud stands in for MushReader, the screen-reader plugin
         these packs are written for, and its OnPluginScreendraw reads a note (type 1) just as
@@ -2202,18 +2211,23 @@ class MushclientPack:
         hides a line and prints a reworded copy (Empire's death message) would go silent.
 
         In the world's own scripts a note is kept in the session log and a print is not, the
-        same pair the player's rules offer as destinations. A soundpack's notes are shown and
-        spoken but not logged: MUSHclient logs notes only when a world turns on "log notes",
-        which is off by default, and packs note a lot.
+        same pair the player's rules offer as destinations. A soundpack's note is kept too, but
+        only when the world turns on "Keep soundpack notes in the session log": MUSHclient has
+        the same option, off by default, and packs note a lot -- a world's whole log would
+        otherwise fill with a pack's chatter.
         """
         line = self._pending_tell + str(text)
         self._pending_tell = ""
-        if self._player_scripts:
+        if self._player_scripts or self._log_notes:
             self._api.note(line)
         else:
             self._api.echo(line)
         if line.strip() and self._api.line_speech():
             self._api.speak(line)
+
+    def set_log_notes(self, value: bool) -> None:
+        """Take the world's Log Notes setting again, when a world is edited while open."""
+        self._log_notes = bool(value)
 
     def _print(self, text: object = "") -> None:
         """MUSHclient's print: the same line, shown and spoken, never in the log."""
