@@ -295,6 +295,10 @@ class ScriptApi:
     def is_connected(self) -> bool:
         return self._engine.connected
 
+    def outages(self) -> int:
+        """How many times the world has dropped this session, to say something once per outage."""
+        return self._engine.outages
+
     # --- asking the player (each returns None when they cancel or there's no window) ---
     # A script waits for the answer. ``while_waiting`` is called now and then meanwhile, and
     # the time spent waiting doesn't count against any script's time limit.

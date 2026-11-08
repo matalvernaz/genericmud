@@ -981,10 +981,10 @@ def _register_timer(
         _timer_refused(api, t, "an interval timer needs a number of seconds, such as 30")
         return
 
-    said_disconnected = False
+    said_for_outage: int | None = None
 
     def fire() -> None:
-        nonlocal said_disconnected
+        nonlocal said_for_outage
         if t.interrupt:
             api.stop_speech()  # an alert that takes over, as a trigger's can
         parts = _response_parts(t.send, t.send_to)
@@ -994,15 +994,14 @@ def _register_timer(
             # Nothing to send to. A timer that runs while the world is disconnected can still
             # speak, note, log, store a value or run a script; commands have nowhere to go.
             # Said once for each time the world is down, not every few seconds.
-            if not said_disconnected:
-                said_disconnected = True
+            if said_for_outage != api.outages():
+                said_for_outage = api.outages()
                 who = f"Timer {t.label.strip()}" if t.label.strip() else "A timer"
                 api.speak(
                     f"{who} did not send {'; '.join(parts)}: the world is disconnected.",
                     channel="system",
                 )
             return
-        said_disconnected = False
         deliver(api, list(parts), t.send_to, variable=t.variable, rule_name=_rule_name(t))
 
     # A timer that names a time of day has no fixed period -- its wait is "until the next

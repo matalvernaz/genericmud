@@ -322,3 +322,35 @@ def test_a_timer_that_cannot_send_says_so_once_while_the_world_is_down(tmp_path)
     callback()
     said = [text for text, _channel, _interrupt in sink.spoken if "disconnected" in text]
     assert len(said) == 2  # said again for the next time the world goes down
+
+
+def test_a_timer_deleted_or_replaced_during_an_outage_does_not_come_back():
+    # Deleting a timer by name, or replacing it, while the timers are paused has to take it out
+    # of the paused list too, or the reconnect starts the deleted one again.
+    engine, sink = _engine()
+    fired: list[str] = []
+    api = ScriptApi(engine, source="user-script:1")
+    api.add_named_timer("gone", 5, lambda: fired.append("gone"), every=5)
+    api.add_named_timer("swap", 5, lambda: fired.append("old swap"), every=5)
+    engine.suspend_timers()
+    assert engine.remove_named_timer("gone") is True
+    api.add_named_timer("swap", 5, lambda: fired.append("new swap"), every=5)
+    engine.resume_timers()
+    for handle in [h for h in sink.handles if not h.cancelled]:
+        handle.fire()
+    assert fired == ["new swap"]
+
+
+def test_the_disconnected_note_is_said_again_for_a_second_outage(tmp_path):
+    # Once per outage, not once until the timer next sends: a world that comes back and drops
+    # again before the timer is due is a new outage, and the player hears about it.
+    sink, engine = _timer_rules(
+        tmp_path, UserTimer(label="alert", every=5, send="look", run_disconnected=True)
+    )
+    _delay, callback = sink.scheduled[0]
+    callback()
+    engine.connected = True  # back, but the timer is not due before the next drop
+    engine.connected = False
+    callback()
+    said = [text for text, _channel, _interrupt in sink.spoken if "disconnected" in text]
+    assert len(said) == 2

@@ -512,7 +512,10 @@ class AutomationEngine:
         self.sound = sound or SoundBus()  # per-category audio mixing, scriptable via ScriptApi
         self.hub: SessionHub | None = None  # cross-session bus (set by the app)
         self.session_name = ""  # this session's name, for broadcast-exclude
-        self.connected = True  # transport state, maintained by the app (packs read it)
+        # Transport state, maintained by the app (packs read it). Each drop is counted, so
+        # something said "once per outage" can tell a new outage from the one it already reported.
+        self._connected = True
+        self.outages = 0
         self.diag: DiagnosticLog | None = None  # sound-path trace (set by the app)
         # The player's own sounds folder for this world (set by the window before packs
         # load). Unlike @sppath, which any pack can set, it is trusted for sound paths.
@@ -644,6 +647,7 @@ class AutomationEngine:
         replaced = self.named_timer(name)
         if replaced is not None:
             replaced.disarm()
+            self._paused_timers = [t for t in self._paused_timers if t is not replaced]
         self._named_timers = [t for t in self._named_timers if t.name != name]
         self._named_timers.append(timer)
         timer.enabled = bool(enabled)
@@ -666,6 +670,17 @@ class AutomationEngine:
                 return timer
         return None
 
+    @property
+    def connected(self) -> bool:
+        return self._connected
+
+    @connected.setter
+    def connected(self, value: bool) -> None:
+        value = bool(value)
+        if self._connected and not value:
+            self.outages += 1
+        self._connected = value
+
     def remove_named_timer(self, name: str) -> bool:
         """Cancel and forget one named timer (MUSHclient's DeleteTimer)."""
         timer = self.named_timer(name)
@@ -673,6 +688,8 @@ class AutomationEngine:
             return False
         timer.disarm()
         self._named_timers = [t for t in self._named_timers if t is not timer]
+        # Paused by an outage, it would otherwise be started again when the world comes back.
+        self._paused_timers = [t for t in self._paused_timers if t is not timer]
         return True
 
     def set_timer_enabled(self, name: str, enabled: bool) -> bool:
@@ -1161,7 +1178,8 @@ class AutomationEngine:
         paused, self._paused_timers = self._paused_timers, []
         self.timers_suspended = False
         for timer in paused:
-            timer.arm()
+            if any(held is timer for held in self._named_timers):
+                timer.arm()  # one deleted or replaced while the world was down stays gone
 
     # --- evaluation ---
 
