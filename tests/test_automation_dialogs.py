@@ -254,3 +254,84 @@ def test_the_trigger_editor_asks_the_common_questions_first(frame, tmp_path):
         assert [id(window) for window in on_screen] == [id(child) for child in tab_order]
     finally:
         dialog.Destroy()
+
+
+# --- the manager's list --------------------------------------------------------------------
+
+
+def _rule(kind: str, **fields):
+    from genericmud.packs.user_rules import UserAlias, UserKey, UserTimer, UserTrigger, UserWatch
+
+    return {
+        "trigger": UserTrigger, "alias": UserAlias, "key": UserKey, "timer": UserTimer,
+        "data": UserWatch,
+    }[kind](**fields)
+
+
+@pytest.mark.parametrize(
+    ("kind", "fields", "line"),
+    [
+        ("trigger", dict(pattern="backup", match="contains", send="look"),
+         "Trigger: backup (contains): send look"),
+        ("trigger", dict(pattern="* pages you", send="page %1 = ", send_to="command"),
+         "Trigger: * pages you: put page %1 = in the command box"),
+        ("trigger", dict(pattern="backup", match="contains", send="Backup started",
+                         send_to="output"),
+         "Trigger: backup (contains): note Backup started"),
+        ("trigger", dict(pattern="backup", match="contains", send="Backup started",
+                         send_to="print"),
+         "Trigger: backup (contains): print Backup started"),
+        ("trigger", dict(pattern="backup", match="contains", send="Backup started",
+                         send_to="log"),
+         "Trigger: backup (contains): log Backup started"),
+        ("trigger", dict(pattern="backup", match="contains", send="sh goblin",
+                         send_to="execute"),
+         "Trigger: backup (contains): run sh goblin as if typed"),
+        ("trigger", dict(pattern="backup", match="contains", send="on_backup",
+                         send_to="script"),
+         "Trigger: backup (contains): run script on_backup"),
+        ("trigger", dict(pattern="* pages you", send="%1", send_to="variable",
+                         variable="pager"),
+         "Trigger: * pages you: store %1 in variable pager"),
+        # 0.25.0 read "sends", and an alias's line is a sentence: the pattern, then what it does.
+        ("alias", dict(pattern="sh *", send="shout %1"), "Alias: sh * sends shout %1"),
+        ("alias", dict(pattern="heal", send="do_heal", send_to="script"),
+         "Alias: heal runs script do_heal"),
+        ("alias", dict(pattern="pg *", send="page %1 = ", send_to="command"),
+         "Alias: pg * puts page %1 = in the command box"),
+        ("alias", dict(pattern="rem *", send="%1", send_to="variable", variable="kept"),
+         "Alias: rem * stores %1 in variable kept"),
+        ("alias", dict(pattern="hi", speak="hello"), "Alias: hi sends nothing"),
+        ("key", dict(key="f5", send="kill"), "Hotkey: f5: send kill"),
+        ("key", dict(key="f6", send="Ready", send_to="output"), "Hotkey: f6: note Ready"),
+        ("key", dict(key="f7", send="on_f7", send_to="script"),
+         "Hotkey: f7: run script on_f7"),
+        ("data", dict(name="Char.Vitals.hp", send="hp now ${value}", send_to="output"),
+         "MUD data: Char.Vitals.hp, when it changes: note hp now ${value}"),
+        ("data", dict(name="Char.Vitals.hp", send="${value}", send_to="variable",
+                      variable="hp"),
+         "MUD data: Char.Vitals.hp, when it changes: store ${value} in variable hp"),
+        ("timer", dict(every=30, send="look"), "Timer: every 30 seconds: look"),
+        ("timer", dict(every=60, send="check_buffs", send_to="script"),
+         "Timer: every 60 seconds: run script check_buffs"),
+        ("timer", dict(every=600, send="Drink some water", send_to="output"),
+         "Timer: every 600 seconds: note Drink some water"),
+        ("timer", dict(every=600, send="Still here", send_to="log"),
+         "Timer: every 600 seconds: log Still here"),
+    ],
+)
+def test_the_list_says_what_each_destination_does_with_the_text(kind, fields, line):
+    # "send on_backup" for a rule that runs a script, "send Backup started" for a note: only
+    # the MUD is sent anything, and the list is where a player checks what a rule does.
+    from genericmud.ui.automation_manager import _rule_summary
+
+    assert _rule_summary(kind, _rule(kind, **fields)) == line
+
+
+def test_every_destination_has_words_of_its_own():
+    from genericmud.packs.user_rules import SEND_TO_CHOICES
+    from genericmud.ui.automation_manager import _DESTINATION_WORDS
+
+    assert set(_DESTINATION_WORDS) == set(SEND_TO_CHOICES)
+    actions = [as_action for as_action, _as_sentence in _DESTINATION_WORDS.values()]
+    assert len(set(actions)) == len(actions)  # no two destinations read the same

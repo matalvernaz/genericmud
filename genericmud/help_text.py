@@ -151,8 +151,10 @@ goes: the MUD, your command box (unsent, to finish yourself), the output as a no
 (always kept in the log), the output as a print (never kept in the log), the log alone,
 this client again, a script -- a function name, or Lua code such as
 mud.set_enabled("combat", false) -- or a script variable, which stores the text under
-a name you give it so ${script:name} can read it later. Add any spoken text, sound,
-line handling, or channel routing you need, then choose OK. Leave this line out of the
+a name you give it so ${script:name} can read it later. The manager's list says where
+each rule's text goes: send look, note Backup started, run script on_backup, store %1 in
+variable pager, and for an alias, sh * sends shout %1. Add any spoken text, sound, line
+handling, or channel routing you need, then choose OK. Leave this line out of the
 session log is separate from hiding it: the line still works as it did, it just never
 reaches the file, which is how a repeating notice stops filling the record.
 The trigger editor asks the common questions first: the text to match, the commands

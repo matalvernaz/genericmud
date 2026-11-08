@@ -581,6 +581,12 @@ a value, not only send a command. One text, one destination:
 | This client again | run as if you had typed it, so your own aliases see it first and only what falls through reaches the MUD |
 | A script variable | stored under the name you give it, so `${script:name}` can read it later |
 
+The Automation Manager's list says each destination in its own words, so a rule reads as what
+it does: `send look`, `put reply ${1} in the command box`, `note Backup started`,
+`print ...`, `log ...`, `run ... as if typed`, `run script on_backup` and
+`store ${1} in variable pager`. An alias reads as a sentence, `sh * sends shout ${1}`, and a
+timer that sends to the MUD names only its commands: `every 30 seconds: look`.
+
 The variable target is how a rule remembers something without a line of Lua: a trigger on
 `* pages: *` sending `${1}` to a variable called `pager` keeps the pager's name, and an alias
 answering `page back` with `reply ${script:pager}` uses it. Its text is one value, so it is not

@@ -42,15 +42,31 @@ from genericmud.ui.rule_editors import (
 )
 from genericmud.ui.session_panel import SessionPanel
 
+# What each "Send it to" destination does with a rule's text, in the manager list's words:
+# first as one of a rule's actions ("send look"), then as the words after an alias's pattern
+# ("sh * sends shout %1"). Only the MUD is sent anything; a note is written and a script is run.
+_DESTINATION_WORDS = {
+    "world": ("send {text}", "sends {text}"),
+    "command": ("put {text} in the command box", "puts {text} in the command box"),
+    "output": ("note {text}", "notes {text}"),
+    "print": ("print {text}", "prints {text}"),
+    "log": ("log {text}", "logs {text}"),
+    "execute": ("run {text} as if typed", "runs {text} as if typed"),
+    "script": ("run script {text}", "runs script {text}"),
+    "variable": ("store {text} in variable {name}", "stores {text} in variable {name}"),
+}
 
-def _sends(rule, commands: str) -> str:
-    """One rule's response text in the words its destination deserves, for the manager list."""
+
+def _sends(rule, commands: str, *, after_pattern: bool = False) -> str:
+    """One rule's response text in the words its destination deserves, for the manager list.
+
+    ``after_pattern`` is for an alias, whose line reads as a sentence: "sh * sends shout %1".
+    """
     if not commands:
         return ""
-    if send_to_kind(getattr(rule, "send_to", "world")) == "variable":
-        name = str(getattr(rule, "variable", "") or "").strip() or "(no variable name)"
-        return f"store {commands} in variable {name}"
-    return f"send {commands}"
+    as_action, as_sentence = _DESTINATION_WORDS[send_to_kind(getattr(rule, "send_to", "world"))]
+    name = str(getattr(rule, "variable", "") or "").strip() or "(no variable name)"
+    return (as_sentence if after_pattern else as_action).format(text=commands, name=name)
 
 
 def _rule_summary(kind: str, rule) -> str:
@@ -105,11 +121,11 @@ def _rule_summary(kind: str, rule) -> str:
             # Worth hearing in the list: it is the difference between a timer that quietly
             # waits for the world and one that speaks while nothing is coming back.
             once += ", runs while disconnected"
-        # "every 30 seconds: look" already reads as what happens; only a variable target needs
-        # saying, because "every 30 seconds: ${1}" would not tell you where it went.
+        # "every 30 seconds: look" already reads as what happens; any other destination needs
+        # saying, because "every 60 seconds: check_buffs" would not tell you it runs a script.
         doing = (
             _sends(rule, commands)
-            if send_to_kind(getattr(rule, "send_to", "world")) == "variable"
+            if send_to_kind(getattr(rule, "send_to", "world")) != "world"
             else commands
         )
         return f"{status}{named}Timer{grouped}: {when}{once}: {doing or 'nothing'}"
@@ -117,7 +133,7 @@ def _rule_summary(kind: str, rule) -> str:
     if kind == "alias":
         return (
             f"{status}{named}Alias{ordered}{grouped}: {rule.pattern} "
-            f"{_sends(rule, commands) or 'sends nothing'}"
+            f"{_sends(rule, commands, after_pattern=True) or 'sends nothing'}"
         )
     if kind == "key":
         actions = [part for part in (
