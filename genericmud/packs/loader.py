@@ -27,16 +27,20 @@ def _load_lua(api: ScriptApi, entry: str, trusted: bool) -> LuaPackRuntime:
     return runtime
 
 
-def _load_vipmud(api: ScriptApi, entry: str, trusted: bool) -> VipMudPack:
-    pack = VipMudPack(api)
+def _load_vipmud(
+    api: ScriptApi, entry: str, trusted: bool, log_notes: bool = False
+) -> VipMudPack:
+    pack = VipMudPack(api, log_notes=log_notes)
     pack.load_entry(entry)  # read as latin-1, like every .set the pack loads
     return pack
 
 
-def _load_mushclient(api: ScriptApi, entry: str, trusted: bool) -> MushclientPack:
+def _load_mushclient(
+    api: ScriptApi, entry: str, trusted: bool, log_notes: bool = False
+) -> MushclientPack:
     # Trusted packs run with the full Lua stdlib their libraries assume; untrusted
     # ones (a dry-run with require_trust=False) stay sandboxed.
-    pack = MushclientPack(api, full_stdlib=trusted)
+    pack = MushclientPack(api, full_stdlib=trusted, log_notes=log_notes)
     pack.load_file(entry)
     return pack
 
@@ -71,18 +75,34 @@ class ActivationResult:
 
 
 def activate_pack(
-    manifest: PackManifest, api: ScriptApi, entry: str, *, trusted: bool = False
+    manifest: PackManifest,
+    api: ScriptApi,
+    entry: str,
+    *,
+    trusted: bool = False,
+    log_notes: bool = False,
 ) -> object:
     """Run one pack's entry through its dialect front-end (raises on a bad pack).
 
     Returns the live front-end instance so callers can keep driving it (lifecycle
-    hooks) after the initial load.
+    hooks) after the initial load. ``log_notes`` is the world's answer to whether the
+    lines a pack shows belong in the session log: a MUSHclient pack's Note and a
+    VIPMud pack's #Say both take it. A Lua pack's own ``mud.echo`` does not yet.
     """
+    if manifest.dialect == "mushclient":
+        return _load_mushclient(api, entry, trusted, log_notes)
+    if manifest.dialect == "vipmud":
+        return _load_vipmud(api, entry, trusted, log_notes)
     return DIALECT_LOADERS[manifest.dialect](api, entry, trusted)
 
 
 def activate_world(
-    store: PackStore, world: str, engine: AutomationEngine, *, require_trust: bool = True
+    store: PackStore,
+    world: str,
+    engine: AutomationEngine,
+    *,
+    require_trust: bool = True,
+    log_notes: bool = False,
 ) -> ActivationResult:
     """Load every pack enabled for ``world`` (in order) and report conflicts.
 
@@ -102,7 +122,11 @@ def activate_world(
         api = ScriptApi(engine, source=manifest.id, base_dir=str(store.pack_dir(manifest.id)))
         try:
             pack = activate_pack(
-                manifest, api, str(store.entry_path(manifest.id)), trusted=trusted
+                manifest,
+                api,
+                str(store.entry_path(manifest.id)),
+                trusted=trusted,
+                log_notes=log_notes,
             )
             result.packs[manifest.id] = pack
             result.loaded.append(manifest.id)

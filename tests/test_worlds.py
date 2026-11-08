@@ -79,7 +79,7 @@ def test_command_stacking_and_logging_settings_round_trip(tmp_path):
     worlds = [
         World(
             "Chat", "chatmud.com", 7777, command_stacking=False, command_separator="|",
-            log_automatically=True, log_files="day", log_commands=False,
+            log_automatically=True, log_files="day", log_commands=False, log_notes=True,
         ),
         World("Local", "127.0.0.1", 4000, log_files="world"),
     ]
@@ -96,6 +96,7 @@ def test_a_world_saved_by_an_older_build_keeps_todays_behaviour(tmp_path):
     assert not world.log_automatically
     assert world.log_files == "session"
     assert world.log_commands
+    assert not world.log_notes  # MUSHclient's Log Notes, off until a world asks for it
     save_worlds([world], path)  # and a default world writes none of the new settings
     text = path.read_text(encoding="utf-8")
     assert "command_" not in text and "log_" not in text

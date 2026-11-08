@@ -99,6 +99,31 @@ def test_world_dialog_round_trips_the_encoding(frame):
         dialog.Destroy()
 
 
+def test_world_dialog_offers_keeping_soundpack_notes_in_the_log(frame):
+    # MUSHclient's Log Notes, off unless a world asks for it. A checkbox carries its own label,
+    # and Alt+K is free in this dialog: B, I, L, R, S, T, V, W, X and Y are all taken.
+    from genericmud.ui.world_dialog import WorldDialog
+
+    dialog = WorldDialog(frame, World("Empire", "empire.example", 4000, log_notes=True))
+    try:
+        assert dialog._log_notes.GetLabel() == "&Keep soundpack notes in the session log"
+        assert dialog._log_notes.GetName() == "Keep soundpack notes in the session log"
+        assert dialog._log_notes.GetValue() is True
+        dialog._log_notes.SetValue(False)
+        _accept(dialog)
+        assert dialog.get_world().log_notes is False
+    finally:
+        dialog.Destroy()
+
+    fresh = WorldDialog(frame, World("Local", "127.0.0.1", 4000))
+    try:
+        assert fresh._log_notes.GetValue() is False  # a new world keeps its log to the MUD
+        _accept(fresh)
+        assert fresh.get_world().log_notes is False
+    finally:
+        fresh.Destroy()
+
+
 def test_world_dialog_label_precedes_the_encoding_choice(frame):
     # NVDA names a control from the StaticText created immediately before it.
     from genericmud.ui.world_dialog import WorldDialog

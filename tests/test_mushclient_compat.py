@@ -1877,3 +1877,66 @@ def test_miriani_next_do_not_disturb_quiets_incoming_lines_and_brings_them_back(
     pack._lua.execute('Execute("tts_enable_silent")')
     assert engine.line_speech is True
     assert sink.sent == []
+
+
+# --- Log Notes: whose notes reach the session log -------------------------------------------
+
+
+def _note_flags(sink) -> list[bool]:
+    """What the sink was told about each echoed line: True where it belongs in the log."""
+    return list(sink.echo_flags)
+
+
+def test_a_packs_note_stays_out_of_the_session_log_by_default():
+    # MUSHclient's Log Notes is off until a world turns it on, and packs note a lot: Empire notes
+    # every death, and a world's whole log would otherwise fill with a pack's chatter.
+    sink, engine, _pack = _rules(
+        '<aliases><alias match="hp" enabled="y" send_to="12"><send>Note("HP: ", 42)</send>'
+        "</alias></aliases>"
+    )
+    engine.process_input("hp")
+    assert sink.echoed == [("HP: 42", "main")]  # shown, and spoken as MushReader would
+    assert _note_flags(sink) == [False]
+
+
+def test_a_world_can_keep_a_packs_notes_in_the_session_log():
+    sink = RecordingSink()
+    engine = AutomationEngine(sink)
+    pack = MushclientPack(ScriptApi(engine, source="m"), log_notes=True)
+    pack.load_source(
+        '<?xml version="1.0"?><muclient><aliases><alias match="hp" enabled="y" send_to="12">'
+        '<send>Note("HP: ", 42)</send></alias></aliases></muclient>'
+    )
+    engine.process_input("hp")
+    assert sink.echoed == [("HP: 42", "main")]
+    assert _note_flags(sink) == [True]
+
+
+def test_the_world_setting_is_felt_by_a_pack_that_is_already_loaded():
+    # A world edited while a tab is open applies at once, as its logging settings already do.
+    sink = RecordingSink()
+    engine = AutomationEngine(sink)
+    pack = MushclientPack(ScriptApi(engine, source="m"))
+    pack.load_source(
+        '<?xml version="1.0"?><muclient><aliases><alias match="hp" enabled="y" send_to="12">'
+        '<send>Note("HP")</send></alias></aliases></muclient>'
+    )
+    engine.process_input("hp")
+    assert _note_flags(sink) == [False]
+    pack.set_log_notes(True)
+    engine.process_input("hp")
+    assert _note_flags(sink) == [False, True]
+    pack.set_log_notes(False)
+    engine.process_input("hp")
+    assert _note_flags(sink) == [False, True, False]
+
+
+def test_a_worlds_own_scripts_still_keep_their_notes_whatever_the_setting():
+    # The switch is named for soundpacks so nobody expects it to cover their own scripts: a note
+    # a player writes into their own script is meant to be kept, and always has been.
+    sink = RecordingSink()
+    engine = AutomationEngine(sink)
+    runtime = MushclientPack(ScriptApi(engine, source="user", base_dir=""), player_scripts=True)
+    runtime._lua.execute('Note("level up")')
+    assert sink.echoed == [("level up", "main")]
+    assert _note_flags(sink) == [True]

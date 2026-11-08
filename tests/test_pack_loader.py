@@ -210,3 +210,84 @@ def test_require_trust_false_loads_untrusted(tmp_path):
     assert result.loaded == ["hunt"]
     engine.process_line(Line("ping"))
     assert sink.sent == ["pong"]
+
+
+def _note_pack(store, tmp_path):
+    """A MUSHclient pack whose alias notes a line, so its Note can be watched."""
+    _install(
+        store, tmp_path, "notes.xml",
+        '<?xml version="1.0"?><muclient><aliases><alias match="hp" enabled="y" send_to="12">'
+        '<send>Note("HP: 42")</send></alias></aliases></muclient>',
+    )
+
+
+def test_a_worlds_log_notes_setting_reaches_the_pack_it_loads(tmp_path):
+    # The world's answer travels with the activation, so a pack loaded by the app behaves as the
+    # world asked without the pack needing to know where the setting lives.
+    sink, engine, store = _engine_and_store(tmp_path)
+    _note_pack(store, tmp_path)
+    activate_world(store, "mud", engine, log_notes=True)
+    engine.process_input("hp")
+    assert sink.echoed == [("HP: 42", "main")]
+    assert sink.echo_flags == [True]
+
+
+def test_a_pack_loaded_without_the_setting_keeps_its_notes_out_of_the_log(tmp_path):
+    sink, engine, store = _engine_and_store(tmp_path)
+    _note_pack(store, tmp_path)
+    activate_world(store, "mud", engine)
+    engine.process_input("hp")
+    assert sink.echoed == [("HP: 42", "main")]
+    assert sink.echo_flags == [False]
+
+
+def _vipmud_note_pack(store, tmp_path):
+    """A VIPMud pack whose alias shows a line with #Say, the way packs reword a message."""
+    _install(store, tmp_path, "cosmic.set", "#alias hp {#say {You have 42 health.}}")
+
+
+def test_a_worlds_log_notes_setting_reaches_a_vipmud_pack_too(tmp_path):
+    # A VIPMud pack shows its reworded lines with #Say, which never reached the log either. The
+    # same world switch covers it, or a player on Star Conquest or Cosmic Rage ticks the box and
+    # nothing happens for them.
+    sink, engine, store = _engine_and_store(tmp_path)
+    _vipmud_note_pack(store, tmp_path)
+    activate_world(store, "mud", engine, log_notes=True)
+    engine.process_input("hp")
+    assert sink.echoed == [("You have 42 health.", "main")]
+    assert sink.echo_flags == [True]
+
+
+def test_a_vipmud_pack_keeps_its_say_lines_out_of_the_log_without_the_setting(tmp_path):
+    sink, engine, store = _engine_and_store(tmp_path)
+    _vipmud_note_pack(store, tmp_path)
+    activate_world(store, "mud", engine)
+    engine.process_input("hp")
+    assert sink.echoed == [("You have 42 health.", "main")]
+    assert sink.echo_flags == [False]
+
+
+def test_a_vipmud_say_that_shows_nothing_leaves_nothing_for_the_log(tmp_path):
+    # NoDisplay shows nothing at all, so the switch has nothing to take: still shown, still
+    # logged, nothing gets through.
+    sink, engine, store = _engine_and_store(tmp_path)
+    _install(store, tmp_path, "quiet.set", "#alias hp {#say {Not shown.} NoDisplay}")
+    activate_world(store, "mud", engine, log_notes=True)
+    engine.process_input("hp")
+    assert sink.echoed == []
+
+
+def test_the_setting_is_felt_by_a_vipmud_pack_that_is_already_loaded(tmp_path):
+    # A world edited while its tab is open applies at once, for VIPMud packs as for MUSHclient.
+    sink, engine, store = _engine_and_store(tmp_path)
+    _vipmud_note_pack(store, tmp_path)
+    result = activate_world(store, "mud", engine)
+    (pack,) = result.packs.values()
+    engine.process_input("hp")
+    assert sink.echo_flags == [False]
+    pack.set_log_notes(True)
+    engine.process_input("hp")
+    assert sink.echo_flags == [False, True]
+    pack.set_log_notes(False)
+    engine.process_input("hp")
+    assert sink.echo_flags == [False, True, False]

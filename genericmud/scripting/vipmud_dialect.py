@@ -1023,8 +1023,11 @@ class _Alarm:
 class VipMudPack:
     """A loaded VIPMud soundpack/script, registered against a :class:`ScriptApi`."""
 
-    def __init__(self, api: ScriptApi) -> None:
+    def __init__(self, api: ScriptApi, *, log_notes: bool = False) -> None:
         self._api = api
+        # The world's Log Notes answer: whether the lines this pack shows with #Say also go in
+        # the session log. Off until a world asks for it, as MUSHclient's own option is.
+        self._log_notes = log_notes
         self._base_dir = api.base_dir
         self._loaded: set[str] = set()  # files #Load has run, by resolved path
         self._loading: list[str] = []  # files loading right now, innermost last
@@ -1646,7 +1649,17 @@ class VipMudPack:
         if "novoice" not in options and (not incoming or self._api.line_speech()):
             self._api.speak(text)
         if not options & {"nodisplay", "voiceonly"}:
-            self._api.echo(text)
+            # Shown either way; in the log only when the world asked for a soundpack's lines,
+            # the same switch that covers a MUSHclient pack's Note. NoDisplay and VoiceOnly show
+            # nothing, so there is nothing for the log to take.
+            if self._log_notes:
+                self._api.note(text)
+            else:
+                self._api.echo(text)
+
+    def set_log_notes(self, value: bool) -> None:
+        """Take the world's Log Notes setting again, when a world is edited while open."""
+        self._log_notes = bool(value)
 
     def _execute_setspeech(self, args: list[_Tok], scope: _Scope) -> None:
         """``#SetSpeech voice-type On|Off|Stop``. The incoming voice reads the MUD's lines,
