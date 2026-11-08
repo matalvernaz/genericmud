@@ -752,7 +752,8 @@ load, with a checkbox to show them anyway. **Set up a soundpack from a folder**
 installs one from a folder, a zip, or a download link. **Manage installed
 soundpacks** (**Ctrl+P**) turns packs on and off per world, checks a pack for
 conflicts with your other packs, updates one from where it came from, and
-uninstalls.
+uninstalls. When a pack's download has nothing new, Update says so and leaves
+the pack as it is.
 
 Native Lua packs, VIPMud `.set` packs, and MUSHclient `.xml`/`.mcl` packs all
 load. A pack has to be both enabled for the world and trusted before it runs on

@@ -253,6 +253,68 @@ def test_update_pack_refuses_a_zip_bomb_like_every_other_install(tmp_path):
     assert "hi}" in store.entry_path("mypack").read_text(encoding="utf-8")  # old pack intact
 
 
+
+def _zip_of(folder, archive):
+    """Zip ``folder``'s files under their paths inside it, the way a pack's download holds them."""
+    with zipfile.ZipFile(archive, "w") as bundle:
+        for path in sorted(folder.rglob("*")):
+            if path.is_file():
+                bundle.write(path, path.relative_to(folder).as_posix())
+    return archive
+
+
+def test_an_update_that_brings_nothing_new_leaves_the_pack_alone(tmp_path):
+    # The Vault's copy of a pack rarely changes, so Update fetched the same files, swapped the
+    # whole folder for them and said "Updated". Anything the pack had saved in its own folder
+    # went with the old copy, for nothing.
+    store = _installed_for_update(tmp_path)
+    saved = store.pack_dir("mypack") / "settings.ini"
+    saved.write_text("volume=40", encoding="utf-8")
+    download = _zip_of(tmp_path / "mypack", tmp_path / "same.zip")
+
+    result = update_pack(store, "mypack", fetch=lambda _url, dest: shutil.copy(download, dest))
+
+    assert saved.read_text(encoding="utf-8") == "volume=40"
+    from genericmud.packs.setup import UpdateUnchanged
+
+    assert result == UpdateUnchanged("mypack")
+
+
+def test_an_update_that_changes_a_file_installs_it_even_at_the_same_size(tmp_path):
+    # The same size is not the same file: the comparison reads the contents.
+    store = _installed_for_update(tmp_path)
+    (tmp_path / "mypack" / "main.set").write_text("#trigger {hello} {#say ho}", encoding="utf-8")
+    download = _zip_of(tmp_path / "mypack", tmp_path / "changed.zip")
+
+    result = update_pack(store, "mypack", fetch=lambda _url, dest: shutil.copy(download, dest))
+
+    assert "ho}" in store.entry_path("mypack").read_text(encoding="utf-8")
+    assert result.manifest.id == "mypack"
+
+
+def test_an_update_that_adds_a_file_installs_it(tmp_path):
+    store = _installed_for_update(tmp_path)
+    (tmp_path / "mypack" / "sounds").mkdir()
+    (tmp_path / "mypack" / "sounds" / "hit.ogg").write_bytes(b"OggS")
+    download = _zip_of(tmp_path / "mypack", tmp_path / "more.zip")
+
+    result = update_pack(store, "mypack", fetch=lambda _url, dest: shutil.copy(download, dest))
+
+    assert (store.pack_dir("mypack") / "sounds" / "hit.ogg").read_bytes() == b"OggS"
+    assert result.manifest.id == "mypack"
+
+
+def test_an_empty_download_is_never_taken_for_nothing_new(tmp_path):
+    store = _installed_for_update(tmp_path)
+
+    def fetch(_url, dest):
+        with zipfile.ZipFile(dest, "w"):
+            pass
+
+    with pytest.raises(PackError, match="no load script"):
+        update_pack(store, "mypack", fetch=fetch)
+    assert "hi}" in store.entry_path("mypack").read_text(encoding="utf-8")
+
 def test_setup_bare_set_pack_has_no_world(tmp_path):
     store = PackStore(tmp_path / "store")
     bare = tmp_path / "sounds.set"

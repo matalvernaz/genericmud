@@ -1536,6 +1536,37 @@ def test_a_pack_update_from_its_repository_says_what_it_did(monkeypatch):
     )
 
 
+
+def test_a_pack_update_that_brings_nothing_new_says_so(frame, monkeypatch, tmp_path):
+    # Update on a pack from the Vault's copy fetched the same files again and said "Updated".
+    # This goes through the dialog's own Update, the way the button does.
+    import shutil
+    import zipfile
+
+    from genericmud.packs import PackStore, setup_pack, vault
+    from genericmud.ui import soundpack_manager
+    from genericmud.ui.soundpack_manager import PackManagerDialog
+
+    source = tmp_path / "mypack"
+    source.mkdir()
+    (source / "main.set").write_text("#trigger {hello} {#say hi}", encoding="utf-8")
+    store = PackStore(tmp_path / "store")
+    setup_pack(store, source, entry="main.set", origin="https://example.test/mypack.zip")
+    download = tmp_path / "same.zip"
+    with zipfile.ZipFile(download, "w") as bundle:
+        bundle.write(source / "main.set", "main.set")
+    monkeypatch.setattr(vault, "download", lambda _url, dest, **_opts: shutil.copy(download, dest))
+    monkeypatch.setattr(soundpack_manager, "_run_async", lambda work, done: done(work()))
+    shown: list[str] = []
+    monkeypatch.setattr(wx, "MessageBox", lambda text, *_args, **_opts: shown.append(text))
+    dialog = PackManagerDialog(frame, store, [World("Test", "mud.example", 4000)], "Test")
+    try:
+        dialog._on_update(None)
+    finally:
+        dialog.Destroy()
+
+    assert shown == ["Nothing new for mypack: its download is the same as what you have."]
+
 def test_a_search_goes_from_the_line_the_reader_is_standing_on(frame, monkeypatch):
     # The engine keeps a cursor of its own, and the output keeps a caret. Searching from the
     # engine's cursor instead of the caret skipped matches between them, and a fresh Find went

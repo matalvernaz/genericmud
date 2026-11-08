@@ -8,6 +8,7 @@ so it is testable headless; the caller persists the returned world and connects.
 
 from __future__ import annotations
 
+import filecmp
 import os
 import re
 import tempfile
@@ -44,6 +45,13 @@ class SetupResult:
     manifest: PackManifest
     world: World | None  # parsed from the pack (host/port); None -> caller prompts
     enabled_for: str | None  # the world name the pack was enabled for, if any
+
+
+@dataclass(frozen=True)
+class UpdateUnchanged:
+    """An update whose download held nothing the installed pack didn't already have."""
+
+    pack_id: str
 
 
 def _count(path: Path, needle: str) -> int:
@@ -222,13 +230,15 @@ def setup_pack(
 
 def update_pack(
     store: PackStore, pack_id: str, *, fetch: Callable[[str, Path], object]
-) -> SetupResult:
+) -> SetupResult | UpdateUnchanged:
     """Re-fetch a pack from its recorded ``origin`` URL and reinstall it in place.
 
     ``fetch(url, dest_zip)`` downloads the archive (injected, so this stays testable
     and network-free). Per-world enablement and trust are preserved — install
     ``replace=True`` rewrites only the pack content, not ``worlds.json``/``trust.json``.
-    Raises if the pack has no origin (e.g. it was set up from a local folder).
+    Raises if the pack has no origin (e.g. it was set up from a local folder). A download
+    holding nothing new leaves the installed pack untouched and returns
+    :class:`UpdateUnchanged`.
     """
     manifest = store.manifest(pack_id)
     if not manifest.origin:
@@ -245,10 +255,35 @@ def update_pack(
             raise PackError(
                 f"the update for {pack_id} wasn't a ZIP (the site may have served a web page)"
             ) from exc
+        # A pack set up from the Vault's own copy updates from that copy, which rarely changes,
+        # so most of these downloads are what is installed already. Replacing the folder anyway
+        # throws away whatever the pack saved in it, and "Updated" would not be true.
+        if _already_installed(extracted, store.pack_dir(pack_id)):
+            return UpdateUnchanged(pack_id)
         entry = detect_entry(extracted)
         if entry is None:
             raise PackError(f"the updated download for {pack_id} has no load script")
         return setup_pack(store, extracted, entry=entry, origin=manifest.origin)
+
+
+def _already_installed(download: Path, installed: Path) -> bool:
+    """Whether every file in ``download`` is already in ``installed``, byte for byte.
+
+    A file only the installed copy has doesn't count against it: that is the pack's own, like
+    settings it saved in its folder. A download with no files at all is never already
+    installed, so it still fails the way a broken download always has.
+    """
+    found_a_file = False
+    for path in download.rglob("*"):
+        if not path.is_file():
+            continue
+        found_a_file = True
+        installed_copy = installed / path.relative_to(download)
+        if not installed_copy.is_file():
+            return False
+        if not filecmp.cmp(path, installed_copy, shallow=False):
+            return False
+    return found_a_file
 
 
 def setup_pack_from_manifest(

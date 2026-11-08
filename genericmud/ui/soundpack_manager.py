@@ -12,6 +12,7 @@ from genericmud.packs import (
     GitUpdateResult,
     PackError,
     PackStore,
+    UpdateUnchanged,
     activate_world,
     describe_update,
     git_sources,
@@ -284,6 +285,13 @@ class PackManagerDialog(wx.Dialog):
             wx.MessageBox(f"Update failed: {outcome}", "Update", wx.OK | wx.ICON_ERROR)
         elif isinstance(outcome, GitUpdateResult):
             wx.MessageBox(describe_update(outcome), "Update", wx.OK | wx.ICON_INFORMATION)
+        elif isinstance(outcome, UpdateUnchanged):
+            if self._diag is not None:
+                self._diag.event("update.unchanged", id=pack_id)
+            wx.MessageBox(
+                f"Nothing new for {pack_id}: its download is the same as what you have.",
+                "Update", wx.OK | wx.ICON_INFORMATION,
+            )
         else:
             if self._diag is not None:
                 self._diag.event("update.done", id=pack_id, dialect=outcome.manifest.dialect)
