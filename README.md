@@ -602,7 +602,8 @@ split into commands -- a semicolon in it stays a semicolon.
   `mud.timer(5, function() mud.command("look") end)`.
 
 Code a rule runs inline is given `line` (what matched) and `wildcards` (the captures,
-`wildcards[1]` first) as globals; a called function receives them as arguments. Errors
+`wildcards[1]` first) as its own values, so they never overwrite a global of your scripts
+with either name; a called function receives them as arguments. Errors
 are spoken once and written to the diagnostics rather than swallowed. Every rule of a
 world shares one Lua space for this, and a rule can call any function of any of that
 world's scripts.
