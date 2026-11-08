@@ -176,7 +176,9 @@ a note, store a value, or run Lua. Do it once only makes it a one-shot: it runs 
 and is then removed, here and from the saved rules the next time they are saved; until
 then it is still in the file, so opening the world again runs it once more. An
 offset is how many seconds before its interval is up it fires, so two timers on the
-same interval take turns. Keep running while the world is disconnected lets it keep its
+same interval take turns. It has to be less than the interval, and a timer that fires
+once a day takes none: the editor says why and stays open on the offset instead of
+saving something else. Keep running while the world is disconnected lets it keep its
 clock while nothing is connected: then it can still note, log, store a value or run a
 script, which is how it speaks, but commands have nowhere to go.
 A timer whose commands can't be sent because the world is down says so, once each time.

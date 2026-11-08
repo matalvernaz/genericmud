@@ -90,3 +90,112 @@ def test_no_two_controls_in_the_mud_data_editor_share_a_shortcut(frame, tmp_path
         assert "Choose f&rom the values the MUD has sent..." in labels
     finally:
         dialog.Destroy()
+
+
+# --- the timer editor ----------------------------------------------------------------------
+
+
+def _stop(stops, control):
+    """The (control, name, label before) entry for one control."""
+    return next(entry for entry in stops if entry[0] is control)
+
+
+def test_each_timer_field_has_its_label_straight_before_it(frame):
+    # The interval had an empty label before it, so a screen reader named it only on Windows
+    # (through SetName) and no letter reached it; the offset and the time of day had their
+    # labels one control too early, with an empty one between label and field.
+    from genericmud.packs.user_rules import UserTimer
+    from genericmud.ui.rule_editors import TimerEditorDialog
+
+    dialog = TimerEditorDialog(frame, UserTimer(send="look"))
+    try:
+        stops = _tab_stops(dialog)
+        every, offset, at = (
+            _stop(stops, dialog._every), _stop(stops, dialog._offset), _stop(stops, dialog._at)
+        )
+        assert every[1] == "E&very this many seconds:"
+        assert offset[1] == "Offset in seconds, be&fore the interval is up:"
+        assert at[1] == "At this &time each day (HH:MM:SS):"
+        assert _shortcut_clashes(dialog) == {}
+        # A label goes grey with its field, so it reads as unavailable along with it.
+        for daily in (True, False):
+            dialog._kind.SetSelection(1 if daily else 0)
+            dialog._on_kind()
+            assert dialog._every.IsEnabled() is (not daily)
+            assert every[2].IsEnabled() is (not daily)
+            assert dialog._at.IsEnabled() is daily
+            assert at[2].IsEnabled() is daily
+            assert dialog._offset.IsEnabled() and offset[2].IsEnabled()
+    finally:
+        dialog.Destroy()
+
+
+def _press_ok(dialog, monkeypatch) -> tuple[list[int], list[str], list[str]]:
+    """Press OK; what closed the dialog, what was said, and which fields took the focus."""
+    closed: list[int] = []
+    told: list[str] = []
+    focused: list[str] = []
+    monkeypatch.setattr(wx, "MessageBox", lambda text, *_args: told.append(text))
+    for name in ("_every", "_offset", "_at", "_label"):
+        widget = getattr(dialog, name)
+        monkeypatch.setattr(widget, "SetFocus", lambda name=name: focused.append(name))
+    dialog.EndModal = closed.append
+    dialog._on_ok(None)
+    return closed, told, focused
+
+
+@pytest.mark.parametrize(
+    ("daily", "every", "offset", "words"),
+    [
+        (False, "60", "abc", "'abc' is not one"),
+        (False, "60", "-5", "can't be less than 0"),
+        (False, "60", "90", "has to be less than the interval, which is 60 seconds"),
+        (False, "60", "60", "has to be less than the interval"),
+        (True, "", "10", "once a day takes no offset"),
+    ],
+)
+def test_the_timer_editor_refuses_an_offset_it_would_not_honour(
+    frame, monkeypatch, daily, every, offset, words
+):
+    # Words and a negative number used to save as no offset, and a daily timer kept an offset
+    # it never used, all without a word; past the interval, the manager refused it later with
+    # nothing to say which field was wrong.
+    from genericmud.packs.user_rules import UserTimer
+    from genericmud.ui.rule_editors import TimerEditorDialog
+
+    dialog = TimerEditorDialog(frame, UserTimer(send="look"))
+    try:
+        dialog._kind.SetSelection(1 if daily else 0)
+        dialog._on_kind()
+        dialog._every.SetValue(every)
+        dialog._at.SetValue("03:00")
+        dialog._offset.SetValue(offset)
+        closed, told, focused = _press_ok(dialog, monkeypatch)
+        assert closed == []  # still open, so it can be put right
+        assert len(told) == 1 and words in told[0], told
+        assert focused == ["_offset"]
+        assert dialog._offset.GetValue() == offset  # what was typed is still there
+    finally:
+        dialog.Destroy()
+
+
+@pytest.mark.parametrize(
+    ("daily", "offset", "saved"),
+    [(False, "30", 30.0), (False, "", 0.0), (False, "0", 0.0), (True, "", 0.0), (True, "0", 0.0)],
+)
+def test_the_timer_editor_takes_an_offset_it_can_use(frame, monkeypatch, daily, offset, saved):
+    from genericmud.packs.user_rules import UserTimer
+    from genericmud.ui.rule_editors import TimerEditorDialog
+
+    dialog = TimerEditorDialog(frame, UserTimer(send="look"))
+    try:
+        dialog._kind.SetSelection(1 if daily else 0)
+        dialog._on_kind()
+        dialog._every.SetValue("60")
+        dialog._at.SetValue("03:00")
+        dialog._offset.SetValue(offset)
+        closed, told, _focused = _press_ok(dialog, monkeypatch)
+        assert closed == [wx.ID_OK] and told == []
+        assert dialog.result().offset == saved
+    finally:
+        dialog.Destroy()

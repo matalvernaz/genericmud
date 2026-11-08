@@ -6,6 +6,7 @@ window, which makes a MUD data rule for one value.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -86,11 +87,19 @@ class _RuleEditorBase(wx.Dialog):
         return label.replace("&", "").rstrip(":").strip()
 
     def _text(self, grid: wx.FlexGridSizer, label: str, value: str = "") -> wx.TextCtrl:
-        grid.Add(wx.StaticText(self, label=label), 0, wx.ALIGN_CENTER_VERTICAL)
+        return self._labelled_text(grid, label, value)[1]
+
+    def _labelled_text(
+        self, grid: wx.FlexGridSizer, label: str, value: str = ""
+    ) -> tuple[wx.StaticText, wx.TextCtrl]:
+        """A text field and the label created straight before it, for a dialog that switches
+        the pair off and on together."""
+        caption = wx.StaticText(self, label=label)
+        grid.Add(caption, 0, wx.ALIGN_CENTER_VERTICAL)
         ctrl = wx.TextCtrl(self, value=value)
         ctrl.SetName(self._field_name(label))  # NVDA needs the name as well as the label
         grid.Add(ctrl, 1, wx.EXPAND)
-        return ctrl
+        return caption, ctrl
 
     def _variable_name(self, grid: wx.FlexGridSizer, value: str) -> wx.TextCtrl:
         """The name a variable target stores under (MUSHclient's variable field).
@@ -689,21 +698,19 @@ class TimerEditorDialog(_RuleEditorBase):
         self._kind.SetSelection(1 if timer.at.strip() else 0)
         grid.Add(wx.StaticText(self, label=""))
         grid.Add(self._kind, 1, wx.EXPAND)
-        grid.Add(wx.StaticText(self, label=""))
-        self._every = wx.TextCtrl(self, value=str(timer.every or ""))
-        self._every.SetName("Every this many seconds")
-        self._every_row = grid.GetItemCount()
-        grid.Add(self._every, 1, wx.EXPAND)
-        grid.Add(wx.StaticText(self, label="Offset in seconds, be&fore the interval is up:"))
-        grid.Add(wx.StaticText(self, label=""))
-        self._offset = wx.TextCtrl(self, value=str(timer.offset or ""))
-        self._offset.SetName("Offset in seconds, before the interval is up")
-        grid.Add(self._offset, 1, wx.EXPAND)
-        grid.Add(wx.StaticText(self, label="At this &time each day (HH:MM:SS):"))
-        grid.Add(wx.StaticText(self, label=""))
-        self._at = wx.TextCtrl(self, value=timer.at)
-        self._at.SetName("At this time each day")
-        grid.Add(self._at, 1, wx.EXPAND)
+        # Each field has its own label straight before it, which is what names it for a screen
+        # reader everywhere, and the label is switched off with its field, so it reads as
+        # unavailable rather than as a field that went missing. The offset stays on for both
+        # kinds: a daily timer refuses one, and the field has to be there to clear it.
+        self._every_label, self._every = self._labelled_text(
+            grid, "E&very this many seconds:", str(timer.every or "")
+        )
+        self._offset = self._text(
+            grid, "Offset in seconds, be&fore the interval is up:", str(timer.offset or "")
+        )
+        self._at_label, self._at = self._labelled_text(
+            grid, "At this &time each day (HH:MM:SS):", timer.at
+        )
         self._kind.Bind(wx.EVT_RADIOBOX, self._on_kind)
         self._show_the_fields_the_kind_needs()
         self._one_shot = wx.CheckBox(self, label="Do it &once only")
@@ -738,7 +745,7 @@ class TimerEditorDialog(_RuleEditorBase):
             # One shape or the other, never both: a daily timer that keeps a number in the Every
             # box would fire on that interval, which is not what "Once a day" says.
             every=0.0 if daily else self._number(self._every.GetValue()),
-            offset=self._number(self._offset.GetValue()),
+            offset=0.0 if daily else self._number(self._offset.GetValue()),
             at=self._at.GetValue().strip() if daily else "",
             one_shot=self._one_shot.GetValue(),
             run_disconnected=self._run_disconnected.GetValue(),
@@ -752,8 +759,10 @@ class TimerEditorDialog(_RuleEditorBase):
     def _show_the_fields_the_kind_needs(self) -> None:
         """Switch on the field the chosen shape uses, and switch the other one off."""
         daily = self._kind.GetSelection() == 1
-        self._every.Enable(not daily)
-        self._at.Enable(daily)
+        for widget in (self._every_label, self._every):
+            widget.Enable(not daily)
+        for widget in (self._at_label, self._at):
+            widget.Enable(daily)
 
     def _on_kind(self, _event=None) -> None:
         self._show_the_fields_the_kind_needs()
@@ -767,32 +776,73 @@ class TimerEditorDialog(_RuleEditorBase):
                 "and a group reach it, so two timers cannot share one.",
                 self._label,
             )
-        if self._kind.GetSelection() == 1:
+        daily = self._kind.GetSelection() == 1
+        if daily:
             if at_time(self._at.GetValue()) is None:
                 return (
                     "Once a day needs a time like 03:00, or 21:15:30. That time is what the "
                     "timer fires at each day.",
                     self._at,
                 )
-            return None
-        text = self._every.GetValue().strip()
-        try:
-            seconds = float(text) if text else 0.0
-        except ValueError:
-            seconds = 0.0
-        if seconds <= 0:
+            every = 0.0
+        else:
+            every = _seconds_in(self._every.GetValue())
+            if every is None or every <= 0:
+                return (
+                    "Every so often needs a number of seconds, such as 30 or 300.",
+                    self._every,
+                )
+        return self._offset_refusal(daily, every)
+
+    def _offset_refusal(self, daily: bool, every: float) -> tuple[str, wx.Window] | None:
+        """Why the offset can't be saved as typed, or None.
+
+        Each of these used to save as something else without a word: words or a negative
+        number became no offset at all, and a daily timer kept an offset it never used.
+        """
+        text = self._offset.GetValue().strip()
+        offset = _seconds_in(text)
+        if offset is None:
             return (
-                "Every so often needs a number of seconds, such as 30 or 300.",
-                self._every,
+                f"The offset is a number of seconds, such as 30, and {text!r} is not one.",
+                self._offset,
+            )
+        if offset < 0:
+            return (
+                "The offset can't be less than 0: it is how many seconds before the interval "
+                "is up the timer fires.",
+                self._offset,
+            )
+        if offset and daily:
+            return (
+                "A timer that fires once a day takes no offset, because its time comes from "
+                "the clock. Clear the offset, or choose Every so often.",
+                self._offset,
+            )
+        if offset and offset >= every:
+            return (
+                f"An offset of {offset:g} seconds has to be less than the interval, which is "
+                f"{every:g} seconds.",
+                self._offset,
             )
         return None
 
     @staticmethod
     def _number(text: str) -> float:
-        try:
-            return max(0.0, float(text.strip() or 0))
-        except ValueError:
-            return 0.0
+        seconds = _seconds_in(text)
+        return 0.0 if seconds is None else max(0.0, seconds)
+
+
+def _seconds_in(text: str) -> float | None:
+    """The seconds a timer field holds: 0 when it is empty, None when it isn't a number."""
+    text = text.strip()
+    if not text:
+        return 0.0
+    try:
+        seconds = float(text)
+    except ValueError:
+        return None
+    return seconds if math.isfinite(seconds) else None
 
 
 class ChannelEditorDialog(_RuleEditorBase):

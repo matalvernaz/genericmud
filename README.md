@@ -539,8 +539,10 @@ An interval timer can also take an **offset**: the number of seconds *before* it
 is up that it should fire. Two timers on the same interval with one offset between them take
 turns instead of both going off at once: one set for 120 seconds fires at 120, 240, 360, and
 one set for 120 with an offset of 60 fires at 60, 180, 300. The offset only moves the first
-fire; the gap after that is still the interval. It means nothing for a daily timer, whose
-wait comes from the clock.
+fire; the gap after that is still the interval. It has to be less than the interval, and a
+daily timer takes none, since its wait comes from the clock. The editor refuses an offset it
+could not use, one that is not a number, or one below 0: it says why and stays open on the
+offset field, rather than saving something else.
 
 A timer that should keep going while the world is down says so with **Keep running while the
 world is disconnected**. It keeps its clock through the disconnect, and what it does then is
