@@ -66,25 +66,36 @@ def test_find_shortcuts_remain_scoped_to_the_output_control():
     assert '"&Find in Output...\\tCtrl+F"' not in ui_class_source("GenericMudFrame")
 
 
-def test_find_caret_mapping_stays_in_native_units():
-    # Insertion-point units and GetValue() offsets disagree on Windows (a line break
-    # is two native characters, one in the string), so the caret sync must convert
-    # through the control's own line functions, never position by string offset.
+def test_find_caret_mapping_counts_characters_not_the_control_line_numbers():
+    # Two numbering systems meet here, and neither the string nor the control's line numbers will
+    # do. A string offset is wrong because Windows stores a line break as two characters and
+    # GetValue() renders one, so a line's start is the text before it plus one more per break.
+    # The control's own line numbers are wrong too: Windows answers "where does line N begin?"
+    # with 1,024 characters at most, so a MUD's long room description is reported as several
+    # lines and every number after it is off -- which put the caret a few lines short of the line
+    # a search had just announced. Both directions now go through scrollback's arithmetic.
     assert "find_offset" not in ui_class_source("SessionPanel")
     caret_sync = ui_source("SessionPanel._sync_find_caret")
-    assert "self.output.PositionToXY(self.output.GetInsertionPoint())" in caret_sync
-    assert "self.output.XYToPosition(0, line)" in caret_sync
+    assert "GetValue().split" in caret_sync
+    assert "line_at_position(lines, self.output.GetInsertionPoint(), width=width)" in caret_sync
+    assert "offset = position_of_line(lines, line, width=width)" in caret_sync
+    assert "width = break_width(self.output)" in caret_sync
+    assert "PositionToXY" not in caret_sync and "XYToPosition" not in caret_sync
 
 
 def test_enter_in_the_output_follows_the_link_on_the_caret_line():
     # Plain Enter can't be a keymap combo: _key_combo keeps it as typing, or the command box
     # would stop sending. So the output control, where there is nothing to send, dispatches
     # the action itself, and names the line the caret is on rather than leaving the engine to
-    # guess (its review cursor knows nothing of this caret).
+    # guess (its review cursor knows nothing of this caret). The line and column are counted
+    # the same way Find counts them, for the same reason: the control's own line numbers are
+    # off past a 1,024-character line, and a link would be followed on the wrong line.
     handler = ui_source("SessionPanel._on_output_key")
     assert "wx.WXK_RETURN" in handler
     assert '"type": protocol.LINK_AT' in handler
-    assert "self.output.PositionToXY(" in handler
+    assert "caret_line = line_at_position(lines, position, width=width)" in handler
+    assert "column = position - position_of_line(lines, caret_line, width=width)" in handler
+    assert "PositionToXY" not in handler
 
 
 def test_the_panic_and_review_keys_still_reach_the_output_control():

@@ -405,7 +405,9 @@ Ctrl+F            Find in the output: what to look for, up or down, match case
 F3                Find the next match, same settings
 Shift+F3          Find the previous match
 A search starts from the line you are on, so moving up the output and searching
-again carries on from there.
+again carries on from there. The cursor moves onto the line it finds; a match
+older than the lines the output box keeps cannot be reached, and it says so
+rather than staying quiet.
 
 Chat channels:
 Ctrl+Alt+Left / Right    Previous / next channel
