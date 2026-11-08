@@ -335,3 +335,169 @@ def test_every_destination_has_words_of_its_own():
     assert set(_DESTINATION_WORDS) == set(SEND_TO_CHOICES)
     actions = [as_action for as_action, _as_sentence in _DESTINATION_WORDS.values()]
     assert len(set(actions)) == len(actions)  # no two destinations read the same
+
+
+# --- the manager's switch, with a live session ----------------------------------------------
+
+
+class _WaitingLoop:
+    """The session's loop, standing still: what the manager hands it waits until run().
+
+    The real loop runs a reload a moment after the save, on its own thread. Holding it still
+    is how a test sees the manager in that moment, which is when the switch used to undo itself.
+    """
+
+    def __init__(self) -> None:
+        self.waiting: list = []
+
+    def call_soon_threadsafe(self, callback, *args) -> None:
+        self.waiting.append((callback, args))
+
+    def run(self) -> None:
+        while self.waiting:
+            callback, args = self.waiting.pop(0)
+            callback(*args)
+
+
+def _live_session(tmp_path, rules, *, after_load=None):
+    """A panel whose session runs ``rules`` on a real engine, reloading them as the app does."""
+    import types
+
+    from genericmud.automation.engine import AutomationEngine
+    from genericmud.config.keymap import load_keymap
+    from genericmud.config.worlds import World
+    from genericmud.packs import user_rules
+    from genericmud.packs.user_rules import load_rules, save_rules
+    from genericmud.scripting.api import ScriptApi
+
+    engine = AutomationEngine()
+    save_rules(tmp_path, rules)
+
+    def reload_user_rules() -> None:
+        engine.remove_source(user_rules.SOURCE)
+        user_rules.register_rules(
+            ScriptApi(engine, source=user_rules.SOURCE, base_dir=str(tmp_path)),
+            load_rules(tmp_path),
+        )
+
+    reload_user_rules()
+    if after_load is not None:
+        after_load(engine)
+    loop = _WaitingLoop()
+    panel = types.SimpleNamespace(
+        world=World("Test", "mud.example", 4000),
+        app=types.SimpleNamespace(
+            user_rules_dir=lambda: tmp_path, engine=engine,
+            reload_user_rules=reload_user_rules, diag=None,
+        ),
+        variable_snapshot=None,
+        _keymap=load_keymap("vipmud"),
+        _prefs=types.SimpleNamespace(numpad_compass=False),
+        _loop=loop,
+    )
+    return panel, engine, loop
+
+
+def _manager(frame, panel, kind, monkeypatch, spoken):
+    from genericmud.ui import automation_manager
+
+    kinds = [entry[0] for entry in automation_manager.AutomationManagerDialog._CATEGORIES]
+    # The category last shown is remembered on the class; start each test on its own.
+    monkeypatch.setattr(
+        automation_manager.AutomationManagerDialog, "_last_category", kinds.index(kind)
+    )
+    return automation_manager.AutomationManagerDialog(frame, panel, announce=spoken.append)
+
+
+def _rows(manager) -> list[str]:
+    return [manager._list.GetString(index) for index in range(manager._list.GetCount())]
+
+
+@pytest.mark.parametrize(
+    ("kind", "collection", "fields", "word"),
+    [
+        pytest.param("trigger", "triggers", dict(pattern="backup", send="look", label="watched"),
+                     "Trigger", id="labelled trigger"),
+        pytest.param("key", "keys", dict(key="ctrl+shift+f9", send="look"), "Hotkey",
+                     id="hotkey"),
+        pytest.param("timer", "timers", dict(label="tick", every=30, send="look"), "Timer",
+                     id="timer"),
+        pytest.param("data", "watches", dict(name="Char.Vitals.hp", speak="hp ${value}"),
+                     "MUD data rule", id="MUD data rule"),
+    ],
+)
+def test_disable_in_the_manager_switches_the_rule_off_and_says_so(
+    frame, tmp_path, monkeypatch, kind, collection, fields, word
+):
+    # The button read the engine's old state back over the one it had just switched, saved
+    # that, and said "Trigger enabled." for a press of Disable: nothing changed, and the words
+    # said the opposite of what was asked.
+    from genericmud.packs.user_rules import UserRules, engine_rule_state, load_rules
+
+    made = _rule(kind, **fields)
+    panel, engine, loop = _live_session(tmp_path, UserRules(**{collection: [made]}))
+    spoken: list[str] = []
+    told: list[str] = []
+    monkeypatch.setattr(wx, "MessageBox", lambda text, *_args: told.append(text))
+    manager = _manager(frame, panel, kind, monkeypatch, spoken)
+    try:
+        manager._list.SetSelection(0)
+        manager._on_list_selection(None)
+        assert manager._buttons["toggle"].GetLabel() == "Disa&ble"
+        manager._on_toggle(None)
+        assert spoken == [f"{word} disabled."]
+        assert getattr(load_rules(tmp_path), collection)[0].enabled is False
+        assert _rows(manager)[0].startswith("Disabled. ")
+        assert manager._buttons["toggle"].GetLabel() == "E&nable"
+
+        # The session catches up on its own loop, and the next look agrees with the file.
+        loop.run()
+        assert engine_rule_state(engine, kind, made) in (False, None)  # off, or not running
+        manager._refresh()
+        assert _rows(manager)[0].startswith("Disabled. ")
+
+        manager._on_toggle(None)
+        assert spoken[-1] == f"{word} enabled."
+        assert getattr(load_rules(tmp_path), collection)[0].enabled is True
+        assert not _rows(manager)[0].startswith("Disabled.")
+        loop.run()
+        assert engine_rule_state(engine, kind, made) is True
+        assert told == []
+    finally:
+        manager.Destroy()
+
+
+def test_a_rule_switched_back_on_in_its_editor_reads_as_on_at_once(frame, tmp_path, monkeypatch):
+    # A script switched the trigger off; the player opens it, ticks Enabled and presses OK.
+    # The file said on, but the list redrawn straight after asked the engine again, before its
+    # reload had run, and read "Disabled." until something else redrew it.
+    from genericmud.packs.user_rules import UserRules, UserTrigger, load_rules
+    from genericmud.ui import rule_editors
+
+    panel, engine, loop = _live_session(
+        tmp_path,
+        UserRules(triggers=[UserTrigger(pattern="backup", send="look", label="watched")]),
+        after_load=lambda engine: engine.set_enabled("watched", False),
+    )
+
+    def tick_enabled_and_press_ok(editor) -> int:
+        editor._enabled.SetValue(True)
+        return wx.ID_OK
+
+    monkeypatch.setattr(rule_editors.TriggerEditorDialog, "ShowModal", tick_enabled_and_press_ok)
+    spoken: list[str] = []
+    manager = _manager(frame, panel, "trigger", monkeypatch, spoken)
+    try:
+        manager._list.SetSelection(0)
+        manager._on_list_selection(None)
+        assert _rows(manager) == ["Disabled. watched: Trigger: backup: send look"]  # the script
+        manager._on_edit(None)
+        assert spoken == ["Trigger updated."]
+        assert load_rules(tmp_path).triggers[0].enabled is True
+        assert _rows(manager) == ["watched: Trigger: backup: send look"]
+        assert manager._buttons["toggle"].GetLabel() == "Disa&ble"
+        loop.run()
+        manager._refresh()
+        assert _rows(manager) == ["watched: Trigger: backup: send look"]
+    finally:
+        manager.Destroy()

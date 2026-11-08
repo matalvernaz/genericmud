@@ -342,8 +342,16 @@ class AutomationManagerDialog(wx.Dialog):
             "channel": self._rules.channels, "data": self._rules.watches,
         }[kind]
 
-    def _refresh(self, select: int | str | None = None, *, focus: bool = False) -> None:
-        self._sync_from_engine()  # a script may have switched something since the last look
+    def _refresh(
+        self, select: int | str | None = None, *, focus: bool = False, except_rule=None
+    ) -> None:
+        """Redraw the list for the category being shown.
+
+        ``except_rule`` is a rule saved only now: the reload that gives the engine its new state
+        is still waiting on the session's loop, so the engine's word for that one is out of date.
+        """
+        # A script may have switched something since the last look.
+        self._sync_from_engine(except_rule=except_rule)
         kind = self._kind()
         _kind, _label, description = self._CATEGORIES[self._category.GetSelection()]
         self._description.SetLabel(description)
@@ -526,7 +534,7 @@ class AutomationManagerDialog(wx.Dialog):
             return False
         if self._panel.app is not None:
             self._panel._loop.call_soon_threadsafe(self._panel.app.reload_user_rules)
-        self._refresh(select)
+        self._refresh(select, except_rule=just_edited)
         return True
 
     def _edit_rule(self, kind: str, rule):
@@ -684,10 +692,14 @@ class AutomationManagerDialog(wx.Dialog):
             self._refresh(index)
             return
         items = self._collection(kind)
-        items[index] = replace(items[index], enabled=not items[index].enabled)
-        if self._save_and_reload_rules(index):
-            state = "enabled" if items[index].enabled else "disabled"
-            self._announce_rule_change(kind, items[index], f"{self._KIND_WORD[kind]} {state}.")
+        # The opposite of what the list said, which is what the button said it would do. It is
+        # the player's decision of this moment, so the engine's older state must not undo it,
+        # either before the save or in the redraw after it.
+        toggled = replace(items[index], enabled=not items[index].enabled)
+        items[index] = toggled
+        if self._save_and_reload_rules(index, just_edited=toggled):
+            state = "enabled" if toggled.enabled else "disabled"
+            self._announce_rule_change(kind, toggled, f"{self._KIND_WORD[kind]} {state}.")
 
     def _on_delete(self, _event: wx.CommandEvent) -> None:
         if self._kind() == "live":

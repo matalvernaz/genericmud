@@ -262,7 +262,7 @@ def test_saved_hotkey_explains_compass_only_when_it_blocks_use(
         _kind=lambda: "key",
         _selected_index=lambda: 0,
         _edit_rule=lambda _kind, _rule: rule,
-        _refresh=lambda _select: None,
+        _refresh=lambda _select, **_kwargs: None,
         _announce=spoken.append,
     )
     manager._collection = lambda _kind: manager._rules.keys
