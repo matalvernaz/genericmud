@@ -574,7 +574,8 @@ class DataRuleEditorDialog(_RuleEditorBase):
             grid, "When the MUD sends this &value (for example Char.Vitals.hp):", watch.name
         )
         if variables is not None:
-            choose = wx.Button(self, label="Choose from the values the MUD has s&ent...")
+            # R, not E: E is the Enabled box at the top of this dialog.
+            choose = wx.Button(self, label="Choose f&rom the values the MUD has sent...")
             choose.Bind(wx.EVT_BUTTON, self._on_choose)
             grid.Add(wx.StaticText(self, label=""))
             grid.Add(choose)
