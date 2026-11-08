@@ -155,6 +155,9 @@ a name you give it so ${script:name} can read it later. Add any spoken text, sou
 line handling, or channel routing you need, then choose OK. Leave this line out of the
 session log is separate from hiding it: the line still works as it did, it just never
 reaches the file, which is how a repeating notice stops filling the record.
+The trigger editor asks the common questions first: the text to match, the commands
+and where they go, the speech, and what happens to the line. Its Label, Group, Order
+and Keep checking come after the channel, and the sound fields come last.
 
 A trigger or alias can have a name, a group, and an order. The Label is the name a
 script turns that one rule off and on by, with mud.set_enabled. The Group switches every

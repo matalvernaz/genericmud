@@ -199,3 +199,58 @@ def test_the_timer_editor_takes_an_offset_it_can_use(frame, monkeypatch, daily, 
         assert dialog.result().offset == saved
     finally:
         dialog.Destroy()
+
+
+# --- the trigger editor ---------------------------------------------------------------------
+
+
+def _sizer_windows(sizer) -> list[wx.Window]:
+    windows = []
+    for item in sizer.GetChildren():
+        if item.IsWindow():
+            windows.append(item.GetWindow())
+        elif item.IsSizer():
+            windows.extend(_sizer_windows(item.GetSizer()))
+    return windows
+
+
+def test_the_trigger_editor_asks_the_common_questions_first(frame, tmp_path):
+    # Label, Group, Order and Keep checking sat between "How to match" and the commands, so
+    # every edit tabbed past four fields most triggers never use before reaching what the rule
+    # does. They come after the line handling now, and before the sound fields.
+    from genericmud.packs.user_rules import UserTrigger
+    from genericmud.ui.rule_editors import TriggerEditorDialog
+
+    dialog = TriggerEditorDialog(frame, tmp_path, UserTrigger(), variables=_no_variables)
+    try:
+        stops = _tab_stops(dialog)
+        tab_order = [child for child, _label, _before in stops]
+        expected = [
+            dialog._enabled, dialog._pattern, dialog._match,
+            dialog._send, dialog._send_to, dialog._variable, dialog._speak, dialog._interrupt,
+            dialog._gag, dialog._omit_log, dialog._channel,
+            dialog._label, dialog._group, dialog._order, dialog._keep_evaluating,
+            dialog._stop_channel, dialog._sound, dialog._volume, dialog._pan, dialog._loop,
+        ]
+        places = [
+            next(index for index, child in enumerate(tab_order) if child is control)
+            for control in expected
+        ]
+        assert places == sorted(places)
+        # Each field still has its own label straight before it.
+        assert _stop(stops, dialog._label)[1] == (
+            "&Label (a script turns it off and on by this name):"
+        )
+        assert _stop(stops, dialog._group)[1] == (
+            "&Group (rules sharing a name switch together):"
+        )
+        assert _stop(stops, dialog._order)[1] == "&Order (lower is tried first):"
+        assert _stop(stops, dialog._stop_channel)[1] == (
+            "S&top a looping sound on this channel first (optional):"
+        )
+        # And the screen shows them in the order Tab visits them.
+        on_screen = [window for window in _sizer_windows(dialog.GetSizer())
+                     if any(window is child for child in tab_order)]
+        assert [id(window) for window in on_screen] == [id(child) for child in tab_order]
+    finally:
+        dialog.Destroy()

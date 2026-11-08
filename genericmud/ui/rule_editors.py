@@ -270,9 +270,12 @@ class TriggerEditorDialog(_RuleEditorBase):
         self._pack_dir = pack_dir
         outer = wx.BoxSizer(wx.VERTICAL)
         grid = self._grid()
-        # The order is MUSHclient's, and it is the order a rule is thought about in: what it
-        # matches, then what it does, then where that goes, then the switches, and the sound
-        # detail last, because most edits never touch it.
+        # The fields come in the order a rule is thought about, the common ones first: what it
+        # matches, then what it does (the commands, where they go, the speech), then what
+        # becomes of the line (shown or hidden, logged, routed to a channel). The label, group
+        # and order come after those, since they matter once a script or a long list of rules
+        # has to tell this one apart, and the sound detail is last, because most edits never
+        # touch it.
         self._enabled = self._enabled_checkbox(grid, trigger)
         self._pattern = self._text(
             grid, "When the MUD sends &text matching:", trigger.pattern
@@ -291,13 +294,6 @@ class TriggerEditorDialog(_RuleEditorBase):
         self._match.SetSelection(MATCH_CHOICES.index(trigger.match_kind()))
         grid.Add(wx.StaticText(self, label=""))
         grid.Add(self._match, 1, wx.EXPAND)
-        self._label = self._text(
-            grid, "&Label (a script turns it off and on by this name):", trigger.label
-        )
-        self._group = self._text(
-            grid, "&Group (rules sharing a name switch together):", trigger.group
-        )
-        self._order, self._keep_evaluating = self._order_controls(grid, trigger)
         self._send = self._command_text(grid, trigger.send, captures=True)
         self._send_to = self._send_to_choice(grid, trigger.send_to)
         self._variable = self._variable_name(grid, trigger.variable)
@@ -333,6 +329,13 @@ class TriggerEditorDialog(_RuleEditorBase):
         self._channel = self._text(
             grid, "Route to &channel (optional, e.g. chat):", trigger.channel
         )
+        self._label = self._text(
+            grid, "&Label (a script turns it off and on by this name):", trigger.label
+        )
+        self._group = self._text(
+            grid, "&Group (rules sharing a name switch together):", trigger.group
+        )
+        self._order, self._keep_evaluating = self._order_controls(grid, trigger)
         self._stop_channel = self._text(
             grid, "S&top a looping sound on this channel first (optional):", trigger.stop_channel
         )

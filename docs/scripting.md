@@ -76,11 +76,14 @@ an alias for `sh *`, or one from a soundpack, still comes first. Lua's
 2. Enter the text to watch for. **The line contains this text** is usually the
    right match choice. Wildcards, exact whole lines, and regular expressions
    are also available.
-3. Fill in any actions you need: commands, spoken text, a sound, speech
-   interruption, hiding the line, **Leave this line out of the session log**, or
-   routing it to a channel. Hiding the line decides what you hear; leaving it out
-   of the log decides what is kept, and either can be set without the other, so a
-   repeating notice can be read once and never written down.
+3. Fill in any actions you need, in the order the editor asks for them: commands
+   and where they go, spoken text, speech interruption, hiding the line,
+   **Leave this line out of the session log**, routing it to a channel, and a
+   sound. Hiding the line decides what you hear; leaving it out of the log
+   decides what is kept, and either can be set without the other, so a
+   repeating notice can be read once and never written down. **Label**,
+   **Group**, **Order** and **Keep checking** sit between the channel and the
+   sound fields; most triggers leave them as they are.
 4. Choose **OK**. The trigger works on the next matching line.
 
 Hotkeys use the same command field. Focus **Press the key combination**, press
