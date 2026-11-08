@@ -8,6 +8,64 @@ fails the build on purpose.
 
 Entries start at 0.7.1. Earlier releases were tagged before this file existed.
 
+## 0.26.0 — 2026-11-07
+
+**Timers, groups, an order for your rules, and somewhere to send their text**, from MasterJake00
+
+* The Automation Manager has a Timers category. A timer fires every so often or once a
+  day at a time, and does what any rule can: send commands, fill your command box, write
+  a note or a print, write the log, store a value, or run Lua. Do it once only makes it a
+  one-shot, and an offset lets two timers on one interval take turns.
+* A timer pauses when the world disconnects and carries on when it is back. Keep running
+  while the world is disconnected keeps its clock instead; commands it can't send are
+  dropped, and it says so once each time the world is down.
+* Every rule has Send it to: the MUD, your command box (only when it's empty, so a rule
+  never replaces what you're typing), the output as a note, which is kept in the session
+  log, or as a print, which isn't, the log alone, a script variable, or a script. A rule
+  can store what it caught, and `${script:name}` reads it anywhere a command is written.
+* Triggers, aliases, hotkeys, timers and MUD data rules take a Group, which a script can
+  switch all at once. Triggers and aliases also take a Label, an Order (lower is tried
+  first) and Keep checking the rules after this one. Rules you haven't ordered work as
+  before: yours come before a soundpack's, and your first matching alias takes the command.
+* A trigger can leave its line out of the session log without hiding it.
+* Every rule editor has an Enabled box. A rule a script switched off reads as Disabled in
+  the manager, and From your scripts lists the rules your Lua made, with Enable and Disable.
+* Text from the MUD never becomes code or a genericMud command. A rule's Lua reads the match
+  as `line` and `wildcards`, and a capture that would type a genericMud command, or a second
+  command, into your command box is refused, and you're told why.
+
+**Your world's scripts**, from MasterJake00
+
+* A world's script files share one Lua space, so a function in one file can be called from
+  another, or by name from a rule.
+* Your scripts can use MUSHclient's names, like Send, Note, GetVariable, AddTrigger and
+  DoAfter, beside `mud.*`, so code written for MUSHclient works as it stands.
+* World scripts now run Lua 5.1, the version MUSHclient uses. A script written with newer Lua
+  syntax, like `//` for whole-number division or `<<`, won't load until it's changed, and
+  genericMud says which file and line. Soundpacks are unchanged.
+
+**Moving tabs**, from MasterJake00
+
+* Alt+Shift+Up and Alt+Shift+Down move the world you're in one place earlier or later in
+  the row of tabs, and Alt+Shift+1 to Alt+Shift+0 put it straight in a place. Both moves are
+  in the File menu, and each says where the tab landed. Alt+1 to Alt+0 go to a tab by its
+  place in the row. On a Mac the numbered keys are left free.
+
+**Automation Manager keys**
+
+* In the manager the hotkey list is now Alt+K, since H is Automation help; the script list
+  is Alt+C, since S is the Show box; and Enable uses Alt+B, like Disable. In the MUD data rule
+  editor, Choose from the values the MUD has sent is Alt+R.
+* The trigger editor asks the common questions first, with the label, group and order after
+  them, and each timer field has its own label and letter.
+* None of this has been tried with a live screen reader yet.
+
+**For contributors**
+
+* AGENTS.md and CONTRIBUTING.md spell out what review kept finding, and how to answer it:
+  fixes as new commits, one reply per round. A test checks every automation dialog for a
+  label before each field and a letter of its own for each control.
+
 ## 0.25.0 — 2026-11-06
 
 **An optional editable command buffer**, from have-you-met-matt
