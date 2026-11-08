@@ -8,6 +8,24 @@ fails the build on purpose.
 
 Entries start at 0.7.1. Earlier releases were tagged before this file existed.
 
+## 0.28.0 — 2026-11-08
+
+**Soundpack notes in the session log**, from MasterJake00
+
+* A world's details have Keep soundpack notes in the session log (Alt+K), off unless you
+  turn it on. With it on, the lines a soundpack shows itself, a MUSHclient pack's notes or a
+  VIPMud pack's #Say, go in the session log too, so you can read back one you missed. Notes
+  from your own scripts are kept either way.
+
+**Find**, from MasterJake00
+
+* On Windows, once the output had very long lines, like big room descriptions, Find could
+  put the cursor a few lines away from the line it read out, and Enter could follow the
+  wrong line's link. The cursor now lands on the line Find reads, and Enter follows that
+  line's link.
+* When the line Find found is further back than the output keeps, it says so, instead of
+  leaving the cursor where it was without a word.
+
 ## 0.27.0 — 2026-11-08
 
 **Ignore capitals**, from MasterJake00
