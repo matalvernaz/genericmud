@@ -22,6 +22,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from genericmud.config.audio_routes import AudioOutput
 from genericmud.sound import bass_effects, bass_library
 from genericmud.sound.bass_library import (
     ACTIVE_STOPPED,
@@ -39,6 +40,7 @@ from genericmud.sound.bass_library import (
     SYNC_POS,
 )
 from genericmud.sound.bus import CueTiming, SoundBackend, SourceInfo
+from genericmud.sound.output_devices import AudioRouteUnavailable, output_context
 
 if TYPE_CHECKING:
     from genericmud.session.diaglog import DiagnosticLog
@@ -102,8 +104,10 @@ class BassSoundBackend(SoundBackend):
         bass,
         on_error: Callable[[str], None] | None = None,
         diag: DiagnosticLog | None = None,
+        *, route_devices: bool = False,
     ) -> None:
         self._bass = bass
+        self._route_devices = route_devices
         self._on_error = on_error
         self._diag = diag  # separate from on_error: every attempt is traced, not just the first
         self._cues: dict[str, _Cue] = {}  # logical channel -> its cue
@@ -115,14 +119,34 @@ class BassSoundBackend(SoundBackend):
         self, file: str, channel: str, gain: float, pan: float, loop: bool, times: int = 1,
         timing: CueTiming | None = None,
     ) -> None:
+        self._play(file, channel, gain, pan, loop, times, timing)
+
+    def play_on_device(
+        self, output: AudioOutput, file: str, channel: str, gain: float, pan: float,
+        loop: bool, times: int = 1, timing: CueTiming | None = None,
+    ) -> None:
+        if not self._route_devices:
+            raise AudioRouteUnavailable("Audio device routing is unavailable")
+        self._play(file, channel, gain, pan, loop, times, timing, output)
+
+    def _play(
+        self, file: str, channel: str, gain: float, pan: float, loop: bool,
+        times: int, timing: CueTiming | None, output: AudioOutput | None = None,
+    ) -> None:
         self._free(self._cues.pop(channel, None))
         repeats = 1 if loop else max(1, times)
-        cue = self._open(file, gain, pan, loop=loop, repeats=repeats, timing=timing)
+        cue = self._open(file, gain, pan, loop=loop, repeats=repeats, timing=timing, output=output)
         if cue is None:
             self._trace(file, "SKIP", gain=gain)
             return
         self._cues[channel] = cue
-        self._start(file, cue, gain=gain)
+        started = self._start(file, cue, gain=gain)
+        if output is not None and not started:
+            code = self._bass.BASS_ErrorGetCode()
+            self._free(self._cues.pop(channel, None))
+            raise AudioRouteUnavailable(
+                f"Cannot play on audio output {output.name} (BASS error {code})"
+            )
 
     def music(
         self, file: str, channel: str, gain: float, times: int = -1,
@@ -389,6 +413,7 @@ class BassSoundBackend(SoundBackend):
     def _open(
         self, file: str, gain: float, pan: float, *, loop: bool, repeats: int,
         timing: CueTiming | None,
+        output: AudioOutput | None = None,
     ) -> _Cue | None:
         """A cue of ``file`` ready to play, or None when it can't be opened (reported)."""
         path, flags = bass_library.path_argument(file)
@@ -398,9 +423,33 @@ class BassSoundBackend(SoundBackend):
         # Every cue frees itself once it stops: at its end, at the end of the pass where its
         # loop was turned off, or when a fade away stops it. Nothing plays a stopped cue again.
         flags |= STREAM_AUTOFREE
-        stream = self._bass.BASS_StreamCreateFile(False, path, 0, 0, flags)
+        if self._route_devices:
+            try:
+                with output_context(self._bass, output) as index:
+                    stream = self._bass.BASS_StreamCreateFile(False, path, 0, 0, flags)
+                    if output is not None and stream:
+                        if self._bass.BASS_ChannelGetDevice(stream) != index:
+                            # BASS can choose another initialized device if hotplug removed
+                            # the selected one between validation and stream creation.
+                            self._bass.BASS_StreamFree(stream)
+                            raise AudioRouteUnavailable(f"Audio output changed: {output.name}")
+            except AudioRouteUnavailable as error:
+                if output is not None:
+                    raise
+                if str(error) not in self._warned:
+                    self._warned.add(str(error))
+                    if self._on_error is not None:
+                        self._on_error(str(error))
+                return None
+        else:
+            stream = self._bass.BASS_StreamCreateFile(False, path, 0, 0, flags)
         if not stream:
             self._trace(file, "OPEN", error=self._bass.BASS_ErrorGetCode())
+            if output is not None:
+                raise AudioRouteUnavailable(
+                    f"Cannot open sound on {output.name} "
+                    f"(BASS error {self._bass.BASS_ErrorGetCode()})"
+                )
             self._warn(file)
             return None
         self._forget_finished()
@@ -507,14 +556,16 @@ class BassSoundBackend(SoundBackend):
         else:
             bass.BASS_ChannelSetAttribute(stream, ATTRIB_VOL, gain)
 
-    def _start(self, file: str, cue: _Cue, **fields: object) -> None:
+    def _start(self, file: str, cue: _Cue, **fields: object) -> bool:
         bass = self._bass
         bass.BASS_ChannelSetAttribute(cue.stream, ATTRIB_PAN, _clamp(cue.pan, -1.0, 1.0))
         self._level(cue.stream, cue)
         if bass.BASS_ChannelPlay(cue.stream, False):
             self._trace(file, "OK", **fields)
+            return True
         else:
             self._trace(file, "EXC", error=bass.BASS_ErrorGetCode(), **fields)
+            return False
 
     def _free(self, cue: _Cue | None) -> None:
         """Stop and free a cue's stream, unless BASS has already (its handle is dead then)."""
@@ -562,7 +613,7 @@ def make_bass_backend(
         return None
     if diag is not None:
         diag.event("backend.select", result="bass", reason=str(bass.folder))
-    return BassSoundBackend(bass.core, on_error=on_error, diag=diag)
+    return BassSoundBackend(bass.core, on_error=on_error, diag=diag, route_devices=True)
 
 
 def make_sound_backend(

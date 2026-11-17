@@ -9,6 +9,7 @@ from genericmud.automation.engine import EngineSink
 from genericmud.bridge import protocol
 from genericmud.model.buffer import Buffer, Line
 from genericmud.sound.bus import SoundBus
+from genericmud.sound.output_devices import AudioRouteUnavailable
 from genericmud.voice.router import VoiceRouter
 
 if TYPE_CHECKING:
@@ -40,6 +41,7 @@ class AppSink(EngineSink):
         self._window = window
         self._log_line = log_line
         self.cues = 0  # play/music calls reaching the bus -- 0 means no cue ever fired
+        self._route_errors: dict[str, str] = {}
 
     def send(self, text: str) -> None:
         self._send(text)
@@ -118,6 +120,7 @@ class AppSink(EngineSink):
         pan: float = 0.0,
         loop: bool = False,
         times: int = 1,
+        *, route: str = "",
     ) -> None:
         self.cues += 1
         if self._diag is not None:
@@ -127,7 +130,19 @@ class AppSink(EngineSink):
                 cat_gain=policy.gain, muted=policy.muted, cue_gain=gain,
                 effective=self._sound.effective_gain(channel, gain),
             )
-        self._sound.play(file, channel, gain, pan, loop, times=times)
+        if not route:
+            self._sound.play(file, channel, gain, pan, loop, times=times)
+            return
+        try:
+            self._sound.play(file, channel, gain, pan, loop, times=times, route=route)
+        except AudioRouteUnavailable as error:
+            message = f"Audio route {route}: {error}"
+            if self._route_errors.get(route) != message:
+                self._route_errors[route] = message
+                self.echo(message)
+                self._voice.speak(message, channel="system", interrupt=False)
+        else:
+            self._route_errors.pop(route, None)  # a later outage deserves one new explanation
 
     def stop(self, channel: str) -> None:
         self._sound.stop(channel)

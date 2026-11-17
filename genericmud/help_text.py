@@ -173,6 +173,19 @@ The trigger editor asks the common questions first: the text to match, the comma
 and where they go, the speech, and what happens to the line. Its Label, Group, Order
 and Keep checking come after the channel, and the sound fields come last.
 
+Native audio outputs:
+File, Audio outputs configures named audio routes. Add one, choose an output device,
+and use Test output before saving. In a trigger, Audio output route selects a route;
+System default keeps existing playback. Simultaneous cues need different sound channels:
+the next cue on the same channel still replaces the previous one, even on another device.
+Device selection needs BASS. A missing device, unconfigured route, or unsupported backend
+keeps the explicitly routed cue silent and explains why once until it recovers. The next
+cue tries the saved device again; interrupted cues do not restart. Routes are local to
+this computer; exported rules keep their route names so a friend can assign their own
+devices. Renaming a route requires updating the rules that used it. Soundpacks, MUD audio,
+other rule types and screen-reader speech keep their existing outputs. The web window
+cannot select these devices.
+
 A trigger or alias can have a name, a group, and an order. The Label is the name a
 script turns that one rule off and on by, with mud.set_enabled. The Group switches every
 rule that shares it together, with mud.set_group_enabled, which is how all the combat

@@ -387,6 +387,7 @@ class ScriptApi:
         pan: float = 0.0,
         loop: bool = False,
         times: int = 1,
+        *, route: str = "",
     ) -> bool:
         """Play a cue (``times`` times when it doesn't loop); returns whether the file resolved
         to something that exists.
@@ -401,7 +402,11 @@ class ScriptApi:
                 channel=channel, gain=gain, loop=loop,
             )
         resolved, exists = self._resolve(file)
-        if times == 1:  # sinks written before repeats still take a cue
+        if route:
+            self._engine.sink.play(
+                resolved, channel, gain, pan, loop, times=max(1, times), route=route,
+            )
+        elif times == 1:  # sinks written before repeats still take a cue
             self._engine.sink.play(resolved, channel, gain, pan, loop)
         else:
             self._engine.sink.play(resolved, channel, gain, pan, loop, times=max(1, times))

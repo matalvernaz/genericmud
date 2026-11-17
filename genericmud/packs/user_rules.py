@@ -119,6 +119,7 @@ class UserTrigger:
     # the line. MUSHclient's default is the other way round, which is why this says what it does.
     keep_evaluating: bool = True
     enabled: bool = True
+    audio_route: str = ""  # machine-local route name; empty keeps System default
 
     def match_kind(self) -> str:
         if self.match in MATCH_CHOICES:
@@ -842,6 +843,8 @@ def _register_trigger(api: ScriptApi, t: UserTrigger, *, place: int = 0) -> None
                 gain=max(0, min(100, t.volume)) / 100,
                 pan=max(-100, min(100, t.pan)) / 100,
                 loop=t.loop,
+                **({"route": t.audio_route}
+                   if isinstance(t.audio_route, str) and t.audio_route else {}),
             )
         if t.speak:
             api.speak(
