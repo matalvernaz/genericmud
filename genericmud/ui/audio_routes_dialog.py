@@ -22,6 +22,7 @@ class AudioRouteEditor(wx.Dialog):
         self._worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="audio-output")
         self._preview = None
         self._alive = True
+        self._window_id = self.GetId()
         self._busy = False
         outer = wx.BoxSizer(wx.VERTICAL)
         outer.Add(wx.StaticText(self, label="Route &name:"), 0, wx.ALL, 6)
@@ -142,7 +143,9 @@ class AudioRouteEditor(wx.Dialog):
         return self._name.GetValue().strip(), self._outputs[self._device.GetSelection()]
 
     def _on_destroy(self, event):
-        if event.GetEventObject() is self and self._alive:
+        # During destruction wx can return a new base Dialog wrapper, not this Python
+        # subclass. Compare the saved window ID without touching the dying C++ window.
+        if event.GetId() == self._window_id and self._alive:
             self._alive = False
 
             def cleanup():
