@@ -22,6 +22,13 @@ class AudioRouteUnavailable(RuntimeError):
 _lock = threading.RLock()  # serialize initialization; BASS selection itself is thread-local
 
 
+def _check_platform() -> None:
+    # Endpoint IDs and CoreAudio UIDs identify hardware. ALSA names may instead name a
+    # numbered slot or a configurable alias; don't promise a fixed physical destination.
+    if sys.platform not in ("win32", "darwin"):
+        raise AudioRouteUnavailable("Audio device selection is supported on Windows and macOS")
+
+
 def _devices(core) -> list[tuple[int, AudioOutput, int]]:
     result = []
     # 0 is the silent device; a pseudo-default without a driver ID isn't a physical endpoint.
@@ -45,6 +52,7 @@ def _devices(core) -> list[tuple[int, AudioOutput, int]]:
 
 def available_outputs() -> list[AudioOutput]:
     """Discover enabled physical endpoints; absence of BASS is an explicit UI error."""
+    _check_platform()
     with _lock:
         bass = lib.load()
         lib.start(bass)
@@ -66,6 +74,7 @@ def output_context(core, output: AudioOutput | None = None):
                 if index is None or not core.BASS_SetDevice(index):
                     raise AudioRouteUnavailable("System default audio output is unavailable")
             else:
+                _check_platform()
                 matches = [(index, flags) for index, device, flags in _devices(core)
                            if device.platform == output.platform
                            and device.identifier == output.identifier

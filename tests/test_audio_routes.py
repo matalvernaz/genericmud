@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import json
-import sys
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 
@@ -15,6 +15,7 @@ from genericmud.model.buffer import Line
 from genericmud.packs.user_rules import UserRules, UserTrigger, register_rules
 from genericmud.scripting.api import ScriptApi
 from genericmud.sound import bass_library as lib
+from genericmud.sound import output_devices
 from genericmud.sound.bass_backend import BassSoundBackend, make_sound_backend
 from genericmud.sound.bus import CueTiming, SoundBackend, SoundBus
 from genericmud.sound.output_devices import AudioRouteUnavailable, available_outputs, output_context
@@ -22,8 +23,8 @@ from genericmud.voice.router import VoiceRouter
 from tests.helpers import RecordingBackend
 from tests.test_bass_backend import _FakeBass
 
-HEADPHONES = AudioOutput(sys.platform, "endpoint-headphones", "Наушники")
-SPEAKERS = AudioOutput(sys.platform, "endpoint-usb", "USB speakers")
+HEADPHONES = AudioOutput("win32", "endpoint-headphones", "Наушники")
+SPEAKERS = AudioOutput("win32", "endpoint-usb", "USB speakers")
 
 
 class Devices(_FakeBass):
@@ -91,6 +92,7 @@ def routes(tmp_path, monkeypatch):
 def core(monkeypatch):
     core = Devices()
     monkeypatch.setattr(lib, "_default_device", 1)
+    monkeypatch.setattr(output_devices, "sys", SimpleNamespace(platform="win32"))
     return core
 
 
@@ -223,6 +225,20 @@ def test_different_platform_never_falls_back(core, routes):
     with pytest.raises(AudioRouteUnavailable):
         SoundBus(BassSoundBackend(core, route_devices=True)).play("x.wav", route="alerts")
     assert not core.streams
+
+
+def test_linux_keeps_default_playback_but_never_guesses_physical_identity(
+    core, routes, monkeypatch,
+):
+    monkeypatch.setattr(output_devices, "sys", SimpleNamespace(platform="linux"))
+    bus = SoundBus(BassSoundBackend(core, route_devices=True))
+    bus.play("default.wav", "legacy")
+    assert list(core.streams.values())[0]["device"] == 1
+    with pytest.raises(AudioRouteUnavailable, match="Windows and macOS"):
+        bus.play("explicit.wav", "routed", route="alerts")
+    assert len(core.streams) == 1
+    with pytest.raises(AudioRouteUnavailable, match="Windows and macOS"):
+        available_outputs()
 
 
 def test_context_is_restored_even_if_stream_creation_raises(core):

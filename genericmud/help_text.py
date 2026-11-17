@@ -178,7 +178,9 @@ File, Audio outputs configures named audio routes. Add one, choose an output dev
 and use Test output before saving. In a trigger, Audio output route selects a route;
 System default keeps existing playback. Simultaneous cues need different sound channels:
 the next cue on the same channel still replaces the previous one, even on another device.
-Device selection needs BASS. A missing device, unconfigured route, or unsupported backend
+Device selection needs BASS on Windows or macOS. Linux keeps default playback because its
+device names may refer to numbered slots or aliases. A missing device, unconfigured route,
+or unsupported backend
 keeps the explicitly routed cue silent and explains why once until it recovers. The next
 cue tries the saved device again; interrupted cues do not restart. Routes are local to
 this computer; exported rules keep their route names so a friend can assign their own
