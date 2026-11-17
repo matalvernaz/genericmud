@@ -538,7 +538,8 @@ key. These editors use ordinary fields; no code is required.
 
 In the native client, **File → Audio outputs** configures named audio routes, such as
 “Headphones” and “Speakers”. Add a route, choose its output device, and use **Test output**
-before saving. A trigger's **Audio output route** chooses one of these routes; **System
+before saving. New routes require a device choice; no physical output is preselected.
+A trigger's **Audio output route** chooses one of these routes; **System
 default** keeps existing playback. Give simultaneous cues different sound channels, as before:
 playing another cue on the same channel still replaces it, regardless of its destination.
 
@@ -549,8 +550,10 @@ to another device: an unavailable device, an unconfigured route, or an unsupport
 leaves that cue silent and reports the problem once until recovery. A returning device is
 looked up again by its identifier on the next cue; interrupted cues are not restarted.
 Routes live in the machine's `audio-routes.json`, separate from exported worlds. Rules export
-only the route name, so a recipient can map it to their own hardware. Renaming a route requires
-updating rules that use its old name. Soundpacks, MUD-provided audio, other rule types and
+only the route name, so a recipient can map it to their own hardware. Renaming or removing a
+route leaves triggers using its old name silent until you update them or restore that name.
+Saving changes that remove route names asks for confirmation; No keeps your edits open.
+Soundpacks, MUD-provided audio, other rule types and
 screen-reader speech keep their existing outputs. The web client cannot select these devices.
 
 **Ignore capitals** is ticked on a new trigger and a new alias, so `brady` finds

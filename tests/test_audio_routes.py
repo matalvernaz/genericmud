@@ -220,6 +220,16 @@ def test_missing_device_does_not_leave_previous_default_loop_running(core, route
     assert not core.streams
 
 
+def test_saved_device_changes_apply_to_the_next_cue_in_an_existing_session(core, routes):
+    bus = SoundBus(BassSoundBackend(core, route_devices=True))
+    bus.play("first.wav", route="alerts")
+    assert list(core.streams.values())[0]["device"] == 2
+    save_audio_routes({"alerts": SPEAKERS})
+    bus.play("second.wav", route="alerts")
+    assert len(core.streams) == 1
+    assert list(core.streams.values())[0]["device"] == 3
+
+
 def test_different_platform_never_falls_back(core, routes):
     save_audio_routes({"alerts": replace(HEADPHONES, platform="other-os")})
     with pytest.raises(AudioRouteUnavailable):

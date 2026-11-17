@@ -175,7 +175,8 @@ and Keep checking come after the channel, and the sound fields come last.
 
 Native audio outputs:
 File, Audio outputs configures named audio routes. Add one, choose an output device,
-and use Test output before saving. In a trigger, Audio output route selects a route;
+and use Test output before saving. No physical output is preselected for a new route.
+In a trigger, Audio output route selects a route;
 System default keeps existing playback. Simultaneous cues need different sound channels:
 the next cue on the same channel still replaces the previous one, even on another device.
 Device selection needs BASS on Windows or macOS. Linux keeps default playback because its
@@ -184,7 +185,9 @@ or unsupported backend
 keeps the explicitly routed cue silent and explains why once until it recovers. The next
 cue tries the saved device again; interrupted cues do not restart. Routes are local to
 this computer; exported rules keep their route names so a friend can assign their own
-devices. Renaming a route requires updating the rules that used it. Soundpacks, MUD audio,
+devices. Renaming or removing a route leaves its triggers silent until you update them
+or restore the old name. Saving removed route names asks for confirmation; No keeps
+your edits open. Soundpacks, MUD audio,
 other rule types and screen-reader speech keep their existing outputs. The web window
 cannot select these devices.
 

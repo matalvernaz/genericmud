@@ -62,6 +62,52 @@ def test_device_refresh_restores_stable_identity_after_reordering(dialogs):
     assert editor.result()[1] == HEADPHONES
 
 
+@pytest.mark.parametrize("outputs", [[HEADPHONES], [HEADPHONES, SPEAKERS]])
+def test_new_route_requires_a_device_choice_before_save_or_test(frame, monkeypatch, outputs):
+    pending, messages, closed = [], [], []
+    monkeypatch.setattr(AudioRouteEditor, "_run", lambda self, work, done:
+                        pending.append((work, done)))
+    monkeypatch.setattr(wx, "MessageBox", lambda text, *_args: messages.append(text))
+    manager = AudioRoutesDialog(frame)
+    editor = AudioRouteEditor(manager, {})
+    monkeypatch.setattr(editor, "EndModal", closed.append)
+    try:
+        editor._name.SetValue("My route")
+        editor._show_outputs(outputs)
+        assert editor._device.GetSelection() == wx.NOT_FOUND
+        editor._on_ok(None)
+        editor._on_test(None)
+        assert messages == ["Choose an output device first."] * 2
+        assert not closed and len(pending) == 1  # only discovery, no test sound
+        assert editor._name.GetValue() == "My route"
+        editor._on_refresh(None)
+        editor._show_outputs(list(reversed(outputs)))
+        assert editor._device.GetSelection() == wx.NOT_FOUND
+        editor._device.SetSelection(0)
+        editor._on_ok(None)
+        assert closed == [wx.ID_OK]
+        assert editor.result() == ("My route", outputs[-1])
+    finally:
+        editor.Destroy()
+        manager.Destroy()
+
+
+def test_new_route_refresh_preserves_the_users_device_choice(frame, monkeypatch):
+    monkeypatch.setattr(AudioRouteEditor, "_run", lambda *_args: None)
+    manager = AudioRoutesDialog(frame)
+    editor = AudioRouteEditor(manager, {})
+    try:
+        editor._name.SetValue("My route")
+        editor._show_outputs([HEADPHONES, SPEAKERS])
+        editor._device.SetSelection(1)
+        editor._on_refresh(None)
+        editor._show_outputs([SPEAKERS, HEADPHONES])
+        assert editor.result() == ("My route", SPEAKERS)
+    finally:
+        editor.Destroy()
+        manager.Destroy()
+
+
 def test_selected_output_test_uses_selected_hardware_not_route_name(dialogs):
     _manager, editor, pending = dialogs
     editor._show_outputs([HEADPHONES, SPEAKERS])
@@ -94,6 +140,67 @@ def test_route_settings_save_and_cancel_do_not_share_mutable_state(frame, monkey
         manager._on_ok(None)
         assert audio_routes.load_audio_routes() == {"alerts": HEADPHONES, "music": SPEAKERS}
         assert closed == [wx.ID_OK]
+    finally:
+        manager.Destroy()
+
+
+@pytest.mark.parametrize("change", ["rename", "remove"])
+def test_saving_removed_route_names_requires_confirmation_and_preserves_edits(
+    frame, monkeypatch, change,
+):
+    audio_routes.save_audio_routes({"alerts": HEADPHONES, "music": SPEAKERS})
+    manager = AudioRoutesDialog(frame)
+    messages, closed = [], []
+    answers = iter([wx.NO, wx.YES])
+
+    def confirm(message, title, style, parent):
+        messages.append(message)
+        assert style & wx.YES_NO and style & wx.NO_DEFAULT
+        assert parent is manager
+        return next(answers)
+
+    monkeypatch.setattr(wx, "MessageBox", confirm)
+    monkeypatch.setattr(manager, "EndModal", closed.append)
+    try:
+        manager._list.SetStringSelection("alerts")
+        if change == "rename":
+            monkeypatch.setattr(AudioRouteEditor, "_run", lambda *_args: None)
+
+            def rename(editor):
+                editor._name.SetValue("new name")
+                editor._show_outputs([HEADPHONES, SPEAKERS])
+                return wx.ID_OK
+
+            monkeypatch.setattr(AudioRouteEditor, "ShowModal", rename)
+            manager._on_edit(None)
+        else:
+            manager._on_remove(None)
+        manager._on_ok(None)
+        assert "alerts" in messages[0] and "silent" in messages[0]
+        assert "Triggers" in messages[0] and "not updated" in messages[0]
+        assert not closed
+        assert audio_routes.load_audio_routes() == {"alerts": HEADPHONES, "music": SPEAKERS}
+        assert ("new name" in manager._list.GetStrings()) is (change == "rename")
+        manager._on_ok(None)
+        assert closed == [wx.ID_OK]
+        assert audio_routes.load_audio_routes() == manager._routes
+        assert audio_routes.load_audio_routes()["music"] == SPEAKERS
+    finally:
+        manager.Destroy()
+
+
+def test_reassigning_a_device_or_restoring_a_route_name_does_not_warn(frame, monkeypatch):
+    audio_routes.save_audio_routes({"alerts": HEADPHONES})
+    manager = AudioRoutesDialog(frame)
+    messages, closed = [], []
+    monkeypatch.setattr(wx, "MessageBox", lambda *args: messages.append(args))
+    monkeypatch.setattr(manager, "EndModal", closed.append)
+    try:
+        del manager._routes["alerts"]
+        manager._routes["alerts"] = SPEAKERS
+        manager._on_ok(None)
+        assert not messages and closed == [wx.ID_OK]
+        assert audio_routes.load_audio_routes() == {"alerts": SPEAKERS}
     finally:
         manager.Destroy()
 
@@ -153,7 +260,7 @@ def test_worker_completion_is_marshaled_to_wx_and_cleanup_is_queued(frame, monke
         assert threads and all(thread != main_thread for thread in threads)
         callback, args = callbacks.pop()
         callback(*args)
-        assert editor._device.GetStringSelection() == "Наушники (1)"
+        assert editor._device.GetString(0) == "Наушники (1)"
         editor._preview = Preview()
     finally:
         monkeypatch.setattr(wx, "CallAfter", call_after)

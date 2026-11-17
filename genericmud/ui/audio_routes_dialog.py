@@ -93,7 +93,7 @@ class AudioRouteEditor(wx.Dialog):
         choice = next((index for index, item in enumerate(outputs)
                        if self._selected is not None
                        and (item.platform, item.identifier)
-                       == (self._selected.platform, self._selected.identifier)), 0)
+                       == (self._selected.platform, self._selected.identifier)), wx.NOT_FOUND)
         if self._selected is not None and not any(
             (item.platform, item.identifier) == (self._selected.platform, self._selected.identifier)
             for item in outputs
@@ -163,6 +163,7 @@ class AudioRoutesDialog(wx.Dialog):
         super().__init__(parent, title="Audio routes")
         self._announce = announce or (lambda _text: None)
         self._routes = routes
+        self._original_names = set(routes)
         outer = wx.BoxSizer(wx.VERTICAL)
         outer.Add(wx.StaticText(self, label="Audio &routes:"), 0, wx.ALL, 6)
         self._list = wx.ListBox(self)
@@ -220,6 +221,15 @@ class AudioRoutesDialog(wx.Dialog):
             self._list.SetFocus()
 
     def _on_ok(self, _event):
+        removed = sorted(self._original_names - self._routes.keys())
+        if removed and wx.MessageBox(
+            "These audio route names will be removed:\n" + "\n".join(removed)
+            + "\n\nTriggers using these names are not updated. Their routed sounds will be silent "
+            "until you select another route in those triggers or restore the old route names."
+            "\n\nSave these changes?",
+            "Save audio routes", wx.YES_NO | wx.NO_DEFAULT | wx.ICON_WARNING, self,
+        ) != wx.YES:
+            return
         try:
             save_audio_routes(self._routes)
         except OSError as error:
