@@ -128,6 +128,8 @@ def test_worker_completion_is_marshaled_to_wx_and_cleanup_is_queued(frame, monke
     callbacks = []
     main_thread = threading.get_ident()
     threads = []
+    app = wx.GetApp()
+    call_after = wx.CallAfter
 
     def enumerate_outputs():
         threads.append(threading.get_ident())
@@ -140,6 +142,7 @@ def test_worker_completion_is_marshaled_to_wx_and_cleanup_is_queued(frame, monke
     class Preview:
         def close(self):
             closed.set()
+            call_after(app.ExitMainLoop)
 
     monkeypatch.setattr(module, "available_outputs", enumerate_outputs)
     monkeypatch.setattr(wx, "CallAfter", post)
@@ -153,7 +156,14 @@ def test_worker_completion_is_marshaled_to_wx_and_cleanup_is_queued(frame, monke
         assert editor._device.GetStringSelection() == "Наушники (1)"
         editor._preview = Preview()
     finally:
+        monkeypatch.setattr(wx, "CallAfter", call_after)
         editor.Destroy()
         manager.Destroy()
-        wx.YieldIfNeeded()
-    assert closed.wait(2), "closing the dialog did not clean up its preview"
+    # Destroy is deferred until wx processes idle events. YieldIfNeeded alone does not
+    # reliably process pending deletions; run the actual bounded loop used by the app.
+    timeout = wx.CallLater(2000, app.ExitMainLoop)
+    try:
+        app.MainLoop()
+    finally:
+        timeout.Stop()
+    assert closed.is_set(), "closing the dialog did not clean up its preview"
