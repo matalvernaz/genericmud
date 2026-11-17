@@ -25,6 +25,23 @@ def _pack_dir(tmp_path, rules: str = '{"version": 1, "triggers": []}'):
     return pack
 
 
+def test_trigger_route_name_is_shared_without_machine_hardware_configuration(tmp_path):
+    from genericmud.packs.user_rules import UserRules, UserTrigger
+
+    rules = UserRules(triggers=[UserTrigger(pattern="danger", audio_route="Headphones")])
+    pack = _pack_dir(tmp_path, rules.to_json())
+    (pack / "audio-routes.json").write_text('{"private-device-id": "not shared"}')
+    destination = tmp_path / "share.zip"
+    export_world(World("Example", "mud.example", 4000), pack, destination)
+    with zipfile.ZipFile(destination) as archive:
+        assert not any("audio-routes" in name for name in archive.namelist())
+        assert b"private-device-id" not in b"".join(archive.read(n) for n in archive.namelist())
+    imported = import_world(destination, tmp_path / "userpacks")
+    target = tmp_path / "userpacks" / sanitize_component(imported.name)
+    loaded = UserRules.from_json((target / "rules.json").read_text(encoding="utf-8"))
+    assert loaded.triggers[0].audio_route == "Headphones"
+
+
 def test_export_then_import_round_trips_rules_sounds_and_connection(tmp_path):
     world = World(name="Aardwolf", host="aardmud.org", port=4000, tls=False)
     dest = tmp_path / "share.zip"

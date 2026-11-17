@@ -16,6 +16,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
+from genericmud.config.audio_routes import AudioOutput, load_audio_routes
+from genericmud.sound.output_devices import AudioRouteUnavailable
+
 DEFAULT_CATEGORY = "sound"
 MUSIC_CATEGORY = "music"
 # A cue's state, numbered as BASS numbers them, so a pack's BASS wrapper hears what it expects.
@@ -68,6 +71,12 @@ class SoundBackend:
     ) -> None:
         """Play ``file`` as the music; ``times`` -1 loops it until stopped."""
     def stop(self, channel: str) -> None: ...
+
+    def play_on_device(
+        self, output: AudioOutput, file: str, channel: str, gain: float, pan: float,
+        loop: bool, times: int = 1, timing: CueTiming | None = None,
+    ) -> None:
+        raise AudioRouteUnavailable("This audio backend cannot select an output device")
 
     def fade_away(self, channel: str, seconds: float) -> None:
         """Fade a playing cue to silence over ``seconds``, then stop it; a backend that can't
@@ -191,12 +200,24 @@ class SoundBus:
         loop: bool = False,
         times: int = 1,
         timing: CueTiming | None = None,
+        *, route: str = "",
     ) -> None:
         """Play a cue; ``loop`` repeats it until stopped, otherwise it plays ``times`` times
         (a MUD's MSP L= or Client.Media loops). ``timing`` trims and fades it."""
         self._playing.add(channel)
         effective = self.effective_gain(channel, gain)
-        if timing is None:  # backends written before timing existed still play cues
+        if route:
+            self._backend.stop(channel)  # a failed replacement must not leave the old cue looping
+            try:
+                output = load_audio_routes().get(route)
+            except (OSError, ValueError, TypeError) as error:
+                raise AudioRouteUnavailable(f"Cannot read audio routes: {error}") from error
+            if output is None:
+                raise AudioRouteUnavailable(
+                    f"Audio route is not configured on this computer: {route}"
+                )
+            self._backend.play_on_device(output, file, channel, effective, pan, loop, times, timing)
+        elif timing is None:  # backends written before timing existed still play cues
             self._backend.play(file, channel, effective, pan, loop, times=max(1, times))
         else:
             self._backend.play(

@@ -536,6 +536,21 @@ needs come after those, and the sound fields last. An alias replaces a shortcut 
 `sh goblin` sends `shoot goblin`. A hotkey runs commands when you press a chosen
 key. These editors use ordinary fields; no code is required.
 
+In the native client, **File → Audio outputs** configures named audio routes, such as
+“Headphones” and “Speakers”. Add a route, choose its output device, and use **Test output**
+before saving. A trigger's **Audio output route** chooses one of these routes; **System
+default** keeps existing playback. Give simultaneous cues different sound channels, as before:
+playing another cue on the same channel still replaces it, regardless of its destination.
+
+Device selection requires BASS (included in native builds). Explicit routes never fall back
+to another device: an unavailable device, an unconfigured route, or an unsupported backend
+leaves that cue silent and reports the problem once until recovery. A returning device is
+looked up again by its identifier on the next cue; interrupted cues are not restarted.
+Routes live in the machine's `audio-routes.json`, separate from exported worlds. Rules export
+only the route name, so a recipient can map it to their own hardware. Renaming a route requires
+updating rules that use its old name. Soundpacks, MUD-provided audio, other rule types and
+screen-reader speech keep their existing outputs. The web client cannot select these devices.
+
 **Ignore capitals** is ticked on a new trigger and a new alias, so `brady` finds
 "Brady pages:" and `shout *` takes "Shout hello". MUD text is capitalised however
 its author felt, and a rule that misses because of a capital is one you cannot see

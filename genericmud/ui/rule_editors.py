@@ -15,6 +15,7 @@ import wx
 
 from genericmud.automation.engine import AutomationEngine
 from genericmud.automation.variables import SCRIPT, VariableEntry
+from genericmud.config.audio_routes import load_audio_routes
 from genericmud.packs.user_rules import (
     DEFAULT_ORDER,
     MATCH_CHOICES,
@@ -350,6 +351,20 @@ class TriggerEditorDialog(_RuleEditorBase):
             grid, "S&top a looping sound on this channel first (optional):", trigger.stop_channel
         )
         self._sound = self._text(grid, "&Sound file (optional):", trigger.sound)
+        try:
+            routes = sorted(load_audio_routes())
+        except (OSError, ValueError):
+            routes = []  # editing a rule must still preserve an unavailable route's name
+        route = trigger.audio_route if isinstance(trigger.audio_route, str) else ""
+        if route and route not in routes:
+            routes.append(route)
+        self._audio_routes = ["", *routes]
+        grid.Add(wx.StaticText(self, label="Audio output &route:"), 0, wx.ALIGN_CENTER_VERTICAL)
+        self._audio_route = wx.Choice(self, choices=["System default", *routes])
+        self._audio_route.SetName("Audio output route")
+        self._audio_route.SetSelection(self._audio_routes.index(route))
+        self._audio_route.SetToolTip("Named routes are configured in File, Audio outputs.")
+        grid.Add(self._audio_route, 0, wx.EXPAND)
         browse = wx.Button(self, label="&Browse for sound...")
         browse.Bind(wx.EVT_BUTTON, self._on_browse)
         grid.Add(wx.StaticText(self, label=""))
@@ -379,6 +394,7 @@ class TriggerEditorDialog(_RuleEditorBase):
             pattern=self._pattern.GetValue().strip(),
             regex=(match == "regex"),  # kept in sync for files older builds read
             sound=self._sound.GetValue().strip(),
+            audio_route=self._audio_routes[self._audio_route.GetSelection()],
             volume=self._volume.GetValue(),
             pan=self._pan.GetValue(),
             loop=self._loop.GetValue(),

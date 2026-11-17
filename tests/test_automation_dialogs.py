@@ -870,6 +870,7 @@ def _rule_editors(frame, pack_dir):
         UserWatch,
     )
     from genericmud.ui import rule_editors as editors
+    from genericmud.ui.audio_routes_dialog import AudioRoutesDialog
 
     yield editors.TriggerEditorDialog(frame, pack_dir, UserTrigger(), variables=_no_variables)
     yield editors.AliasEditorDialog(frame, UserAlias(), variables=_no_variables)
@@ -877,6 +878,7 @@ def _rule_editors(frame, pack_dir):
     yield editors.DataRuleEditorDialog(frame, pack_dir, UserWatch(), variables=_no_variables)
     yield editors.TimerEditorDialog(frame, UserTimer())
     yield editors.ChannelEditorDialog(frame, UserChannel())
+    yield AudioRoutesDialog(frame)
 
 
 def test_every_rule_editor_names_each_control_and_gives_it_a_letter_of_its_own(frame, tmp_path):

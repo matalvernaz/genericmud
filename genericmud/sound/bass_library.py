@@ -44,6 +44,10 @@ POS_BYTE = 0
 POS_END = 0x10  # where a stream ends (each time round, when it loops)
 POS_LOOP = 0x11  # where a looping stream starts again
 CONFIG_DEV_DEFAULT = 36
+CONFIG_UNICODE = 42
+DEVICE_ENABLED = 1
+DEVICE_INIT = 4
+DEVICE_REINIT = 0x80
 ERROR_ALREADY = 14
 DEVICE_DEFAULT = -1
 DEVICE_NO_SOUND = 0
@@ -84,15 +88,26 @@ class ChannelInfo(ctypes.Structure):
         ("filename", ctypes.c_char_p),
     ]
 
+
+class DeviceInfo(ctypes.Structure):
+    """BASS_DEVICEINFO; strings are UTF-8 after CONFIG_UNICODE is set on Windows."""
+
+    _fields_ = [("name", ctypes.c_char_p), ("driver", ctypes.c_char_p), ("flags", _DWORD)]
+
 # Each function genericMud calls: (name, result type, argument types).
 _SIGNATURES = (
     ("BASS_GetVersion", _DWORD, ()),
     ("BASS_ErrorGetCode", ctypes.c_int, ()),
     ("BASS_SetConfig", _BOOL, (_DWORD, _DWORD)),
     ("BASS_Init", _BOOL, (ctypes.c_int, _DWORD, _DWORD, ctypes.c_void_p, ctypes.c_void_p)),
+    ("BASS_GetDeviceInfo", _BOOL, (_DWORD, ctypes.POINTER(DeviceInfo))),
+    ("BASS_GetDevice", _DWORD, ()),
+    ("BASS_SetDevice", _BOOL, (_DWORD,)),
+    ("BASS_IsStarted", _DWORD, ()),
     ("BASS_StreamCreateFile", _DWORD, (_BOOL, ctypes.c_void_p, _QWORD, _QWORD, _DWORD)),
     ("BASS_StreamFree", _BOOL, (_DWORD,)),
     ("BASS_ChannelPlay", _BOOL, (_DWORD, _BOOL)),
+    ("BASS_ChannelGetDevice", _DWORD, (_DWORD,)),
     ("BASS_ChannelStop", _BOOL, (_DWORD,)),
     ("BASS_ChannelPause", _BOOL, (_DWORD,)),
     ("BASS_ChannelGetInfo", _BOOL, (_DWORD, ctypes.POINTER(ChannelInfo))),
@@ -131,6 +146,7 @@ class Bass:
 
 _loaded: Bass | None = None
 _started = False
+_default_device: int | None = None
 _lock = threading.Lock()  # sessions start in parallel; BASS loads and starts once
 
 
@@ -184,12 +200,14 @@ def load(folders: list[Path] | None = None) -> Bass:
 def start(bass: Bass, device: int = DEVICE_DEFAULT) -> None:
     """Start BASS's output on ``device``, once per process (the default device unless a test
     asks for BASS's silent one). Raises :class:`BassUnavailable` when there's no device."""
-    global _started
+    global _started, _default_device
     with _lock:
         if _started:
             return
         core = bass.core
         if sys.platform == "win32":
+            # Before enumeration or initialization: device names/IDs must survive Unicode.
+            core.BASS_SetConfig(CONFIG_UNICODE, 1)
             # Follow the system's default device when it changes, as when a headset goes in.
             core.BASS_SetConfig(CONFIG_DEV_DEFAULT, 1)
         if not core.BASS_Init(device, 44100, 0, None, None):
@@ -197,6 +215,7 @@ def start(bass: Bass, device: int = DEVICE_DEFAULT) -> None:
             if code != ERROR_ALREADY:
                 raise BassUnavailable(f"no audio device BASS could open (BASS error {code})")
         _started = True
+        _default_device = core.BASS_GetDevice()
 
 
 def _open_library(path: Path, *, typed: bool = True):

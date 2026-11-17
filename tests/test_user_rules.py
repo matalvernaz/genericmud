@@ -26,6 +26,17 @@ from genericmud.voice.router import VoiceRouter
 from tests.helpers import RecordingBackend, RecordingSink
 
 
+def test_trigger_audio_route_survives_json_without_changing_legacy_defaults():
+    import json
+
+    saved = UserRules.from_json(
+        '{"triggers": [{"pattern": "danger", "sound": "alarm.wav", "audio_route": "Headphones"}]}'
+    ).to_json()
+    assert json.loads(saved)["triggers"][0]["audio_route"] == "Headphones"
+    legacy = UserRules.from_json('{"triggers": [{"pattern": "old"}]}')
+    assert json.loads(legacy.to_json())["triggers"][0]["audio_route"] == ""
+
+
 def _register(rules: UserRules, tmp_path) -> tuple[RecordingSink, AutomationEngine]:
     sink = RecordingSink()
     engine = AutomationEngine(sink)

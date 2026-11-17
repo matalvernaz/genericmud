@@ -19,6 +19,7 @@ from genericmud.packs import PackStore
 from genericmud.session.credentials import open_credential_store
 from genericmud.session.diaglog import make_diagnostic_log
 from genericmud.session.hub import SessionHub
+from genericmud.ui.audio_routes_dialog import AudioRoutesDialog
 from genericmud.ui.automation_manager import AutomationManagerDialog
 from genericmud.ui.connect_dialog import ConnectionSettingsDialog
 from genericmud.ui.help_dialog import HelpDialog
@@ -87,6 +88,9 @@ class GenericMudFrame(SavedWorldsMixin, SoundpackSetupMixin, SelfUpdateMixin, wx
         self._connection_item = disconnect_item  # relabelled as the active tab connects/drops
         connection_settings_item = file_menu.Append(
             wx.ID_ANY, "Connection &settings...", "Automatic reconnect settings for all worlds",
+        )
+        audio_routes_item = file_menu.Append(
+            wx.ID_ANY, "Audio out&puts...", "Configure audio routes for user-trigger sounds",
         )
         close_item = file_menu.Append(wx.ID_ANY, "Close &Tab\tCtrl+W")
         # No mnemonic letter: every Alt+letter worth having is a session binding, and a
@@ -213,6 +217,7 @@ class GenericMudFrame(SavedWorldsMixin, SoundpackSetupMixin, SelfUpdateMixin, wx
         self.Bind(wx.EVT_MENU, self._on_connect, connect_item)
         self.Bind(wx.EVT_MENU, self._on_disconnect, disconnect_item)
         self.Bind(wx.EVT_MENU, self._on_connection_settings, connection_settings_item)
+        self.Bind(wx.EVT_MENU, self._on_audio_routes, audio_routes_item)
         self.Bind(wx.EVT_MENU_OPEN, self._on_menu_open)  # label read aloud must be current
         self.Bind(wx.EVT_MENU, self._on_close_tab, close_item)
         self.Bind(wx.EVT_MENU, lambda _e: self._move_tab(-1), move_up_item)
@@ -424,6 +429,17 @@ class GenericMudFrame(SavedWorldsMixin, SoundpackSetupMixin, SelfUpdateMixin, wx
                     self.book.GetPage(index).apply_connection_settings(
                         self._prefs.auto_reconnect, self._prefs.reconnect_interval,
                     )
+        finally:
+            dialog.Destroy()
+
+    def _on_audio_routes(self, _event: wx.CommandEvent) -> None:
+        try:
+            dialog = AudioRoutesDialog(self, announce=self._announcer.speak)
+        except (OSError, ValueError) as error:
+            wx.MessageBox(f"Cannot read audio routes: {error}", "Audio routes", wx.OK, self)
+            return
+        try:
+            dialog.ShowModal()
         finally:
             dialog.Destroy()
 
