@@ -542,7 +542,9 @@ before saving. A trigger's **Audio output route** chooses one of these routes; *
 default** keeps existing playback. Give simultaneous cues different sound channels, as before:
 playing another cue on the same channel still replaces it, regardless of its destination.
 
-Device selection requires BASS (included in native builds). Explicit routes never fall back
+Device selection requires BASS on Windows or macOS (included in native builds). Linux keeps
+default playback; ALSA device names may identify a slot or alias rather than fixed hardware.
+Explicit routes never fall back
 to another device: an unavailable device, an unconfigured route, or an unsupported backend
 leaves that cue silent and reports the problem once until recovery. A returning device is
 looked up again by its identifier on the next cue; interrupted cues are not restarted.
