@@ -9,12 +9,15 @@ from pathlib import Path
 from genericmud.config.atomic import atomic_write_text
 from genericmud.config.worlds import config_dir
 
+FALLBACK_CHOICES = ("default", "silent")
+
 
 @dataclass(frozen=True)
 class AudioOutput:
     platform: str
     identifier: str  # BASS endpoint ID / UID / ALSA name, not its enumeration index
     name: str  # last known display name; not used to choose hardware
+    fallback: str = "default"  # this route's policy, independent of other routes to the device
 
 
 def routes_path() -> Path:
@@ -37,8 +40,11 @@ def load_audio_routes(path: Path | None = None) -> dict[str, AudioOutput]:
                 or any(not isinstance(output.get(key), str) or not output[key]
                        for key in ("platform", "identifier", "name"))):
             raise ValueError("invalid audio route")
+        fallback = output.get("fallback", "default")
+        if fallback not in FALLBACK_CHOICES:
+            raise ValueError(f"invalid fallback for audio route {name}")
         result[name] = AudioOutput(
-            **{key: output[key] for key in ("platform", "identifier", "name")}
+            **{key: output[key] for key in ("platform", "identifier", "name")}, fallback=fallback,
         )
     return result
 

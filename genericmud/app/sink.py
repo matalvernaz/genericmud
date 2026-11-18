@@ -134,9 +134,11 @@ class AppSink(EngineSink):
             self._sound.play(file, channel, gain, pan, loop, times=times)
             return
         try:
-            self._sound.play(file, channel, gain, pan, loop, times=times, route=route)
+            notice = self._sound.play(file, channel, gain, pan, loop, times=times, route=route)
         except AudioRouteUnavailable as error:
-            message = f"Audio route {route}: {error}"
+            notice = str(error)
+        if notice:
+            message = f"Audio route {route}: {notice}"
             if self._route_errors.get(route) != message:
                 self._route_errors[route] = message
                 self.echo(message)

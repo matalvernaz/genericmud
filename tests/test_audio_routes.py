@@ -104,6 +104,95 @@ def test_machine_routes_round_trip_unicode_without_device_indices(routes):
     assert load_audio_routes(routes.parent / "old-install.json") == {}
 
 
+def test_legacy_routes_default_to_system_output_and_both_policies_round_trip(core, routes):
+    data = json.loads(routes.read_text(encoding="utf-8"))
+    for output in data["routes"].values():
+        output.pop("fallback", None)
+    routes.write_text(json.dumps(data), encoding="utf-8")
+    assert load_audio_routes()["alerts"].fallback == "default"
+    core.devices[2] = (HEADPHONES.identifier, HEADPHONES.name, 0)
+    notice = SoundBus(BassSoundBackend(core, route_devices=True)).play("old.wav", route="alerts")
+    assert "System default" in notice
+    assert [s["device"] for s in core.streams.values()] == [1]
+    save_audio_routes({"alerts": HEADPHONES, "private": replace(HEADPHONES, fallback="silent")})
+    assert load_audio_routes() == {
+        "alerts": HEADPHONES, "private": replace(HEADPHONES, fallback="silent"),
+    }
+    assert json.loads(routes.read_text(encoding="utf-8"))["version"] == 1
+
+
+@pytest.mark.parametrize("invalid", ["unknown", None, True, 1, []])
+def test_invalid_policy_cannot_discard_an_explicit_silence_preference(core, routes, invalid):
+    data = json.loads(routes.read_text(encoding="utf-8"))
+    data["routes"]["alerts"]["fallback"] = invalid
+    routes.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(ValueError, match="invalid fallback"):
+        load_audio_routes()
+    with pytest.raises(AudioRouteUnavailable, match="staying silent"):
+        SoundBus(BassSoundBackend(core, route_devices=True)).play("cue.wav", route="alerts")
+    assert not core.streams
+
+
+def test_unknown_route_uses_default_output_and_preserves_channel_controls(core, routes):
+    bus = SoundBus(BassSoundBackend(core, route_devices=True), master=0.5)
+    bus.set_volume("warning", 0.4)
+    notice = bus.play("critical.wav", "warning", gain=0.5, pan=-0.75, loop=True,
+                      route="not configured here")
+    assert "not configured" in notice and "System default" in notice
+    stream = list(core.streams.values())[0]
+    assert stream["device"] == 1 and stream["playing"]
+    assert stream["attributes"][lib.ATTRIB_VOL] == pytest.approx(0.1)
+    assert stream["attributes"][lib.ATTRIB_PAN] == -0.75
+    assert stream["flags"] & lib.SAMPLE_LOOP
+    bus.stop("warning")
+    assert not core.streams
+
+
+def test_missing_device_falls_back_once_per_cue_then_recovers(core, routes):
+    core.devices[2] = (HEADPHONES.identifier, HEADPHONES.name, 0)
+    bus = SoundBus(BassSoundBackend(core, route_devices=True))
+    notice = bus.play("critical.wav", route="alerts")
+    assert "System default" in notice
+    assert [s["device"] for s in core.streams.values()] == [1]
+    core.devices[2] = (HEADPHONES.identifier, HEADPHONES.name, lib.DEVICE_ENABLED)
+    assert bus.play("recovered.wav", route="alerts") is None
+    assert [s["device"] for s in core.streams.values()] == [2]
+    assert load_audio_routes()["alerts"] == HEADPHONES
+
+
+def test_fallback_notifications_do_not_repeat_until_a_new_outage(core, routes):
+    voice = RecordingBackend()
+    app = EngineApp(VoiceRouter(voice), sound_backend=BassSoundBackend(core, route_devices=True))
+    for outage in range(2):
+        core.devices[2] = (HEADPHONES.identifier, HEADPHONES.name, 0)
+        for _ in range(5):
+            app.sink.play("critical.wav", route="alerts")
+        assert len(voice.spoken) == outage + 1
+        assert "System default" in voice.spoken[-1]
+        assert len(app.buffer.lines()) == outage + 1
+        assert [s["device"] for s in core.streams.values()] == [1]
+        core.devices[2] = (HEADPHONES.identifier, HEADPHONES.name, lib.DEVICE_ENABLED)
+        app.sink.play("recovered.wav", route="alerts")
+        assert [s["device"] for s in core.streams.values()] == [2]
+        assert len(voice.spoken) == outage + 1
+
+
+def test_stay_silent_reports_once_and_recovers_without_default_playback(core, routes):
+    save_audio_routes({"alerts": replace(HEADPHONES, fallback="silent")})
+    voice = RecordingBackend()
+    app = EngineApp(VoiceRouter(voice), sound_backend=BassSoundBackend(core, route_devices=True))
+    for outage in range(2):
+        core.devices[2] = (HEADPHONES.identifier, HEADPHONES.name, 0)
+        for _ in range(5):
+            app.sink.play("private.wav", route="alerts")
+        assert not core.streams
+        assert len(voice.spoken) == outage + 1 and "staying silent" in voice.spoken[-1]
+        core.devices[2] = (HEADPHONES.identifier, HEADPHONES.name, lib.DEVICE_ENABLED)
+        app.sink.play("private.wav", route="alerts")
+        assert [s["device"] for s in core.streams.values()] == [2]
+        assert len(voice.spoken) == outage + 1
+
+
 @pytest.mark.parametrize("data", [[], {}, {"version": 1, "routes": []},
                                      {"version": 1, "routes": {"x": {"identifier": 2}}}])
 def test_corrupt_routes_cannot_silently_become_default_output(routes, data):
@@ -191,6 +280,8 @@ def test_channel_replacement_across_devices_frees_only_its_previous_cue(core, ro
 
 
 def test_hotplug_resolves_identity_again_not_old_index_or_display_name(core, routes):
+    saved = replace(HEADPHONES, fallback="silent")
+    save_audio_routes({"alerts": saved})
     bus = SoundBus(BassSoundBackend(core, route_devices=True))
     bus.play("one.wav", route="alerts")
     core.devices[2] = ("different-id", HEADPHONES.name, lib.DEVICE_ENABLED)
@@ -200,7 +291,7 @@ def test_hotplug_resolves_identity_again_not_old_index_or_display_name(core, rou
     core.devices[4] = (HEADPHONES.identifier, "Renamed headphones", lib.DEVICE_ENABLED)
     bus.play("returned.wav", route="alerts")
     assert list(core.streams.values())[-1]["device"] == 4
-    assert load_audio_routes()["alerts"] == HEADPHONES  # saved assignment wasn't discarded
+    assert load_audio_routes()["alerts"] == saved  # saved assignment/policy weren't discarded
 
 
 def test_returning_initialized_but_stopped_device_is_reinitialized(core, routes):
@@ -214,10 +305,12 @@ def test_returning_initialized_but_stopped_device_is_reinitialized(core, routes)
 def test_missing_device_does_not_leave_previous_default_loop_running(core, routes):
     bus = SoundBus(BassSoundBackend(core, route_devices=True))
     bus.play("loop.wav", loop=True)
+    previous = next(iter(core.streams))
     routes.unlink()
-    with pytest.raises(AudioRouteUnavailable, match="not configured"):
-        bus.play("explicit.wav", route="alerts")
-    assert not core.streams
+    notice = bus.play("explicit.wav", route="alerts")
+    assert "not configured" in notice and "System default" in notice
+    assert previous not in core.streams and len(core.streams) == 1
+    assert not list(core.streams.values())[0]["flags"] & lib.SAMPLE_LOOP
 
 
 def test_saved_device_changes_apply_to_the_next_cue_in_an_existing_session(core, routes):
@@ -230,8 +323,8 @@ def test_saved_device_changes_apply_to_the_next_cue_in_an_existing_session(core,
     assert list(core.streams.values())[0]["device"] == 3
 
 
-def test_different_platform_never_falls_back(core, routes):
-    save_audio_routes({"alerts": replace(HEADPHONES, platform="other-os")})
+def test_different_platform_respects_stay_silent(core, routes):
+    save_audio_routes({"alerts": replace(HEADPHONES, platform="other-os", fallback="silent")})
     with pytest.raises(AudioRouteUnavailable):
         SoundBus(BassSoundBackend(core, route_devices=True)).play("x.wav", route="alerts")
     assert not core.streams
@@ -244,9 +337,10 @@ def test_linux_keeps_default_playback_but_never_guesses_physical_identity(
     bus = SoundBus(BassSoundBackend(core, route_devices=True))
     bus.play("default.wav", "legacy")
     assert list(core.streams.values())[0]["device"] == 1
-    with pytest.raises(AudioRouteUnavailable, match="Windows and macOS"):
-        bus.play("explicit.wav", "routed", route="alerts")
-    assert len(core.streams) == 1
+    notice = bus.play("explicit.wav", "routed", route="alerts")
+    assert "Windows and macOS" in notice and "System default" in notice
+    assert len(core.streams) == 2
+    assert all(s["device"] == 1 for s in core.streams.values())
     with pytest.raises(AudioRouteUnavailable, match="Windows and macOS"):
         available_outputs()
 
@@ -260,6 +354,7 @@ def test_context_is_restored_even_if_stream_creation_raises(core):
 
 
 def test_hotplug_cannot_silently_create_stream_on_another_device(core, routes, monkeypatch):
+    save_audio_routes({"alerts": replace(HEADPHONES, fallback="silent")})
     # Simulate BASS's documented automatic selection of the lowest initialized device.
     monkeypatch.setattr(core, "BASS_ChannelGetDevice", lambda _stream: 1)
     bus = SoundBus(BassSoundBackend(core, route_devices=True))
@@ -270,6 +365,7 @@ def test_hotplug_cannot_silently_create_stream_on_another_device(core, routes, m
 
 
 def test_device_initialization_failure_stays_silent_and_restores_context(core, routes, monkeypatch):
+    save_audio_routes({"alerts": replace(HEADPHONES, fallback="silent")})
     monkeypatch.setattr(core, "BASS_Init", lambda *_args: 0)
     with pytest.raises(AudioRouteUnavailable, match="Cannot open audio output"):
         SoundBus(BassSoundBackend(core, route_devices=True)).play("cue.wav", route="alerts")
@@ -277,13 +373,36 @@ def test_device_initialization_failure_stays_silent_and_restores_context(core, r
 
 
 def test_device_loss_between_open_and_start_frees_the_stream(core, routes, monkeypatch):
+    save_audio_routes({"alerts": replace(HEADPHONES, fallback="silent")})
     monkeypatch.setattr(core, "BASS_ChannelPlay", lambda *_args: 0)
     with pytest.raises(AudioRouteUnavailable, match="Cannot play on audio output"):
         SoundBus(BassSoundBackend(core, route_devices=True)).play("cue.wav", route="alerts")
     assert not core.streams
 
 
-def test_timing_repeats_and_live_adjustments_use_original_channel(core, routes):
+@pytest.mark.parametrize("failure", ["initialization", "wrong_device", "start"])
+def test_device_failures_fall_back_without_leaking_a_partly_created_cue(
+    core, routes, monkeypatch, failure,
+):
+    if failure == "initialization":
+        monkeypatch.setattr(core, "BASS_Init", lambda *_args: 0)
+    elif failure == "wrong_device":
+        monkeypatch.setattr(core, "BASS_ChannelGetDevice", lambda _stream: 1)
+    else:
+        play = core.BASS_ChannelPlay
+        monkeypatch.setattr(core, "BASS_ChannelPlay", lambda stream, restart:
+                            play(stream, restart) if core.streams[stream]["device"] == 1 else 0)
+    notice = SoundBus(BassSoundBackend(core, route_devices=True)).play("cue.wav", route="alerts")
+    assert "System default" in notice
+    assert len(core.streams) == 1
+    stream = list(core.streams.values())[0]
+    assert stream["device"] == 1 and stream["playing"] and core.current == 1
+
+
+@pytest.mark.parametrize("available", [True, False])
+def test_timing_repeats_and_live_adjustments_use_original_channel(core, routes, available):
+    if not available:
+        core.devices[2] = (HEADPHONES.identifier, HEADPHONES.name, 0)
     bus = SoundBus(BassSoundBackend(core, route_devices=True))
     bus.play("cue.wav", "alert", times=2, timing=CueTiming(start=1, finish=3), route="alerts")
     stream = list(core.streams.values())[0]
@@ -292,12 +411,15 @@ def test_timing_repeats_and_live_adjustments_use_original_channel(core, routes):
     assert stream["attributes"][lib.ATTRIB_VOL] == 0.3
     assert stream["attributes"][lib.ATTRIB_PAN] == 0.5
     assert stream["attributes"][lib.ATTRIB_FREQ] == 32000
-    assert stream["device"] == 2
+    assert stream["device"] == (2 if available else 1)
 
 
-def test_routed_cue_effects_and_fade_remain_handle_based(core, routes):
+@pytest.mark.parametrize("available", [True, False])
+def test_routed_cue_effects_and_fade_remain_handle_based(core, routes, available):
     from genericmud.sound.bass_effects import DX8_ECHO
 
+    if not available:
+        core.devices[2] = (HEADPHONES.identifier, HEADPHONES.name, 0)
     backend = BassSoundBackend(core, route_devices=True)
     bus = SoundBus(backend)
     bus.play("echo.wav", "effect", route="alerts")
@@ -305,7 +427,8 @@ def test_routed_cue_effects_and_fade_remain_handle_based(core, routes):
     assert effect and effect in core.effects
     bus.fade_away("effect", 0.5)
     stream = list(core.streams.values())[0]
-    assert stream["device"] == 2 and stream["slides"]
+    assert stream["device"] == (2 if available else 1)
+    assert stream["slides"]
     bus.flush()
     assert not core.streams and not core.effects
 
@@ -324,30 +447,46 @@ def test_unsupported_backend_reports_once_then_recovers(core, routes):
     app.sink.play("cue.wav", route="alerts")
     app.sink.play("cue.wav", route="alerts")
     assert len(voice.spoken) == 2
-    assert not core.streams
+    assert "System default" in voice.spoken[-1]
+    assert [s["device"] for s in core.streams.values()] == [1]
 
 
-def test_web_renderer_never_receives_explicit_route_as_default_sound(routes):
+@pytest.mark.parametrize("fallback", ["default", "silent"])
+def test_web_renderer_obeys_route_policy_and_warns_once(routes, fallback):
+    save_audio_routes({"alerts": replace(HEADPHONES, fallback=fallback)})
     posted = []
     voice = RecordingBackend()
     app = EngineApp(VoiceRouter(voice), post=posted.append)
-    app.sink.play("explicit.wav", route="alerts")
-    assert not any(message["type"] == "sound" for message in posted)
+    for _ in range(3):
+        app.sink.play("explicit.wav", route="alerts")
+    sounds = [message for message in posted if message["type"] == "sound"]
+    assert len(sounds) == (3 if fallback == "default" else 0)
+    assert len(voice.spoken) == 1
     assert "cannot select" in voice.spoken[0]
     app.sink.play("legacy.wav")
     assert any(message["type"] == "sound" for message in posted)
 
 
-def test_bass_unavailable_keeps_fallback_default_and_rejects_explicit_routes(routes, monkeypatch):
+def test_bass_unavailable_uses_existing_backend_for_default_fallback(routes, monkeypatch):
     from genericmud.sound import bass_backend, pygame_backend
 
-    fallback = SoundBackend()
+    played = []
+
+    class Fallback(SoundBackend):
+        def play(self, file, *args, **kwargs):
+            played.append(file)
+
+    fallback = Fallback()
     monkeypatch.setattr(bass_backend, "make_bass_backend", lambda **_kw: None)
     monkeypatch.setattr(pygame_backend, "make_pygame_backend", lambda **_kw: fallback)
     bus = SoundBus(make_sound_backend())
     bus.play("default.wav")
-    with pytest.raises(AudioRouteUnavailable, match="cannot select"):
-        bus.play("explicit.wav", route="alerts")
+    assert "System default" in bus.play("explicit.wav", route="alerts")
+    assert played == ["default.wav", "explicit.wav"]
+    save_audio_routes({"alerts": replace(HEADPHONES, fallback="silent")})
+    with pytest.raises(AudioRouteUnavailable, match="staying silent"):
+        bus.play("private.wav", route="alerts")
+    assert played == ["default.wav", "explicit.wav"]
 
 
 def test_test_tone_uses_same_backend_and_closing_preview_releases_its_stream(core, monkeypatch):
@@ -370,7 +509,9 @@ def test_test_tone_uses_same_backend_and_closing_preview_releases_its_stream(cor
     assert not core.streams and not path.exists()
 
 
-def test_trigger_route_persists_and_reaches_real_app_playback(core, routes, tmp_path):
+@pytest.mark.parametrize("fallback", ["default", "silent"])
+def test_trigger_route_persists_and_reaches_real_app_playback(core, routes, tmp_path, fallback):
+    save_audio_routes({"alerts": replace(HEADPHONES, fallback=fallback)})
     rules = UserRules(triggers=[UserTrigger(
         pattern="danger", sound="warning.wav", audio_route="alerts", channel="health",
     )])
@@ -385,3 +526,48 @@ def test_trigger_route_persists_and_reaches_real_app_playback(core, routes, tmp_
     assert cue["device"] == 2 and cue["playing"]
     app.sound.stop("user-health")
     assert not core.streams
+    core.devices[2] = (HEADPHONES.identifier, HEADPHONES.name, 0)
+    app.engine.process_line(Line("danger"))
+    assert [s["device"] for s in core.streams.values()] == ([1] if fallback == "default" else [])
+    app.sound.flush()
+    assert not core.streams
+
+
+def test_sessions_can_use_different_fallbacks_for_the_same_physical_device(core, routes):
+    save_audio_routes({"audible": HEADPHONES, "private": replace(HEADPHONES, fallback="silent")})
+    audible = SoundBus(BassSoundBackend(core, route_devices=True))
+    private = SoundBus(BassSoundBackend(core, route_devices=True))
+    core.devices[2] = (HEADPHONES.identifier, HEADPHONES.name, 0)
+    audible.play("critical.wav", "sound", route="audible")
+    with pytest.raises(AudioRouteUnavailable, match="staying silent"):
+        private.play("private.wav", "sound", route="private")
+    private.flush()
+    assert [s["device"] for s in core.streams.values()] == [1]
+    core.devices[2] = (HEADPHONES.identifier, HEADPHONES.name, lib.DEVICE_ENABLED)
+    audible.play("recovered.wav", "sound", route="audible")
+    private.play("private.wav", "sound", route="private")
+    assert [s["device"] for s in core.streams.values()] == [2, 2]
+    audible.flush()
+    assert len(core.streams) == 1 and list(core.streams.values())[0]["file"] == "private.wav"
+    private.flush()
+    assert not core.streams
+
+
+def test_missing_name_has_default_fallback_until_a_local_policy_exists(core, routes):
+    save_audio_routes({"private": replace(HEADPHONES, fallback="silent")})
+    voice = RecordingBackend()
+    app = EngineApp(VoiceRouter(voice), sound_backend=BassSoundBackend(core, route_devices=True))
+    for _ in range(3):
+        app.sink.play("imported.wav", route="imported route")
+    assert len(voice.spoken) == 1 and "System default" in voice.spoken[0]
+    assert [s["device"] for s in core.streams.values()] == [1]
+    core.devices[2] = (HEADPHONES.identifier, HEADPHONES.name, 0)
+    save_audio_routes({"imported route": replace(HEADPHONES, fallback="silent")})
+    for _ in range(3):
+        app.sink.play("imported.wav", route="imported route")
+    assert not core.streams
+    assert len(voice.spoken) == 2 and "staying silent" in voice.spoken[-1]
+    core.devices[2] = (HEADPHONES.identifier, HEADPHONES.name, lib.DEVICE_ENABLED)
+    app.sink.play("imported.wav", route="imported route")
+    assert [s["device"] for s in core.streams.values()] == [2]
+    assert len(voice.spoken) == 2
