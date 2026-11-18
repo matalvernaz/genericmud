@@ -70,12 +70,12 @@ class ServerMediaMixin:
 
     Part of EngineApp (engine_app.py). Every attribute below starts in its constructor.
 
-    Writes: _media_facing, _media_seq, _media_url.
+    Writes: _media_facing, _media_seq, _media_url, _preload_refused_noted.
 
-    Reads: _diag, _media_cues, _media_gen, _native_audio, _post, download_media, engine, media,
-    packs, sink, sound.
+    Reads: _diag, _media_cues, _media_gen, _media_refusals, _native_audio, _post, download_media,
+    engine, media, packs, sink, sound.
 
-    Calls: nothing outside.
+    Calls: _speak_system.
     """
 
     def _start_media(
@@ -123,15 +123,11 @@ class ServerMediaMixin:
         A sound the player asked for by playing is worth interrupting for; a MUD that sends the
         same broken cue every few seconds is not, so each name is said once per session.
         """
-        said = getattr(self, "_media_refusals", None)
-        if said is None:
-            said = set()
-            self._media_refusals = said
         if self._diag is not None:
             self._diag.event("media.play", file=name, status="refused", reason=reason)
-        if name in said:
+        if name in self._media_refusals:
             return
-        said.add(name)
+        self._media_refusals.add(name)
         self._speak_system(f"Sound not played: {name}. {reason.capitalize()}.")
 
     def _media_sounds_root(self) -> str | None:
