@@ -216,7 +216,11 @@ def test_a_tab_showing_a_password_field_is_left_alone_until_it_goes(frame):
         prefs.command_input_mode = "standard"
         panel._set_input_masked(False)
         assert not isinstance(panel.input, CommandEntryCtrl)
-        assert not isinstance(panel._entry_input, CommandEntryCtrl)
+        # The document itself is kept, hidden, with the draft in it: a password field standing in
+        # for the box is no reason to throw away what the reader wrote.
+        assert isinstance(panel._entry_input, CommandEntryCtrl)
+        assert panel._entry_input.GetValue() == "a draft"
+        assert panel._entry_input is not panel.input
     finally:
         panel.Destroy()
         loop.run_until_complete(asyncio.sleep(0.01))  # let the panel's own work settle
@@ -307,6 +311,110 @@ def test_switching_back_carries_the_line_the_caret_is_on(frame):
         assert panel.input.GetValue() == "say hello"
         _enter(panel)
         assert sent == ["say hello", "kill rat", "say hello"]
+    finally:
+        panel.Destroy()
+        loop.run_until_complete(asyncio.sleep(0.01))
+        loop.close()
+
+
+# --- the buffer is kept, so drafts survive a trip through the standard box ------------------
+
+
+def test_a_trip_through_the_standard_box_keeps_the_whole_buffer(frame):
+    # Sent commands and unsent drafts alike: the buffer is the document, and a switch of box is
+    # not a reason to throw it away. The caret is left on the line it was on.
+    prefs = UiPrefs(command_input_mode="editable")
+    panel, loop, _sent = _panel(frame, prefs)
+    try:
+        panel.input.SetValue("say hello")
+        panel.input.SetInsertionPointEnd()
+        _enter(panel)
+        panel.input.WriteText("kill rat")
+        _enter(panel)
+        panel.input.WriteText("a half-typed draft")
+        kept = panel.input.GetValue()
+        assert kept == "say hello\nkill rat\na half-typed draft"
+        assert panel.input.line_number() == 2  # the caret is on the draft
+
+        panel.apply_command_input_mode("standard")
+        assert panel.input.GetValue() == "a half-typed draft"  # that line, and only that line
+        panel.apply_command_input_mode("editable")
+
+        assert panel.input.GetValue() == kept
+        assert panel.input.line_number() == 2
+    finally:
+        panel.Destroy()
+        loop.run_until_complete(asyncio.sleep(0.01))
+        loop.close()
+
+
+def test_what_is_typed_in_the_standard_box_is_waiting_in_the_buffer(frame):
+    # The way back in: the line comes across, and it is a draft in the document, so Enter sends
+    # it once -- not twice, which a second set of handlers on a kept buffer would have caused.
+    prefs = UiPrefs(command_input_mode="editable")
+    panel, loop, sent = _panel(frame, prefs)
+    try:
+        panel.input.SetValue("say hello")
+        panel.input.SetInsertionPointEnd()
+        _enter(panel)
+        panel.apply_command_input_mode("standard")
+        assert panel.input.GetValue() == ""  # the empty tail line is what came across
+
+        panel.input.WriteText("look guard")
+        panel.apply_command_input_mode("editable")  # a switch, not a send
+        assert sent == ["say hello"]
+        assert panel.input.current_command() == "look guard"
+
+        _enter(panel)
+        assert sent == ["say hello", "look guard"]
+    finally:
+        panel.Destroy()
+        loop.run_until_complete(asyncio.sleep(0.01))
+        loop.close()
+
+
+def test_the_kept_buffer_still_sends_the_line_the_caret_is_on(frame):
+    # It is a live document, not a copy of one: after a trip out and back, Enter still sends the
+    # row the caret is parked on.
+    prefs = UiPrefs(command_input_mode="editable")
+    panel, loop, sent = _panel(frame, prefs)
+    try:
+        panel.input.SetValue("say hello")
+        panel.input.SetInsertionPointEnd()
+        _enter(panel)
+        panel.input.WriteText("kill rat")
+        _enter(panel)
+        panel.apply_command_input_mode("standard")
+        panel.apply_command_input_mode("editable")
+
+        panel.input.SetSelection(0, 0)  # back up to the first row
+        _enter(panel)
+        assert sent == ["say hello", "kill rat", "say hello"]
+        # The row it sent is still in the document, now marked as sent rather than removed.
+        assert panel.input.GetValue().startswith("say hello\n")
+    finally:
+        panel.Destroy()
+        loop.run_until_complete(asyncio.sleep(0.01))
+        loop.close()
+
+
+def test_a_command_sent_from_the_standard_box_leaves_the_buffer_draft_in_place(frame):
+    # Coming back from an empty standard box writes nothing back. An empty box means the reader
+    # sent what was there and has nothing to add, and the line it came from is still theirs.
+    prefs = UiPrefs(command_input_mode="editable")
+    panel, loop, sent = _panel(frame, prefs)
+    try:
+        panel.input.SetValue("look guard")
+        panel.input.SetInsertionPointEnd()  # a draft, never sent from here
+        panel.apply_command_input_mode("standard")
+        assert panel.input.GetValue() == "look guard"
+
+        _enter(panel)  # sent from the standard box
+        assert sent == ["look guard"]
+        assert panel.input.GetValue() == ""
+
+        panel.apply_command_input_mode("editable")
+        assert panel.input.GetValue() == "look guard"
     finally:
         panel.Destroy()
         loop.run_until_complete(asyncio.sleep(0.01))

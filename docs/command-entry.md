@@ -3,10 +3,15 @@
 The native wx window offers one global preference in **View → Command input mode**:
 **Standard** (the default) and **Editable command buffer (VIPMud-style)**.
 It is saved in `ui-prefs.toml` as `command_input_mode = "standard"` or `"editable"`.
-The choice changes every open session's box at once. Everything in a standard box is unsent, so
-all of it comes across; the buffer, by contrast, keeps every command it has sent, so leaving it
-carries only the line the caret is on. Each session still owns its own document, and switching
-keeps the caret and selection within what came across, so it never moves text between worlds.
+The choice changes every open session's box at once. Each session owns its own document, so a
+switch never moves text between worlds, and the editable buffer is kept rather than rebuilt:
+every command it has sent and every draft in it is still there when you switch back. Only the
+line the caret is on crosses between the two boxes, in both directions. Going to the standard
+box carries that line out; coming back writes whatever the standard box holds onto that same
+line, which is why nothing is ever sent twice or listed twice. A brand new buffer has one empty
+line to write onto, so everything in a standard box comes across the first time. An empty
+standard box writes nothing back, so a draft line the reader was parked on is never wiped by a
+trip through it. The caret and the selection stay where they were.
 The web frontend is unchanged. The unpublished prototype's boolean preference is migrated on
 load.
 
