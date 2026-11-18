@@ -8,6 +8,58 @@ fails the build on purpose.
 
 Entries start at 0.7.1. Earlier releases were tagged before this file existed.
 
+## 0.29.0 — 2026-11-18
+
+**Sounds a MUD downloads**, from MasterJake00
+
+* A MUD that preloads its sounds when you log in now gets all of them. Past sixteen at once,
+  the rest used to be dropped without a word and only fetched the first time they played, so
+  that first sound came late. One of several problems cateruels reported.
+* A sound the MUD plays right away no longer waits behind the ones it's preloading. It goes to
+  the front of the queue.
+* When a sound can't be downloaded, genericMud says so once, with the reason, like "Sound not
+  played: hurt.wav. Too many sound downloads are already waiting." Before, it said the file was
+  missing and told you to set the world's Sounds folder, which wasn't the problem.
+
+**Line endings**, from MasterJake00
+
+* On MUDs that end their lines the Diku, Merc and ROM way, every line after the first in a
+  burst started with a hidden character. Triggers starting with ^ never matched those lines,
+  MXP could fail to start, and the character ended up in your logs and anything you copied.
+  Those lines now arrive clean. cateruels reported it.
+
+**Sounds on separate speakers**, from have-you-met-matt
+
+* File, Audio outputs lets you name the sound devices you use, like your headphones and a USB
+  speaker, pick the device for each and test it. A trigger's Audio output route then sends its
+  sound there, so a low-health warning can play in your headphones while other sounds come out of
+  the speaker. Your screen reader's speech isn't affected, and triggers you don't set play where
+  they always have. It's in the native window, on Windows and Mac.
+* If a route's device isn't there, say it's unplugged, its sounds play through your default
+  device and you're told once. Set the route's Fallback to Stay silent if you'd rather it went
+  quiet.
+
+**Channel history from scripts**
+
+* A world's script can put a line in a channel's history without showing or saying it, with
+  `mud.file(channel, text)`. On a MUD that sends its chat as GMCP, three lines of Lua fill your
+  channel review keys without every message being heard twice. The scripting guide shows how.
+  An idea from cateruels.
+
+**Script errors**
+
+* When a script or a soundpack's script fails, genericMud now says what went wrong, like "A Lua
+  script error occurred: attempt to index a nil value", instead of just "LuaError". Only the
+  first one is spoken, as before, and every one is still in the diagnostic log.
+
+**Command input mode**, from MasterJake00
+
+* Switching between the standard command box and the editable command buffer, in the View menu,
+  now changes the box in every open tab straight away. Before, it only changed tabs you opened
+  afterwards. The line you're on comes with you, and the buffer keeps everything else, so
+  switching back brings it all back. If it's holding drafts you haven't sent, switching to the
+  standard box says how many.
+
 ## 0.28.0 — 2026-11-08
 
 **Soundpack notes in the session log**, from MasterJake00
