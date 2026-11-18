@@ -618,6 +618,29 @@ Use a callback instead of `nil` when the trigger should also perform an action.
 The built-in channels `main`, `system`, `tell`, and `review` cannot be changed by
 a script because they carry important accessible output.
 
+## Add a line to a channel's history
+
+`mud.file(channel, text)` puts a line in a channel's history without showing it
+or saying it. The channel review keys (Ctrl+Alt+Left and Right, then Up and
+Down) find it there, the same as a line a trigger routed to that channel.
+
+It suits a MUD that sends its chat as GMCP data as well as text. The message is
+already in the output once, and this files a copy under its channel without your
+hearing it twice:
+
+```lua
+mud.on_data("Comm.Channel.Text", function(name, value)
+    mud.file(value.channel, value.text)
+end)
+```
+
+The field names are your MUD's own, and the variables list shows them. Colour
+codes are taken out and line breaks become spaces, so each message is one line.
+Called from a trigger with the line that matched, it moves that line into the
+channel rather than adding a copy. If the channel or the text is missing, nothing
+is filed and it counts as a script error like any other, with the reason in the
+diagnostic log.
+
 ## Work with more than one open session
 
 These functions are useful when several character tabs are open:
@@ -842,6 +865,7 @@ Commands and output:
 - `mud.send(literal_command)`
 - `mud.execute(typed_text)`
 - `mud.echo(text [, channel])`
+- `mud.file(channel, text)`
 - `mud.speak(text [, channel [, interrupt]])`
 
 Variables and MUD data:

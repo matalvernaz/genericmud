@@ -140,6 +140,48 @@ def test_lua_vars_roundtrip():
     assert ("hp is 42", "main") in sink.echoed
 
 
+def test_lua_file_puts_a_line_in_a_channels_history_without_showing_or_saying_it():
+    # MUSHclient packs do this with history_add. A world's own script only had mud.echo, which
+    # files the line but shows and speaks it too, so chat it filed was heard twice.
+    sink, _, runtime = _runtime()
+    runtime.run_source('mud.file("gossip", "Bob gossips, hi")')
+    assert sink.filed == [("Bob gossips, hi", "gossip")]
+    assert sink.echoed == []
+    assert sink.spoken == []
+
+
+def test_lua_file_takes_out_colour_codes_and_line_breaks():
+    # IRE games colour the text inside Comm.Channel.Text. The review keys read the history line
+    # aloud, so they should hear the words, and one message is one line.
+    sink, _, runtime = _runtime()
+    runtime.run_source('mud.file("newbie", "\\27[32m(Newbie): Bob says, hi\\27[0m\\nand bye")')
+    assert sink.filed == [("(Newbie): Bob says, hi and bye", "newbie")]
+
+
+def test_lua_file_from_a_trigger_puts_the_matched_line_itself_in_the_channel():
+    # As history_add does for MUSHclient packs: the line that matched moves to the channel
+    # rather than gaining a copy, and its own spacing is kept, or the line isn't found.
+    sink, engine, runtime = _runtime()
+    runtime.run_source(
+        'mud.trigger("^Bob", function(line) mud.file("gossip", line) end, {regex=true})'
+    )
+    line = Line("Bob  gossips, hi")
+    engine.process_line(line)
+    assert line.channel == "gossip"
+    assert sink.filed == []
+
+
+def test_lua_file_without_a_channel_or_text_says_so():
+    # A missing GMCP field is nil, which would otherwise be filed as the word "None", or under
+    # a channel called "none".
+    sink, _, runtime = _runtime()
+    with pytest.raises((LuaError, ValueError), match="mud.file"):
+        runtime.run_source('mud.file(nil, "hi")')
+    with pytest.raises((LuaError, ValueError), match="mud.file"):
+        runtime.run_source('mud.file("gossip", nil)')
+    assert sink.filed == []
+
+
 def test_lua_key_binding():
     sink, engine, runtime = _runtime()
     runtime.run_source('mud.key("f2", function() mud.send("score") end)')

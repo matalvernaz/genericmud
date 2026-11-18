@@ -354,7 +354,10 @@ always in the output box.
 channels (tells, gossip, auction...), **Ctrl+Alt+Left/Right** cycle between
 those channels, **Ctrl+Alt+Up/Down** scroll within the one you're on, and
 **Ctrl+Alt+1 through 9** read its recent messages, with **Ctrl+Alt+0** for the
-tenth — all without touching the main output.
+tenth — all without touching the main output. A script can also put a line in a
+channel's history without showing or saying it, with `mud.file(channel, text)`.
+That suits a MUD that sends its chat as GMCP data, and the scripting guide has
+the three lines it takes.
 
 **Alt+Shift+L** starts and stops writing everything to a log file, if you want a
 transcript to read later. In a world's details you can have it log automatically

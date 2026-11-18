@@ -27,6 +27,7 @@ from pathlib import Path
 from lupa import LuaRuntime
 
 from genericmud.automation.engine import MatchContext
+from genericmud.render.ansi import strip_ansi
 from genericmud.scripting.api import ScriptApi
 from genericmud.scripting.guard import ScriptGuard, ScriptTimeout
 
@@ -321,6 +322,7 @@ class MudTable:
         mud.execute = api.execute
         mud.command = self._lua_command()
         mud.echo = api.echo
+        mud.file = self._lua_file()
         mud.speak = api.speak
         mud.play = api.play
         mud.stop = api.stop
@@ -586,6 +588,30 @@ class MudTable:
                 interrupt=bool(opt("interrupt", False)),
                 voice=opt("voice", None),
             )
+
+        return factory
+
+    def _lua_file(self):
+        """mud.file(channel, text): add a line to a channel's history, not shown or spoken.
+
+        MUSHclient packs do this with history_add, and a world's own script had only mud.echo,
+        which shows and speaks the line as well. A MUD that sends its chat as GMCP can feed the
+        channel review keys this way without every message being heard twice.
+
+        The review keys read the line aloud, so colour codes come out (IRE games colour the text
+        inside Comm.Channel.Text), and line breaks become spaces: one message is one line. The
+        spacing inside a line is kept, because a trigger filing the line it matched is found by
+        that text, and the line itself goes to the channel instead of a copy.
+        """
+        api = self._api
+
+        def factory(channel, text) -> None:
+            if channel is None or text is None:
+                # A GMCP field the MUD left out arrives as nil, and would otherwise be filed
+                # as the word "None", or under a channel called "none".
+                raise ValueError("mud.file needs a channel name and the text to file")
+            pieces = [piece.strip() for piece in strip_ansi(str(text)).splitlines()]
+            api.file_in_history(str(channel), " ".join(piece for piece in pieces if piece))
 
         return factory
 

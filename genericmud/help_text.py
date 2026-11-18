@@ -327,6 +327,7 @@ mud.speak(text), mud.echo(text), mud.play(file), mud.stop(channel)
 mud.key("f2", function() mud.command("score") end)
 mud.timer(2.0, function() mud.command("look") end)
 mud.set_channel(name, {speak=true, display=true, interrupt=false})
+mud.file(channel, text) adds a line to a channel's history, not shown or spoken.
 mud.send_to(session, command), mud.broadcast(command), mud.sessions()
 
 Scripts are sandboxed and time-limited. They cannot read arbitrary files, start

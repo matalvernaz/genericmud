@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from genericmud.app import EngineApp
 from genericmud.automation.engine import AutomationEngine
+from genericmud.bridge import protocol
 from genericmud.config.keymap import load_keymap
 from genericmud.packs import user_rules
 from genericmud.packs.user_rules import UserRules, UserWatch, register_rules
@@ -141,6 +142,35 @@ def test_lua_on_data_runs_with_the_name_and_a_lua_value():
     engine.data_arrived("gmcp", "Char.Vitals", {"hp": 90})
     engine.data_arrived("gmcp", "Char.Vitals", {"hp": 90})
     assert sink.sent == ["Char.Vitals 90", "hp 90", "Char.Vitals 90"]
+
+
+def test_a_worlds_script_can_fill_a_channels_history_from_gmcp_chat():
+    # A MUD that sends its chat as Comm.Channel.Text can feed the channel review keys from a
+    # few lines of Lua, with no triggers to keep in step with the game's wording, and without
+    # the message being shown or said a second time.
+    backend = RecordingBackend()
+    posted: list[dict] = []
+    app = EngineApp(
+        VoiceRouter(backend, clock=lambda: 0.0), send=lambda _text: None, post=posted.append,
+        keymap=load_keymap("vipmud"),
+    )
+    runtime = LuaPackRuntime(ScriptApi(app.engine, source="lua"))
+    runtime.run_source(
+        'mud.on_data("Comm.Channel.Text", function(name, value)\n'
+        "    mud.file(value.channel, value.text)\n"
+        "end)"
+    )
+    app.on_telnet_event(Subnegotiation(
+        OPT_GMCP,
+        b'Comm.Channel.Text {"channel": "gossip", "talker": "Bob", "text": "Bob gossips, hi"}',
+    ))
+    filed = app.buffer.lines()[-1]
+    assert (filed.plain_text, filed.channel) == ("Bob gossips, hi", "gossip")
+    assert "gossip" in app.chan_review.channels()
+    # Not in the output window. (The GMCP value still reaches the status panel, as all do.)
+    shown = [message for message in posted if message["type"] in (protocol.LINE, protocol.ECHO)]
+    assert not any("Bob gossips" in message["text"] for message in shown)
+    assert backend.spoken == []
 
 
 # --- the no-code MUD data rule -------------------------------------------------------
