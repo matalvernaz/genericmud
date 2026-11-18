@@ -201,28 +201,41 @@ class SoundBus:
         times: int = 1,
         timing: CueTiming | None = None,
         *, route: str = "",
-    ) -> None:
+    ) -> str | None:
         """Play a cue; ``loop`` repeats it until stopped, otherwise it plays ``times`` times
-        (a MUD's MSP L= or Client.Media loops). ``timing`` trims and fades it."""
+        (a MUD's MSP L= or Client.Media loops). ``timing`` trims and fades it.
+        Return a fallback notice for the caller to report, or None on normal playback."""
         self._playing.add(channel)
         effective = self.effective_gain(channel, gain)
+        notice = None
         if route:
             self._backend.stop(channel)  # a failed replacement must not leave the old cue looping
             try:
                 output = load_audio_routes().get(route)
             except (OSError, ValueError, TypeError) as error:
-                raise AudioRouteUnavailable(f"Cannot read audio routes: {error}") from error
-            if output is None:
                 raise AudioRouteUnavailable(
-                    f"Audio route is not configured on this computer: {route}"
+                    f"Cannot read audio routes: {error}; staying silent"
+                ) from error
+            try:
+                if output is None:
+                    raise AudioRouteUnavailable("Route is not configured on this computer")
+                self._backend.play_on_device(
+                    output, file, channel, effective, pan, loop, times, timing,
                 )
-            self._backend.play_on_device(output, file, channel, effective, pan, loop, times, timing)
-        elif timing is None:  # backends written before timing existed still play cues
+            except AudioRouteUnavailable as error:
+                if output is not None and output.fallback == "silent":
+                    raise AudioRouteUnavailable(f"{error}; staying silent") from error
+                # An unknown route has no local policy: use the same default as a new route.
+                notice = f"{error}; using System default"
+            else:
+                return None
+        if timing is None:  # backends written before timing existed still play cues
             self._backend.play(file, channel, effective, pan, loop, times=max(1, times))
         else:
             self._backend.play(
                 file, channel, effective, pan, loop, times=max(1, times), timing=timing
             )
+        return notice
 
     def music(
         self, file: str, channel: str = MUSIC_CATEGORY, gain: float = 1.0, times: int = -1,

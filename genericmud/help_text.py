@@ -176,20 +176,26 @@ and Keep checking come after the channel, and the sound fields come last.
 Native audio outputs:
 File, Audio outputs configures named audio routes. Add one, choose an output device,
 and use Test output before saving. No physical output is preselected for a new route.
+Fallback chooses System default or Stay silent when the selected device cannot play.
+System default is the default, including for route files saved before this setting existed.
+Test output checks only the selected device; it does not fall back.
 In a trigger, Audio output route selects a route;
 System default keeps existing playback. Simultaneous cues need different sound channels:
 the next cue on the same channel still replaces the previous one, even on another device.
 Device selection needs BASS on Windows or macOS. Linux keeps default playback because its
-device names may refer to numbered slots or aliases. A missing device, unconfigured route,
-or unsupported backend
-keeps the explicitly routed cue silent and explains why once until it recovers. The next
-cue tries the saved device again; interrupted cues do not restart. Routes are local to
+device names may refer to numbered slots or aliases. Missing devices and unsupported routing
+follow the route's fallback choice, with one explanation per problem instead of per cue.
+An unknown route name always uses System default and warns once: no local policy exists.
+Configure that name locally with its intended device and Stay silent if fallback is unwanted.
+Invalid or unreadable route configuration is reported and leaves routed cues silent,
+because the client cannot check whether you chose Stay silent.
+The next cue tries the saved device again; interrupted cues do not restart. Routes are local to
 this computer; exported rules keep their route names so a friend can assign their own
-devices. Renaming or removing a route leaves its triggers silent until you update them
-or restore the old name. Saving removed route names asks for confirmation; No keeps
+devices. Renaming or removing a route makes its triggers use System default until you
+update them or restore the old name. Saving removed route names asks for confirmation; No keeps
 your edits open. Soundpacks, MUD audio,
 other rule types and screen-reader speech keep their existing outputs. The web window
-cannot select these devices.
+cannot select these devices; routed cues follow their fallback choice on the browser's output.
 
 A trigger or alias can have a name, a group, and an order. The Label is the name a
 script turns that one rule off and on by, with mud.set_enabled. The Group switches every

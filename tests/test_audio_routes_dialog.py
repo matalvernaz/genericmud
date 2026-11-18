@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import threading
+from dataclasses import replace
 
 import pytest
 
@@ -51,7 +52,7 @@ def test_route_editor_labels_shortcuts_and_preserves_unavailable_identity(dialog
     for child, label, before in _tab_stops(editor):
         if isinstance(child, (wx.TextCtrl, wx.Choice)):
             assert before is not None and "&" in label
-            assert child.GetName() in ("Route name", "Output device")
+            assert child.GetName() in ("Route name", "Output device", "Fallback")
 
 
 def test_device_refresh_restores_stable_identity_after_reordering(dialogs):
@@ -176,7 +177,7 @@ def test_saving_removed_route_names_requires_confirmation_and_preserves_edits(
         else:
             manager._on_remove(None)
         manager._on_ok(None)
-        assert "alerts" in messages[0] and "silent" in messages[0]
+        assert "alerts" in messages[0] and "System default" in messages[0]
         assert "Triggers" in messages[0] and "not updated" in messages[0]
         assert not closed
         assert audio_routes.load_audio_routes() == {"alerts": HEADPHONES, "music": SPEAKERS}
@@ -223,6 +224,7 @@ def test_invalid_name_or_missing_device_keeps_entered_text(dialogs, monkeypatch)
     monkeypatch.setattr(wx, "MessageBox", lambda text, *_args: messages.append(text))
     monkeypatch.setattr(editor, "EndModal", closed.append)
     editor._name.SetValue("my typed name")
+    editor._device.SetSelection(wx.NOT_FOUND)
     editor._on_ok(None)
     assert messages == ["Choose an output device first."] and not closed
     assert editor._name.GetValue() == "my typed name"
@@ -274,3 +276,64 @@ def test_worker_completion_is_marshaled_to_wx_and_cleanup_is_queued(frame, monke
     finally:
         timeout.Stop()
     assert closed.is_set(), "closing the dialog did not clean up its preview"
+
+
+@pytest.mark.parametrize("fallback", ["default", "silent"])
+def test_route_fallback_survives_refresh_device_changes_and_save(frame, monkeypatch, fallback):
+    audio_routes.save_audio_routes({"alerts": replace(HEADPHONES, fallback=fallback)})
+    monkeypatch.setattr(AudioRouteEditor, "_run", lambda *_args: None)
+    manager = AudioRoutesDialog(frame)
+    editor = AudioRouteEditor(manager, {"alerts"}, "alerts", manager._routes["alerts"])
+    try:
+        assert editor._fallback.GetName() == "Fallback"
+        assert editor._fallback.GetStringSelection() == (
+            "System default" if fallback == "default" else "Stay silent"
+        )
+        editor._show_outputs([HEADPHONES, SPEAKERS])
+        editor._device.SetSelection(1)
+        editor._on_refresh(None)
+        editor._show_outputs([SPEAKERS, HEADPHONES])
+        name, output = editor.result()
+        assert output == replace(SPEAKERS, fallback=fallback)
+        audio_routes.save_audio_routes({name: output})
+        assert audio_routes.load_audio_routes()[name].fallback == fallback
+    finally:
+        editor.Destroy()
+        manager.Destroy()
+
+
+def test_new_route_defaults_to_system_fallback_and_can_opt_into_silence(frame, monkeypatch):
+    monkeypatch.setattr(AudioRouteEditor, "_run", lambda *_args: None)
+    manager = AudioRoutesDialog(frame)
+    editor = AudioRouteEditor(manager, {})
+    try:
+        editor._name.SetValue("private")
+        editor._show_outputs([HEADPHONES])
+        editor._device.SetSelection(0)
+        assert editor._fallback.GetStringSelection() == "System default"
+        assert editor.result()[1].fallback == "default"
+        editor._fallback.SetSelection(1)
+        assert editor.result() == ("private", replace(HEADPHONES, fallback="silent"))
+    finally:
+        editor.Destroy()
+        manager.Destroy()
+
+
+def test_saved_route_can_choose_silence_when_device_discovery_fails(frame, monkeypatch):
+    monkeypatch.setattr(AudioRouteEditor, "_run", lambda *_args: None)
+    messages = []
+    monkeypatch.setattr(wx, "MessageBox", lambda text, *_args: messages.append(text))
+    manager = AudioRoutesDialog(frame)
+    editor = AudioRouteEditor(manager, {"alerts"}, "alerts", HEADPHONES)
+    try:
+        editor._complete(editor._show_outputs, None, "BASS is unavailable")
+        editor._fallback.SetSelection(1)
+        name, output = editor.result()
+        assert name == "alerts" and output == replace(HEADPHONES, fallback="silent")
+        assert messages == ["BASS is unavailable"]
+        assert editor._device.GetStringSelection() == "Saved: Наушники"
+        audio_routes.save_audio_routes({name: output})
+        assert audio_routes.load_audio_routes()[name].fallback == "silent"
+    finally:
+        editor.Destroy()
+        manager.Destroy()

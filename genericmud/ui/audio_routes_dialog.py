@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 
 import wx
 
-from genericmud.config.audio_routes import AudioOutput, load_audio_routes, save_audio_routes
+from genericmud.config.audio_routes import (
+    FALLBACK_CHOICES,
+    AudioOutput,
+    load_audio_routes,
+    save_audio_routes,
+)
 from genericmud.sound.bass_library import BassUnavailable
 from genericmud.sound.output_devices import AudioRouteUnavailable, available_outputs
 from genericmud.sound.output_preview import OutputPreview
@@ -32,7 +38,18 @@ class AudioRouteEditor(wx.Dialog):
         outer.Add(wx.StaticText(self, label="&Output device:"), 0, wx.ALL, 6)
         self._device = wx.Choice(self)
         self._device.SetName("Output device")
+        if output is not None:
+            # Keep the saved destination editable if discovery fails (including fallback).
+            self._outputs = [output]
+            self._device.Set([f"Saved: {output.name}"])
+            self._device.SetSelection(0)
         outer.Add(self._device, 0, wx.EXPAND | wx.ALL, 6)
+        outer.Add(wx.StaticText(self, label="&Fallback:"), 0, wx.ALL, 6)
+        self._fallback = wx.Choice(self, choices=["System default", "Stay silent"])
+        self._fallback.SetName("Fallback")
+        self._fallback.SetSelection(FALLBACK_CHOICES.index(output.fallback) if output else 0)
+        self._fallback.SetToolTip("What to do when this route's output cannot play a cue.")
+        outer.Add(self._fallback, 0, wx.EXPAND | wx.ALL, 6)
         self._status = wx.StaticText(self, label="Loading audio outputs...")
         outer.Add(self._status, 0, wx.ALL, 6)
         row = wx.BoxSizer(wx.HORIZONTAL)
@@ -140,7 +157,9 @@ class AudioRouteEditor(wx.Dialog):
             self.EndModal(wx.ID_OK)
 
     def result(self):
-        return self._name.GetValue().strip(), self._outputs[self._device.GetSelection()]
+        output = replace(self._outputs[self._device.GetSelection()],
+                         fallback=FALLBACK_CHOICES[self._fallback.GetSelection()])
+        return self._name.GetValue().strip(), output
 
     def _on_destroy(self, event):
         # During destruction wx can return a new base Dialog wrapper, not this Python
@@ -224,8 +243,9 @@ class AudioRoutesDialog(wx.Dialog):
         removed = sorted(self._original_names - self._routes.keys())
         if removed and wx.MessageBox(
             "These audio route names will be removed:\n" + "\n".join(removed)
-            + "\n\nTriggers using these names are not updated. Their routed sounds will be silent "
-            "until you select another route in those triggers or restore the old route names."
+            + "\n\nTriggers using these names are not updated. Their sounds will use "
+            "System default until you select another route in those triggers or restore "
+            "the old route names."
             "\n\nSave these changes?",
             "Save audio routes", wx.YES_NO | wx.NO_DEFAULT | wx.ICON_WARNING, self,
         ) != wx.YES:

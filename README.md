@@ -539,22 +539,29 @@ key. These editors use ordinary fields; no code is required.
 In the native client, **File → Audio outputs** configures named audio routes, such as
 “Headphones” and “Speakers”. Add a route, choose its output device, and use **Test output**
 before saving. New routes require a device choice; no physical output is preselected.
+Each route's **Fallback** chooses **System default** (the default) or **Stay silent** when
+its selected device cannot play. Test output checks the selected device only, without fallback.
 A trigger's **Audio output route** chooses one of these routes; **System
 default** keeps existing playback. Give simultaneous cues different sound channels, as before:
 playing another cue on the same channel still replaces it, regardless of its destination.
 
 Device selection requires BASS on Windows or macOS (included in native builds). Linux keeps
 default playback; ALSA device names may identify a slot or alias rather than fixed hardware.
-Explicit routes never fall back
-to another device: an unavailable device, an unconfigured route, or an unsupported backend
-leaves that cue silent and reports the problem once until recovery. A returning device is
-looked up again by its identifier on the next cue; interrupted cues are not restarted.
+An unavailable device or unsupported routing backend uses the route's fallback policy.
+The client reports fallback or silence once per problem, rather than on every cue.
+A returning device is looked up again by its identifier on the next cue; interrupted cues
+are not restarted. Existing route files without a fallback setting use System default.
+An unknown route name has no local policy, so it always uses System default and warns once.
+Configure that name locally with the intended device and Stay silent if fallback is unwanted.
+Invalid or unreadable route configuration is reported and leaves routed cues silent, since
+the client cannot check whether you chose Stay silent.
 Routes live in the machine's `audio-routes.json`, separate from exported worlds. Rules export
 only the route name, so a recipient can map it to their own hardware. Renaming or removing a
-route leaves triggers using its old name silent until you update them or restore that name.
+route makes triggers using its old name use System default until you update them or restore it.
 Saving changes that remove route names asks for confirmation; No keeps your edits open.
 Soundpacks, MUD-provided audio, other rule types and
-screen-reader speech keep their existing outputs. The web client cannot select these devices.
+screen-reader speech keep their existing outputs. The web client cannot select these devices;
+routed cues there follow their fallback policy using the browser's normal output or silence.
 
 **Ignore capitals** is ticked on a new trigger and a new alias, so `brady` finds
 "Brady pages:" and `shout *` takes "Shout hello". MUD text is capitalised however
