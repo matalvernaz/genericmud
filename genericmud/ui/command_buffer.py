@@ -152,6 +152,16 @@ class CommandEntryCtrl(wx.TextCtrl):
         )
         self._apply(value, len(value))
 
+    def start_fresh_line(self) -> None:
+        """Put the caret on an empty last row, adding one only if the last row has text.
+
+        The same row Down at an unfinished last row gives, for a return from the standard box
+        after the line it took across was sent from there.
+        """
+        if not self.GetValue().endswith("\n"):
+            self.AppendText("\n")
+        self.move_to_tail()
+
     def create_tail(self) -> bool:
         value = self.GetValue()
         if not down_creates_tail(value, self.offset_from_position(self.GetSelection()[0])):

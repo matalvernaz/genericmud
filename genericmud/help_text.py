@@ -38,6 +38,7 @@ Switching to Standard keeps the buffer: switching back brings your commands and
 drafts up again, with the cursor where you left it. Standard shows the one line the
 cursor is on, and commands you sent are in its Up history; a draft you never sent
 is only in the buffer, so leaving one says how many lines are still waiting there.
+If you send the line Standard shows, switching back puts the cursor on a fresh line.
 In the editable buffer, Up and Down move through old commands and unsent drafts.
 Down at an unfinished tail adds a blank line without sending the draft.
 Enter executes one logical line; older lines are copied to the tail.

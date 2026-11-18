@@ -470,7 +470,30 @@ def test_a_command_sent_from_the_standard_box_leaves_the_buffer_draft_in_place(f
         assert panel.input.GetValue() == ""
 
         panel.apply_command_input_mode("editable")
-        assert panel.input.GetValue() == "look guard"
+        # The line stays, and the caret starts a fresh one below it (see the next test).
+        assert panel.input.GetValue() == "look guard\n"
+    finally:
+        panel.Destroy()
+        loop.run_until_complete(asyncio.sleep(0.01))
+        loop.close()
+
+
+def test_what_is_typed_after_coming_back_does_not_join_the_line_the_standard_box_sent(frame):
+    # The caret was left at the end of the line the standard box had sent, so the next command
+    # was typed onto the end of it and went out as "look guardnorth".
+    prefs = UiPrefs(command_input_mode="editable")
+    panel, loop, sent = _panel(frame, prefs)
+    try:
+        panel.input.SetValue("look guard")
+        panel.input.SetInsertionPointEnd()
+        panel.apply_command_input_mode("standard")
+        _enter(panel)  # sent from the standard box
+        panel.apply_command_input_mode("editable")
+        assert panel.input.current_command() == ""
+
+        panel.input.WriteText("north")
+        _enter(panel)
+        assert sent == ["look guard", "north"]
     finally:
         panel.Destroy()
         loop.run_until_complete(asyncio.sleep(0.01))

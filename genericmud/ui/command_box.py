@@ -175,6 +175,11 @@ class CommandBoxMixin:
             # buffer has one empty line for it, so everything comes across the first time.
             if typed:
                 new.write_command(typed, place)
+            elif new.current_command().strip():
+                # The line that crossed was sent from the standard box, or cleared there. It stays
+                # as it was, but the caret leaves it: whatever is typed next would otherwise land on
+                # the end of it and go out as one command with it.
+                new.start_fresh_line()
         else:
             new = wx.TextCtrl(self, style=wx.TE_MULTILINE | wx.TE_PROCESS_ENTER)
             new.SetMinSize((-1, new.GetCharHeight() * 2 + 8))

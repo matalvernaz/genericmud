@@ -11,7 +11,9 @@ box carries that line out; coming back writes whatever the standard box holds on
 line, which is why nothing is ever sent twice or listed twice. A brand new buffer has one empty
 line to write onto, so everything in a standard box comes across the first time. An empty
 standard box writes nothing back, so a draft line the reader was parked on is never wiped by a
-trip through it. The caret and the selection stay where they were.
+trip through it. If that line has text, as it does once the standard box has sent it, the
+caret moves to an empty last line, so what is typed next is a command of its own; otherwise
+the caret and the selection stay where they were.
 
 Only the line that crossed is in the standard box. Sent commands are reachable there through the
 history; a draft that stayed behind is not, so switching to the standard box says how many unsent

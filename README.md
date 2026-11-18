@@ -214,7 +214,9 @@ comes across with it. The web UI keeps its existing input behavior.
 
 The buffer itself is kept when you switch to Standard, so nothing you wrote is
 thrown away: switch back and your commands and drafts are still there, with the
-cursor where you left it. Standard shows one line of it — the line the cursor is
+cursor where you left it. If you sent the line you took across while in Standard,
+the cursor goes to a fresh line instead, so what you type next is a command of its
+own. Standard shows one line of it — the line the cursor is
 on — and the commands you sent are in the usual Up history. A draft you never sent
 is only in the buffer, so leaving one behind says how many are waiting there.
 
