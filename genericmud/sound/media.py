@@ -19,6 +19,7 @@ import os
 import tempfile
 import threading
 import time
+from collections import OrderedDict
 from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import quote, urlparse
@@ -236,9 +237,12 @@ class MediaLibrary:
         self._submit = submit
         self._on_error = on_error  # (url, reason): a failed download, reported once per URL
         self._waiting: dict[Path, list[Callable[[str], None]]] = {}
-        # Started nothing yet: (name, url, callbacks) waiting for room, oldest first. A dict
-        # because insertion order is the queue, and a path can only be in it once.
-        self._queued: dict[Path, tuple[str, str, list[Callable[[str], None]]]] = {}
+        # Started nothing yet: (name, url, callbacks) waiting for room, oldest first. Ordered
+        # so a cue the MUD wants played now can jump the line, and keyed by path so one file can
+        # only be in it once.
+        self._queued: OrderedDict[Path, tuple[str, str, list[Callable[[str], None]]]] = (
+            OrderedDict()
+        )
         self._failed: set[str] = set()  # URLs not retried this session (a 404 recurs per cue)
         self._slots = threading.BoundedSemaphore(_AT_ONCE)
         self._full = False  # the folder reached its cap: said once, then nothing more is fetched
@@ -248,26 +252,48 @@ class MediaLibrary:
         cache = str(self.cache_dir) if self.cache_dir is not None else None
         return resolve_media(name, *roots, cache)
 
-    def fetch(self, name: str, url: str, on_ready: Callable[[str], None] | None = None) -> bool:
+    def fetch(
+        self,
+        name: str,
+        url: str,
+        on_ready: Callable[[str], None] | None = None,
+        *,
+        first: bool = False,
+        on_refused: Callable[[str], None] | None = None,
+    ) -> bool:
         """Download ``name`` from ``url`` into the cache, then call ``on_ready(path)``.
 
         Returns False when the download was refused outright (unsafe name, not audio, no
-        cache, a URL that already failed, a full folder, or a backlog already at its ceiling).
-        A second request for a file already downloading, or already waiting, joins the first
-        instead of fetching it twice.
+        cache, a URL that already failed, a full folder, or a backlog already at its ceiling),
+        and ``on_refused`` is told the reason. A second request for a file already downloading,
+        or already waiting, joins the first instead of fetching it twice.
 
         With ``MAX_IN_FLIGHT`` downloads going, the next ones wait their turn instead of being
         refused. A server that preloads a whole sound set sends one request per file, so
         refusing meant that every file past the sixteenth was dropped without a word and only
         fetched when it was first played -- a late cue at exactly the moment a sound mattered.
+
+        ``first`` jumps the waiting line: a sound the MUD wants played *now* should not queue
+        behind thirty files a Load asked for in advance.
         """
-        if self.cache_dir is None or not url or url in self._failed or not is_downloadable(name):
+        def refuse(reason: str) -> bool:
+            if on_refused is not None:
+                on_refused(reason)
             return False
+
+        if self.cache_dir is None:
+            return refuse("this world has no media folder to download into")
+        if not url:
+            return refuse("no address was given to download it from")
+        if url in self._failed:
+            return refuse("that address has already failed this session")
+        if not is_downloadable(name):
+            return refuse("that is not a file name this client will download")
         if self._full:
-            return False
+            return refuse("this world's media folder is full")
         dest = confine(self.cache_dir, name.replace("\\", "/"))
         if dest is None:
-            return False
+            return refuse("that file name would land outside the media folder")
         if dest in self._waiting:
             if on_ready is not None:
                 self._waiting[dest].append(on_ready)
@@ -275,12 +301,16 @@ class MediaLibrary:
         if dest in self._queued:
             if on_ready is not None:
                 self._queued[dest][2].append(on_ready)
+            if first:
+                self._queued.move_to_end(dest, last=False)
             return True
         waiters = [on_ready] if on_ready is not None else []
         if len(self._waiting) >= MAX_IN_FLIGHT:
             if len(self._queued) >= MAX_QUEUED:
-                return False  # a server naming new files without end is still bounded
+                return refuse("too many sound downloads are already waiting")
             self._queued[dest] = (name, url, waiters)
+            if first:
+                self._queued.move_to_end(dest, last=False)
             return True
         self._start(name, url, dest, waiters)
         return True

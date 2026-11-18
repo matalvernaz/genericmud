@@ -247,6 +247,74 @@ def test_a_full_backlog_drains_completely_and_in_order(monkeypatch, tmp_path):
     assert len(set(net.urls)) == wanted
 
 
+def test_a_play_jumps_the_queue_ahead_of_waiting_preloads(tmp_path):
+    # Issue #118: a Play is a sound the MUD wants now, and behind thirty preloads it was fetched
+    # thirty-second, so the cue arrived after every sound that was merely warming the cache.
+    net = _Net(hold=True)
+    library = _library(tmp_path, net)
+    for index in range(media.MAX_IN_FLIGHT):
+        library.fetch(f"f{index}.wav", f"https://mud.example/f{index}.wav")
+    for index in range(3):  # preloads waiting behind them
+        library.fetch(f"q{index}.wav", f"https://mud.example/q{index}.wav")
+    assert library.fetch("now.wav", "https://mud.example/now.wav", first=True)
+
+    for _ in range(20):
+        if not net.pending:
+            break
+        net.release()
+
+    urls = net.urls
+    assert urls.index("https://mud.example/now.wav") < urls.index("https://mud.example/q0.wav")
+    assert len(urls) == media.MAX_IN_FLIGHT + 4
+
+
+def test_a_play_is_fetched_before_the_preloads_still_waiting(tmp_path):
+    # The path a player takes: 31 Loads arrive in one packet, then a Play for a sound the MUD
+    # wants now. On the old code the Play was refused outright, so it was never fetched at all.
+    net = _Net(hold=True)
+    app, _backend, _posted = _app(tmp_path, net)
+    for index in range(31):
+        _gmcp(app, "Client.Media.Load", {
+            "name": f"s{index}.wav",
+            "url": f"https://mud.example/s{index}.wav",
+        })
+    _gmcp(app, "Client.Media.Play", {
+        "name": "hurt.wav",
+        "url": "https://mud.example/hurt.wav",
+    })
+
+    for _ in range(40):
+        if not net.pending:
+            break
+        net.release()
+
+    urls = net.urls
+    assert "https://mud.example/hurt.wav" in urls
+    assert urls.index("https://mud.example/hurt.wav") < urls.index(
+        "https://mud.example/s16.wav"
+    )
+
+
+def test_a_play_already_waiting_is_moved_to_the_front_too(tmp_path):
+    # A Play that queued a moment ago and is asked for again should not stay at the back.
+    net = _Net(hold=True)
+    library = _library(tmp_path, net)
+    for index in range(media.MAX_IN_FLIGHT):
+        library.fetch(f"f{index}.wav", f"https://mud.example/f{index}.wav")
+    library.fetch("q0.wav", "https://mud.example/q0.wav")
+    library.fetch("late.wav", "https://mud.example/late.wav")
+    library.fetch("late.wav", "https://mud.example/late.wav", first=True)
+
+    for _ in range(20):
+        if not net.pending:
+            break
+        net.release()
+
+    assert net.urls.index("https://mud.example/late.wav") < net.urls.index(
+        "https://mud.example/q0.wav"
+    )
+
+
 def test_the_queue_behind_the_cap_is_bounded_and_says_no(monkeypatch, tmp_path):
     # A server naming new files without end is still bounded: the backlog has a ceiling, and a
     # fetch past it is refused rather than kept for ever.
@@ -317,6 +385,55 @@ async def test_a_backlog_drains_when_completions_come_from_another_thread(tmp_pa
 
     assert len(ready) == 31, f"only {len(ready)} of 31 landed"
     assert len(set(started)) == 31
+
+
+def test_a_refused_play_says_why_instead_of_blaming_the_sounds_folder(tmp_path, monkeypatch):
+    # Issue #118: with the download refused, the cue fell back to its bare name, the backend could
+    # not find a file by that name, and the player was told to set the Sounds folder -- which was
+    # never the problem. The cue came with a URL.
+    monkeypatch.setattr(media, "MAX_QUEUED", 0, raising=False)
+    net = _Net(hold=True)
+    spoken: list[str] = []
+    voice = VoiceRouter(RecordingBackend(), clock=lambda: 0.0)
+    voice.speak = lambda text, **kwargs: spoken.append(text)
+    app = EngineApp(
+        voice,
+        post=[].append,
+        sound_backend=_Backend(),
+        media=_library(tmp_path, net),
+    )
+    for index in range(media.MAX_IN_FLIGHT):
+        _gmcp(app, "Client.Media.Load", {
+            "name": f"s{index}.wav",
+            "url": f"https://mud.example/s{index}.wav",
+        })
+    _gmcp(app, "Client.Media.Play", {
+        "name": "hurt.wav",
+        "url": "https://mud.example/hurt.wav",
+    })
+
+    said = " ".join(spoken)
+    assert "Sound not played: hurt.wav" in said
+    assert "Too many sound downloads are already waiting" in said
+    assert "Sounds folder" not in said
+
+
+def test_a_cue_with_no_url_still_goes_to_the_backend_by_name(tmp_path):
+    # The Sounds folder hint is right when the MUD named a file and never said where to get it:
+    # that cue still reaches the backend by its bare name, which is what reports the hint. Pinned
+    # so the fix above cannot take that path away.
+    net = _Net()
+    voice = VoiceRouter(RecordingBackend(), clock=lambda: 0.0)
+    backend = _Backend()
+    app = EngineApp(
+        voice,
+        post=[].append,
+        sound_backend=backend,
+        media=_library(tmp_path, net),
+    )
+    _gmcp(app, "Client.Media.Play", {"name": "missing.wav"})
+    assert [played[0] for played in backend.played] == ["missing.wav"]
+    assert net.urls == []  # nothing to download: no address came with it
 
 
 def test_downloads_stop_once_the_worlds_media_folder_is_full(tmp_path, monkeypatch):
