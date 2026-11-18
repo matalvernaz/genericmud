@@ -432,11 +432,33 @@ class GenericMudFrame(SavedWorldsMixin, SoundpackSetupMixin, SelfUpdateMixin, wx
         for index in range(self.book.GetPageCount()):
             self.book.GetPage(index).apply_command_input_mode(mode)
         self.announce(
-            "Editable command buffer for every world. Enter sends the line you are on and "
-            "starts a new one; Shift+Enter sends it without moving."
-            if mode == "editable"
-            else "The standard command box for every world."
+            (
+                "Editable command buffer for every world. Enter sends the line you are on and "
+                "starts a new one; Shift+Enter sends it without moving."
+                if mode == "editable"
+                else "The standard command box for every world."
+            ) + self._left_in_a_buffer()
         )
+
+    def _left_in_a_buffer(self) -> str:
+        """What the tab in front left behind in its editable buffer, as a sentence or nothing.
+
+        Sent commands need no mention: they are in the history, so Up finds them. A draft that
+        did not cross over has nowhere else to live, and nothing on screen tells a player who
+        cannot see the box that it is still there.
+
+        Said as part of the switch rather than by the tab: two utterances on one action interrupt
+        each other, and the reader would hear half of each.
+        """
+        if self.book.GetPageCount() == 0:
+            return ""
+        page = self.book.GetPage(self.book.GetSelection())
+        left = getattr(page, "left_behind_in_buffer", 0)
+        if not left:
+            return ""
+        if left == 1:
+            return " 1 unsent line is still in the editable buffer."
+        return f" {left} unsent lines are still in the editable buffer."
 
     def _on_connection_settings(self, _event: wx.CommandEvent) -> None:
         dialog = ConnectionSettingsDialog(self, self._prefs)
