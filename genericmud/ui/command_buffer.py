@@ -106,6 +106,26 @@ class CommandEntryCtrl(wx.TextCtrl):
         self.Replace(start, end, text.replace("\r\n", "\n").replace("\r", "\n"))
         return replaced
 
+    def write_command(self, text: str, place: tuple[int, int]) -> None:
+        """Put a box's own text on the line the caret is on, caret and selection included.
+
+        The standard box hands its line back this way, and what it holds may be one command or a
+        block the reader started with Shift+Enter: each becomes its own line here, as each would
+        have been its own command on Enter. Nothing is ever added to the document -- the text
+        replaces the line the caret is on, which is the line that went across in the first place.
+        """
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        start, _end = self.line_bounds()
+        before = self.offset_from_position(start)
+        first = max(0, min(place[0], len(text)))
+        last = max(0, min(place[1], len(text)))
+        self.replace_command(text, caret=first)
+        self.SetSelection(
+            self.position_from_offset(before + first),
+            self.position_from_offset(before + last),
+        )
+        self.ShowPosition(self.GetInsertionPoint())
+
     def _apply(self, value: str, caret: int) -> None:
         """Replace only changed text; do not reset the native document on each edit."""
         old = self.GetValue()

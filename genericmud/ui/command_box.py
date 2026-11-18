@@ -42,33 +42,40 @@ class CommandBoxMixin:
 
     def _set_input_masked(self, masked: bool) -> None:
         self._input_masked = masked
-        if getattr(self, "_entry_input", None) is None:
+        entry = getattr(self, "_entry_input", None)
+        secret = getattr(self, "_password_input", None)
+        if entry is None or (self.input is not entry and secret is None):
+            # No editable buffer here, or a standard box is in use: a standard box shows what is
+            # typed and keeps none of it, which is what it has always done.
             return
-        if masked == (self.input is not self._entry_input):
-            return
+        if (secret is not None) == masked:
+            return  # already in the state this is asking for
         focused = self.input.HasFocus()
-        selection = self._entry_input.GetSelection()
+        selection = entry.GetSelection()
         self._completion.reset()
-        self._entry_input.reset_recall()
+        entry.reset_recall()
         sizer = self.GetSizer()
         if masked:
-            self._entry_input.Hide()
+            entry.Hide()
             self._password_label = wx.StaticText(self, label="Pass&word:")
-            self.input = wx.TextCtrl(self, style=wx.TE_PROCESS_ENTER | wx.TE_PASSWORD)
-            self.input.SetName(f"{self.world.name} password")
-            self.input.Bind(wx.EVT_TEXT_ENTER, self._on_send)
-            self.input.Bind(wx.EVT_KEY_DOWN, self._on_input_key)
+            self._password_input = wx.TextCtrl(
+                self, style=wx.TE_PROCESS_ENTER | wx.TE_PASSWORD,
+            )
+            self._password_input.SetName(f"{self.world.name} password")
+            self._password_input.Bind(wx.EVT_TEXT_ENTER, self._on_send)
+            self._password_input.Bind(wx.EVT_KEY_DOWN, self._on_input_key)
+            self.input = self._password_input
             sizer.Add(self._password_label, 0, wx.LEFT, 2)
             sizer.Add(self.input, 0, wx.EXPAND | wx.ALL, 2)
         else:
-            secret = self.input
             if secret.GetValue():
                 self._loop.call_soon_threadsafe(self._speak_system, "Unsent password cleared")
             sizer.Detach(secret)
             sizer.Detach(self._password_label)
             secret.Hide()
             self._password_label.Destroy()
-            self.input = self._entry_input
+            self._password_input = None
+            self.input = entry
             self.input.Show()
         self.Layout()
         if focused:
@@ -79,6 +86,17 @@ class CommandBoxMixin:
             secret.Destroy()  # secret text and its native undo buffer never enter the document
             # A mode switch while the password field owned the box was put off until now.
             self.apply_command_input_mode(self._prefs.command_input_mode)
+
+    def _bind_command_box(self, box: wx.Window) -> None:
+        """Wire a command box up, once: a kept buffer must not collect a second set of handlers.
+
+        Two EVT_TEXT_ENTER handlers on one box would send every command twice, which is exactly
+        what keeping the editable buffer across a switch could have caused.
+        """
+        box.SetName(f"{self.world.name} command")
+        box.Bind(wx.EVT_TEXT_ENTER, self._on_send)
+        box.Bind(wx.EVT_KEY_DOWN, self._on_input_key)
+        box.Bind(wx.EVT_SET_FOCUS, self._on_input_focus)
 
     def apply_command_input_mode(self, mode: str) -> bool:
         """Give this tab the command box the client is now set to, keeping what is typed.
@@ -92,22 +110,28 @@ class CommandBoxMixin:
         are. A tab showing a password field is left for later: the field owns the box until the
         server stops hiding typing, and _set_input_masked calls this again when it goes.
 
-        What is typed comes across, with the caret and selection where they were, and so does
-        the focus: a switch is not a reason to lose a draft or to send the reader somewhere else.
+        The editable buffer is kept for the life of the tab rather than rebuilt, so the commands
+        it has sent and the drafts in it are still there when the reader comes back. Only the
+        line the caret is on crosses between the two boxes, both ways, so nothing is sent twice
+        and nothing is listed twice. What the standard box holds when the switch is made is
+        written back onto that same line -- unless it is empty, which means the reader sent what
+        was there and has nothing to add, so the buffer is left exactly as it was rather than
+        losing the draft line it was parked on.
+
+        The caret and the selection stay where they were, and so does the focus: a switch is not
+        a reason to lose a draft or to send the reader somewhere else.
         """
         want_buffer = mode == "editable"
-        if self._input_masked or want_buffer == (self._entry_input is not None):
+        if self._input_masked or want_buffer == (self.input is self._entry_input):
             return False
         sizer = self.GetSizer()
         old = self.input
         focused = old.HasFocus()
         start, end = old.GetSelection()
-        if want_buffer:
-            # Everything in a standard box is unsent, so all of it comes across.
-            typed = old.GetValue()
-            # Where the reader was, counted in the text rather than in either box's positions.
-            place = (len(old.GetRange(0, start)), len(old.GetRange(0, end)))
-        else:
+        # A completion belongs to the box it was started in: its offsets mean nothing here.
+        self._completion.reset()
+        if isinstance(old, CommandEntryCtrl):
+            old.reset_recall()
             # Leaving the buffer carries the line the reader is on, and nothing else. The buffer
             # keeps every command it has sent, so carrying the whole document across made the
             # next Enter send them all again: two commands, a switch back, `look`, and the MUD
@@ -119,29 +143,31 @@ class CommandBoxMixin:
                 old.offset_from_position(start) - left,
                 old.offset_from_position(end) - left,
             )
+        else:
+            typed = old.GetValue()
+            # Where the reader was, counted in the text rather than in either box's positions.
+            place = (len(old.GetRange(0, start)), len(old.GetRange(0, end)))
         typed = typed.replace("\r\n", "\n").replace("\r", "\n")
         place = (  # inside the text that actually came across
             max(0, min(place[0], len(typed))),
             max(0, min(place[1], len(typed))),
         )
-        # A completion belongs to the box it was started in: its offsets mean nothing here.
-        self._completion.reset()
-        if isinstance(old, CommandEntryCtrl):
-            old.reset_recall()
         old.Hide()
         if want_buffer:
-            self._entry_input = CommandEntryCtrl(self)
-            self._entry_input.execute = self._send_entry
+            if self._entry_input is None:
+                self._entry_input = CommandEntryCtrl(self)
+                self._entry_input.execute = self._send_entry
+                self._bind_command_box(self._entry_input)
             new = self._entry_input
+            # Onto the line the caret is on, which is the line that went across: a brand new
+            # buffer has one empty line for it, so everything comes across the first time.
+            if typed:
+                new.write_command(typed, place)
         else:
-            self._entry_input = None
             new = wx.TextCtrl(self, style=wx.TE_MULTILINE | wx.TE_PROCESS_ENTER)
             new.SetMinSize((-1, new.GetCharHeight() * 2 + 8))
-        new.SetValue(typed)
-        new.SetName(f"{self.world.name} command")
-        new.Bind(wx.EVT_TEXT_ENTER, self._on_send)
-        new.Bind(wx.EVT_KEY_DOWN, self._on_input_key)
-        new.Bind(wx.EVT_SET_FOCUS, self._on_input_focus)
+            self._bind_command_box(new)
+            new.SetValue(typed)
         self.input = new
         # In the old box's place, so the box stays under the Command label rather than moving.
         index = next(
@@ -154,17 +180,18 @@ class CommandBoxMixin:
         )
         sizer.Detach(old)
         sizer.Insert(index, new, 0, wx.EXPAND | wx.ALL, 2)
+        new.Show()  # the buffer comes back from a stay in the standard box hidden
         self.Layout()
-        position = getattr(new, "position_from_offset", None)
-        if position is not None:  # the editable buffer counts in its own positions
-            new.SetSelection(position(place[0]), position(place[1]))
-        else:
+        if not want_buffer:  # the buffer placed its own caret and selection as it wrote
             new.SetSelection(place[0], place[1])
         if focused:
             # Before the old control goes: destroying the focused window first moves focus
             # somewhere else for a moment, and a screen reader says so.
             new.SetFocus()
-        old.Destroy()
+        if not isinstance(old, CommandEntryCtrl):
+            # Nothing unsent goes with it: what it held was written back onto the buffer's line
+            # above, or it held nothing at all.
+            old.Destroy()
         return True
 
     def _on_input_focus(self, event: wx.FocusEvent) -> None:
@@ -290,7 +317,7 @@ class CommandBoxMixin:
     def _on_input_key(self, event: wx.KeyEvent) -> None:
         code = event.GetKeyCode()
         entry = isinstance(getattr(self, "input", None), CommandEntryCtrl)
-        secret_entry = getattr(self, "_entry_input", None) is not None and self._input_masked
+        secret_entry = getattr(self, "_password_input", None) is not None
         if entry and code in (0, wx.WXK_SHIFT, wx.WXK_CONTROL, wx.WXK_ALT, wx.WXK_RAW_CONTROL):
             # Modifier transitions do not end a completion run. Cocoa reports
             # flagsChanged as KEY_DOWN/0 even when releasing Command, while

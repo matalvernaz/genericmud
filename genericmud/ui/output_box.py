@@ -206,7 +206,14 @@ class OutputBoxMixin:
     def _on_output_key(self, event: wx.KeyEvent) -> None:
         """Find keys and link following, live only while the output has focus."""
         code = event.GetKeyCode()
-        if (getattr(self, "_entry_input", None) is not None and code in
+        entry = getattr(self, "_entry_input", None)
+        # The buffer is only half the story now that it outlives a switch to the standard box:
+        # what makes these keys the buffer's is that it is the box in use, or the password field
+        # standing in for it. Otherwise Ctrl+Enter here would stop following the reader's link.
+        editable = entry is not None and (
+            self.input is entry or getattr(self, "_password_input", None) is not None
+        )
+        if (editable and code in
                 (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER) and event.ControlDown()
                 and not event.AltDown() and not event.ShiftDown()):
             if not self._dispatch_entry_shortcut("ctrl+enter"):
