@@ -101,11 +101,38 @@ class ServerMediaMixin:
                 if self._media_gen.get(channel) == gen and self.sound.flushes == flushes:
                     play(downloaded)
 
-            if self.media.fetch(name, address, ready):
+            refused: list[str] = []
+            # first: this is a sound to play now, not a Load asked for in advance, so it does
+            # not queue behind thirty files the server preloaded.
+            if self.media.fetch(
+                name, address, ready, first=True, on_refused=refused.append
+            ):
                 if self._diag is not None:
                     self._diag.event("media.download", file=name, url=address)
                 return
+            # The cue came with a URL and the download was refused. Playing the bare name here
+            # would report "file missing -- set the world's Sounds folder", which is not what
+            # happened and sends the player looking for a setting that was never the problem.
+            self._media_refused(name, refused[-1] if refused else "it could not be downloaded")
+            return
         play(name)
+
+    def _media_refused(self, name: str, reason: str) -> None:
+        """A cue that came with a URL but could not be downloaded: said once, with the reason.
+
+        A sound the player asked for by playing is worth interrupting for; a MUD that sends the
+        same broken cue every few seconds is not, so each name is said once per session.
+        """
+        said = getattr(self, "_media_refusals", None)
+        if said is None:
+            said = set()
+            self._media_refusals = said
+        if self._diag is not None:
+            self._diag.event("media.play", file=name, status="refused", reason=reason)
+        if name in said:
+            return
+        said.add(name)
+        self._speak_system(f"Sound not played: {name}. {reason.capitalize()}.")
 
     def _media_sounds_root(self) -> str | None:
         """The folder server media is looked for in before the download cache: @sppath when it
@@ -247,14 +274,18 @@ class ServerMediaMixin:
         if not name or is_unsafe(name) or not url or not self.download_media:
             return
         if self._native_audio and self.media.locate(name, self._media_sounds_root()) is None:
-            if self.media.fetch(name, media_url(url, name)):
+            refused: list[str] = []
+            if self.media.fetch(name, media_url(url, name), on_refused=refused.append):
                 return
             # Refused: the backlog is at its ceiling, or the folder is full. The sound still
             # plays when it is first needed, only later, so this goes to the diagnostics once
             # rather than interrupting the player with it.
             if self._diag is not None and not self._preload_refused_noted:
                 self._preload_refused_noted = True
-                self._diag.event("media.preload", status="refused", file=name)
+                self._diag.event(
+                    "media.preload", status="refused", file=name,
+                    reason=refused[-1] if refused else "",
+                )
 
     def _media_source(self, body: dict) -> str:
         """Where a Load or Play downloads from: its own url, which then stays the default for
