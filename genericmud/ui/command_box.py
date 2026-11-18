@@ -143,10 +143,22 @@ class CommandBoxMixin:
                 old.offset_from_position(start) - left,
                 old.offset_from_position(end) - left,
             )
+            # What the standard box cannot reach: unsent rows other than the one crossing over.
+            # Sent rows are in the history, so Up finds them; a draft has nowhere else to live,
+            # and a player who cannot see the box has no way of knowing it is still there. The
+            # window says how many, with the switch itself (main_window._left_in_a_buffer).
+            here = old.line_number()
+            sent = set(self._history)
+            self.left_behind_in_buffer = sum(
+                1
+                for number, line in enumerate(old.GetValue().replace("\r\n", "\n").split("\n"))
+                if number != here and line.strip() and line not in sent
+            )
         else:
             typed = old.GetValue()
             # Where the reader was, counted in the text rather than in either box's positions.
             place = (len(old.GetRange(0, start)), len(old.GetRange(0, end)))
+            self.left_behind_in_buffer = 0  # the whole document is in front of them again
         typed = typed.replace("\r\n", "\n").replace("\r", "\n")
         place = (  # inside the text that actually came across
             max(0, min(place[0], len(typed))),

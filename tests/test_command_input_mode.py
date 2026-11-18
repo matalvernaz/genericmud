@@ -34,8 +34,9 @@ def frame():
 class _Panel:
     """A tab that records what it was asked for."""
 
-    def __init__(self) -> None:
+    def __init__(self, left_behind: int = 0) -> None:
         self.asked: list[str] = []
+        self.left_behind_in_buffer = left_behind
 
     def apply_command_input_mode(self, mode: str) -> bool:
         self.asked.append(mode)
@@ -43,8 +44,9 @@ class _Panel:
 
 
 class _Book:
-    def __init__(self, panels: list[_Panel]) -> None:
+    def __init__(self, panels: list[_Panel], selected: int = 0) -> None:
         self.panels = panels
+        self.selected = selected
 
     def GetPageCount(self) -> int:
         return len(self.panels)
@@ -52,17 +54,24 @@ class _Book:
     def GetPage(self, index: int) -> _Panel:
         return self.panels[index]
 
+    def GetSelection(self) -> int:
+        return self.selected
 
-def _frame(panels: list[_Panel]) -> SimpleNamespace:
+
+def _frame(panels: list[_Panel], selected: int = 0) -> SimpleNamespace:
     said: list[str] = []
     saved: list[tuple[str, str]] = []
-    frame = SimpleNamespace(book=_Book(panels), _prefs=UiPrefs(), announce=said.append)
+    frame = SimpleNamespace(
+        book=_Book(panels, selected), _prefs=UiPrefs(), announce=said.append
+    )
 
     def save_pref(name: str, value: str) -> None:  # the real one also updates the prefs
         saved.append((name, value))
         setattr(frame._prefs, name, value)
 
     frame._save_pref = save_pref
+    # The real method is used, not a stand-in: the sentence it builds is the thing under test.
+    frame._left_in_a_buffer = lambda: GenericMudFrame._left_in_a_buffer(frame)
     frame.said, frame.saved = said, saved
     return frame
 
@@ -100,6 +109,53 @@ def test_switching_with_no_tabs_open_still_saves_the_choice():
 
     assert frame.saved == [("command_input_mode", "editable")]
     assert frame.said  # it was still said, so the switch is never silent
+
+
+# --- drafts the standard box cannot reach, said where they are -----------------------------
+
+
+def test_switching_away_says_how_many_drafts_are_still_in_the_buffer():
+    # The buffer keeps them, but a player who cannot see a hidden document has no way of knowing
+    # it is still there, and Up will not find a draft: it was never sent.
+    frame = _frame([_Panel(left_behind=2)])
+
+    GenericMudFrame._set_command_input_mode(frame, "standard")
+    assert frame.said[-1] == (
+        "The standard command box for every world."
+        " 2 unsent lines are still in the editable buffer."
+    )
+
+
+def test_one_draft_says_one_line():
+    frame = _frame([_Panel(left_behind=1)])
+
+    GenericMudFrame._set_command_input_mode(frame, "standard")
+    assert "1 unsent line is still in the editable buffer." in frame.said[-1]
+    assert "lines are" not in frame.said[-1]
+
+
+def test_a_buffer_with_no_drafts_left_over_says_nothing_extra():
+    # Sent commands are in the history, so they need no mention; a buffer holding nothing but
+    # those must not produce a sentence about them.
+    frame = _frame([_Panel()])
+
+    GenericMudFrame._set_command_input_mode(frame, "standard")
+    assert frame.said[-1] == "The standard command box for every world."
+
+
+def test_the_note_is_about_the_tab_in_front_not_another_one():
+    frame = _frame([_Panel(left_behind=0), _Panel(left_behind=3)], selected=1)
+
+    GenericMudFrame._set_command_input_mode(frame, "standard")
+    assert "3 unsent lines are still in the editable buffer." in frame.said[-1]
+
+
+def test_a_tab_with_no_count_at_all_is_left_alone():
+    # Not every page is a session, and a page that never had a buffer has nothing to report.
+    frame = _frame([SimpleNamespace(apply_command_input_mode=lambda mode: True)])
+
+    GenericMudFrame._set_command_input_mode(frame, "standard")
+    assert frame.said[-1] == "The standard command box for every world."
 
 
 # --- a tab: what happens to the box that is already open -----------------------------------
@@ -415,6 +471,56 @@ def test_a_command_sent_from_the_standard_box_leaves_the_buffer_draft_in_place(f
 
         panel.apply_command_input_mode("editable")
         assert panel.input.GetValue() == "look guard"
+    finally:
+        panel.Destroy()
+        loop.run_until_complete(asyncio.sleep(0.01))
+        loop.close()
+
+
+def test_only_drafts_count_as_left_behind(frame):
+    # Sent commands are reachable from the standard box through the history, so they are not
+    # something the player has lost sight of. The line crossing over is in front of them. What
+    # is left is the drafts: three of them here, one on the row the caret is parked on.
+    prefs = UiPrefs(command_input_mode="editable")
+    panel, loop, _sent = _panel(frame, prefs)
+    try:
+        panel.input.SetValue("look")
+        panel.input.SetInsertionPointEnd()
+        _enter(panel)
+        panel.input.WriteText("score")
+        _enter(panel)
+        panel.input.WriteText("draft one\nnext\ndraft two")
+        # In the buffer's own positions, not counted in the text: on Windows a line break is two
+        # characters here and one in the text. Park on "next", which is the row that crosses over.
+        parked = panel.input.position_from_offset(len("look\nscore\ndraft one\n"))
+        panel.input.SetSelection(parked, parked)
+
+        panel.apply_command_input_mode("standard")
+        assert panel.input.GetValue() == "next"  # 'next' went across, so it is not left behind
+        assert panel.left_behind_in_buffer == 2  # "draft one" and "draft two"
+
+        # Coming back is not leaving anything behind: the whole document is in front of them.
+        panel.apply_command_input_mode("editable")
+        assert panel.left_behind_in_buffer == 0
+    finally:
+        panel.Destroy()
+        loop.run_until_complete(asyncio.sleep(0.01))
+        loop.close()
+
+
+def test_a_buffer_of_sent_commands_alone_leaves_nothing_to_mention(frame):
+    prefs = UiPrefs(command_input_mode="editable")
+    panel, loop, _sent = _panel(frame, prefs)
+    try:
+        panel.input.SetValue("look")
+        panel.input.SetInsertionPointEnd()
+        _enter(panel)
+        panel.input.WriteText("score")
+        _enter(panel)
+
+        panel.apply_command_input_mode("standard")
+        assert panel.input.GetValue() == ""  # the empty tail crossed over
+        assert panel.left_behind_in_buffer == 0
     finally:
         panel.Destroy()
         loop.run_until_complete(asyncio.sleep(0.01))

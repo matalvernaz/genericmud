@@ -12,6 +12,11 @@ line, which is why nothing is ever sent twice or listed twice. A brand new buffe
 line to write onto, so everything in a standard box comes across the first time. An empty
 standard box writes nothing back, so a draft line the reader was parked on is never wiped by a
 trip through it. The caret and the selection stay where they were.
+
+Only the line that crossed is in the standard box. Sent commands are reachable there through the
+history; a draft that stayed behind is not, so switching to the standard box says how many unsent
+rows are still in the buffer. That is said for the tab in front only, as part of the same
+announcement rather than as a second one.
 The web frontend is unchanged. The unpublished prototype's boolean preference is migrated on
 load.
 

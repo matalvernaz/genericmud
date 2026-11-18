@@ -34,6 +34,10 @@ View, Command input mode, Editable command buffer (VIPMud-style) selects another
 native input mode. Standard is the default. It is one setting for every world:
 switching it changes the box in every open tab at once, and keeps whatever you
 had half-typed. The web window keeps its existing input.
+Switching to Standard keeps the buffer: switching back brings your commands and
+drafts up again, with the cursor where you left it. Standard shows the one line the
+cursor is on, and commands you sent are in its Up history; a draft you never sent
+is only in the buffer, so leaving one says how many lines are still waiting there.
 In the editable buffer, Up and Down move through old commands and unsent drafts.
 Down at an unfinished tail adds a blank line without sending the draft.
 Enter executes one logical line; older lines are copied to the tail.

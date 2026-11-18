@@ -212,6 +212,12 @@ behavior described above. It is one setting for the whole client: switching it
 changes the box in **every open tab** at once, and whatever you had half-typed
 comes across with it. The web UI keeps its existing input behavior.
 
+The buffer itself is kept when you switch to Standard, so nothing you wrote is
+thrown away: switch back and your commands and drafts are still there, with the
+cursor where you left it. Standard shows one line of it — the line the cursor is
+on — and the commands you sent are in the usual Up history. A draft you never sent
+is only in the buffer, so leaving one behind says how many are waiting there.
+
 The editable buffer holds old commands and several unsent drafts in their original
 places. Up and Down move through those lines. Down on the final unfinished line
 adds an empty tail without sending the draft. Tab back from Output, or Ctrl+Enter,
