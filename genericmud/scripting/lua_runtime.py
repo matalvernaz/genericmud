@@ -29,7 +29,7 @@ from lupa import LuaRuntime
 from genericmud.automation.engine import MatchContext
 from genericmud.render.ansi import strip_ansi
 from genericmud.scripting.api import ScriptApi
-from genericmud.scripting.guard import ScriptGuard, ScriptTimeout
+from genericmud.scripting.guard import ScriptGuard, ScriptTimeout, error_reason
 
 _MAX_COMMANDS_PER_CALL = 100
 
@@ -668,7 +668,7 @@ class LuaPackRuntime:
         if not self._script_error_spoken:
             self._script_error_spoken = True
             self._api.speak(
-                f"A Lua script error occurred: {type(error).__name__}", channel="system"
+                f"A Lua script error occurred: {error_reason(error)}", channel="system"
             )
 
     def function(self, name: str):

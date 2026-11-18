@@ -638,8 +638,7 @@ The field names are your MUD's own, and the variables list shows them. Colour
 codes are taken out and line breaks become spaces, so each message is one line.
 Called from a trigger with the line that matched, it moves that line into the
 channel rather than adding a copy. If the channel or the text is missing, nothing
-is filed and it counts as a script error like any other, with the reason in the
-diagnostic log.
+is filed, and it is a script error that says so.
 
 ## Work with more than one open session
 
@@ -823,7 +822,9 @@ Check these in order:
    short summary. Script errors and slow regular expressions are recorded there.
 
 Only the first error that happens while a callback runs is spoken, so repeated
-errors do not flood speech. Every error is still written to the diagnostic log.
+errors do not flood speech. It says what went wrong, like "A Lua script error
+occurred: attempt to call a nil value (global 'mud_send')". Every error is still
+written to the diagnostic log, with the line it happened on.
 
 ## Safety limits
 

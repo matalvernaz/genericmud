@@ -745,7 +745,9 @@ and Ctrl+N say so there instead of doing nothing. Without the
 list a rule a script got wrong would be invisible -- it either fires when it should
 not or does nothing, and the diagnostic log is the only other clue. A `mud.timer` is
 not listed: it has no name, and it runs once and is gone. A timer you want to see and
-switch is a `mud.add_timer`.
+switch is a `mud.add_timer`. When a script fails as it runs, the first error is
+spoken with what went wrong, like "attempt to call a nil value", and every one
+goes in the diagnostic log.
 
 Read the [step-by-step automation and scripting guide](docs/scripting.md) for
 plain-language instructions, copyable examples, and the full Lua API. The same

@@ -9,11 +9,29 @@ A separate worker process would isolate further; this just prevents hangs.
 
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Callable
 
 MAX_SCRIPT_SECONDS = 1.0
 HOOK_INSTRUCTION_INTERVAL = 50_000
+
+# Lua puts the chunk and line in front of its message, once per level an error passes through:
+# [string "<python>"]:12: attempt to index a nil value. A player can act on the words after it;
+# the diagnostic log keeps the whole thing.
+_CHUNK_PREFIX = re.compile(r'^(?:\[string "[^"]*"\]:\d+:\s*)+')
+_MAX_REASON = 200  # one line of speech, not a traceback
+
+
+def error_reason(error: BaseException) -> str:
+    """What went wrong, as one short line a player can hear.
+
+    "A Lua script error occurred: LuaError" said that something broke but never what. An error
+    with no words of its own, like Lua's error({}), still has its type to name it by.
+    """
+    lines = [line.strip() for line in str(error).splitlines() if line.strip()]
+    reason = _CHUNK_PREFIX.sub("", lines[0]) if lines else ""
+    return (reason or type(error).__name__)[:_MAX_REASON]
 
 
 class ScriptTimeout(Exception):

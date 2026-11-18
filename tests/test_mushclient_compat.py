@@ -1940,3 +1940,20 @@ def test_a_worlds_own_scripts_still_keep_their_notes_whatever_the_setting():
     runtime._lua.execute('Note("level up")')
     assert sink.echoed == [("level up", "main")]
     assert _note_flags(sink) == [True]
+
+
+def test_a_soundpack_script_error_says_what_went_wrong():
+    # As for a world's own scripts: the reason, not just "LuaError", and only the first is said.
+    sink, engine = _load("""<?xml version="1.0"?>
+<muclient><triggers>
+ <trigger match="boom" enabled="y" regexp="n" send_to="12">
+  <send>local t = nil; Note(t.y)</send></trigger>
+</triggers></muclient>""")
+    engine.process_line(Line("boom"))
+    engine.process_line(Line("boom"))
+    said = [text for text, *_rest in sink.spoken]
+    assert len(said) == 1
+    # Packs run an older Lua, which words this one "attempt to index local 't' (a nil value)".
+    assert said[0].startswith("A soundpack script error occurred: attempt to index")
+    assert "'t'" in said[0]
+    assert "[string" not in said[0]

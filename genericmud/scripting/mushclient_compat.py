@@ -41,7 +41,7 @@ from genericmud.navigation import expand_speedwalk
 from genericmud.render.ansi import strip_ansi
 from genericmud.safepath import is_absolute
 from genericmud.scripting.api import MESSAGE_BUTTONS, ScriptApi
-from genericmud.scripting.guard import ScriptGuard
+from genericmud.scripting.guard import ScriptGuard, error_reason
 from genericmud.scripting.lua_runtime import (
     MudTable,
     install_pack_require,
@@ -2853,7 +2853,7 @@ class MushclientPack:
         if not self._script_error_spoken:
             self._script_error_spoken = True
             self._api.speak(
-                f"A soundpack script error occurred: {type(error).__name__}", channel="system"
+                f"A soundpack script error occurred: {error_reason(error)}", channel="system"
             )
 
     def _deliver_packet(self, table: object) -> None:

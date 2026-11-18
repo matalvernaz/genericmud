@@ -334,6 +334,7 @@ Scripts are sandboxed and time-limited. They cannot read arbitrary files, start
 programs, load native code, or use the network directly. Put commands inside an
 alias, trigger, hotkey, or timer. Top-level code also runs while the script is
 being checked and every time it reloads.
+When a script fails as it runs, the first error is spoken with what went wrong.
 
 The full step-by-step manual, more examples, troubleshooting, and the complete
 API are at:

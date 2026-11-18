@@ -182,6 +182,43 @@ def test_lua_file_without_a_channel_or_text_says_so():
     assert sink.filed == []
 
 
+def _spoken_after_a_failing_trigger(body: str) -> list[str]:
+    sink, engine, runtime = _runtime()
+    runtime.run_source(f'mud.trigger("^go", function() {body} end, {{regex=true}})')
+    engine.process_line(Line("go"))
+    return [text for text, *_rest in sink.spoken]
+
+
+def test_a_script_error_says_what_went_wrong():
+    # "A Lua script error occurred: LuaError" told a player nothing they could act on. The
+    # reason is said, without the chunk name and line Lua puts in front of it.
+    assert _spoken_after_a_failing_trigger("local t = nil; return t.y") == [
+        "A Lua script error occurred: attempt to index a nil value (local 't')"
+    ]
+
+
+def test_a_script_error_from_a_genericmud_call_says_its_reason():
+    assert _spoken_after_a_failing_trigger('mud.file(nil, "x")') == [
+        "A Lua script error occurred: mud.file needs a channel name and the text to file"
+    ]
+
+
+def test_a_script_error_with_no_words_still_names_itself():
+    assert _spoken_after_a_failing_trigger("error({code = 3})") == [
+        "A Lua script error occurred: LuaError"
+    ]
+
+
+def test_an_error_reason_is_one_short_line():
+    from genericmud.scripting.guard import error_reason
+
+    nested = ValueError('[string "<python>"]:5: [string "<python>"]:1: the gate is shut')
+    assert error_reason(nested) == "the gate is shut"
+    traced = ValueError("bad thing\nstack traceback:\n\t[C]: in ?")
+    assert error_reason(traced) == "bad thing"
+    assert len(error_reason(ValueError("x" * 1000))) <= 200
+
+
 def test_lua_key_binding():
     sink, engine, runtime = _runtime()
     runtime.run_source('mud.key("f2", function() mud.send("score") end)')
