@@ -111,6 +111,14 @@ reads as prose instead of a wall of markup. Commands the world offers as links
 are, so the link keys work there too. Colour and pictures carry nothing a voice
 can use and are left out.
 
+A MUD that tags its lines with MXP says how much to trust each line. Some mark
+**every tag separately** instead, and that marking is now read wherever it sits on
+the line, not only at the start: words that used to arrive with `<b>` and `<send>`
+left in them read as prose, and their links are followable. What a MUD asks for
+partway through a line it can't have, though — a login prompt, a picture, or a
+variable that changes what its links do all still need a whole line it owns, which
+is what stops a player typing an escape at another player.
+
 ## Logging in automatically
 
 A world's details (Ctrl+O, choose the world, Edit) take a **username** and a
