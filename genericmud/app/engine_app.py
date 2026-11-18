@@ -156,6 +156,9 @@ class EngineApp(
         self._media_url = ""  # Client.Media.Default
         self._media_cues: dict[str, dict[str, object]] = {}  # bus channel -> Client.Media.Play
         self._media_gen: dict[str, int] = {}  # bumps per cue/stop so a late download can't play
+        # A preload the library would not take (backlog full, or the folder full): said once in
+        # the diagnostics, since the sound still plays when first needed, only later.
+        self._preload_refused_noted = False
         self._media_seq = 0  # unique channels for keyless Client.Media sounds, which overlap
         # The way the player faces, in degrees from north, for sounds the MUD places by compass
         # direction (Client.Media.Listener). North until the MUD says otherwise.

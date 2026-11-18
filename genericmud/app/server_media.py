@@ -247,7 +247,14 @@ class ServerMediaMixin:
         if not name or is_unsafe(name) or not url or not self.download_media:
             return
         if self._native_audio and self.media.locate(name, self._media_sounds_root()) is None:
-            self.media.fetch(name, media_url(url, name))
+            if self.media.fetch(name, media_url(url, name)):
+                return
+            # Refused: the backlog is at its ceiling, or the folder is full. The sound still
+            # plays when it is first needed, only later, so this goes to the diagnostics once
+            # rather than interrupting the player with it.
+            if self._diag is not None and not self._preload_refused_noted:
+                self._preload_refused_noted = True
+                self._diag.event("media.preload", status="refused", file=name)
 
     def _media_source(self, body: dict) -> str:
         """Where a Load or Play downloads from: its own url, which then stays the default for

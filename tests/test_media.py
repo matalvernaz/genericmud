@@ -23,7 +23,7 @@ from genericmud.sound.bus import CueTiming, SoundBackend
 from genericmud.sound.media import MediaLibrary, http_fetch, is_downloadable, media_url
 from genericmud.transport.connection import GMCP_SUPPORTS, MudConnection
 from genericmud.voice.router import VoiceRouter
-from tests.helpers import RecordingBackend
+from tests.helpers import RecordingBackend, RecordingDiag
 
 
 class _Backend(SoundBackend):
@@ -185,6 +185,138 @@ def test_library_does_not_retry_a_failed_url(tmp_path):
     assert net.urls == ["https://mud.example/hit.wav"]
     assert errors == ["https://mud.example/hit.wav"]
     assert not (tmp_path / "cache" / "hit.wav").exists()
+
+
+def test_a_server_that_preloads_more_than_the_cap_gets_them_all(tmp_path):
+    # A server that preloads its sounds on login sends one Client.Media.Load per file. Past
+    # sixteen in flight the library refused the rest outright and the caller ignored the
+    # refusal, so those files were only fetched when first played -- a late cue on the client's
+    # first sound of the session.
+    net = _Net(hold=True)
+    app, _backend, _posted = _app(tmp_path, net)
+    for index in range(31):
+        _gmcp(app, "Client.Media.Load", {
+            "name": f"s{index}.wav",
+            "url": f"https://mud.example/s{index}.wav",
+        })
+    assert len(net.pending) == media.MAX_IN_FLIGHT  # sixteen started, the rest wait in order
+
+    for _ in range(20):  # each release lets the next queued downloads start
+        if not net.pending:
+            break
+        net.release()
+
+    assert len(net.urls) == 31, f"only {len(net.urls)} of 31 files were fetched"
+    assert len(set(net.urls)) == 31
+
+
+def test_a_download_queued_behind_the_cap_joins_a_second_request(tmp_path):
+    # Queueing must not lose the dedupe: two requests for one file are one download.
+    net = _Net(hold=True)
+    library = _library(tmp_path, net)
+    first: list[str] = []
+    second: list[str] = []
+    for index in range(media.MAX_IN_FLIGHT):
+        library.fetch(f"f{index}.wav", f"https://mud.example/f{index}.wav")
+    assert library.fetch("late.wav", "https://mud.example/late.wav", first.append)
+    assert library.fetch("late.wav", "https://mud.example/late.wav", second.append)
+
+    for _ in range(20):
+        if not net.pending:
+            break
+        net.release()
+
+    assert net.urls.count("https://mud.example/late.wav") == 1
+    assert first and second  # both callers were told when it landed
+
+
+def test_a_full_backlog_drains_completely_and_in_order(monkeypatch, tmp_path):
+    # The backlog is drained one finished download at a time, so the deepest queue has to reach
+    # the end of itself rather than stopping at the first batch.
+    monkeypatch.setattr(media, "MAX_QUEUED", 300, raising=False)
+    net = _Net(hold=True)
+    library = _library(tmp_path, net)
+    wanted = media.MAX_IN_FLIGHT + 300
+    for index in range(wanted):
+        assert library.fetch(f"f{index}.wav", f"https://mud.example/f{index}.wav")
+    for _ in range(40):
+        if not net.pending:
+            break
+        net.release()
+    assert len(net.urls) == wanted
+    assert len(set(net.urls)) == wanted
+
+
+def test_the_queue_behind_the_cap_is_bounded_and_says_no(monkeypatch, tmp_path):
+    # A server naming new files without end is still bounded: the backlog has a ceiling, and a
+    # fetch past it is refused rather than kept for ever.
+    monkeypatch.setattr(media, "MAX_QUEUED", 4, raising=False)
+    net = _Net(hold=True)
+    library = _library(tmp_path, net)
+    for index in range(media.MAX_IN_FLIGHT):
+        assert library.fetch(f"f{index}.wav", f"https://mud.example/f{index}.wav")
+    for index in range(4):
+        assert library.fetch(f"q{index}.wav", f"https://mud.example/q{index}.wav")
+    assert not library.fetch("over.wav", "https://mud.example/over.wav")
+
+
+def test_a_preload_the_library_refuses_is_in_the_diagnostics_once(tmp_path, monkeypatch):
+    # Nothing can be told to the player about this: the sound still plays when first needed,
+    # just later. It is not allowed to vanish into silence either, so it is in the trace once.
+    monkeypatch.setattr(media, "MAX_QUEUED", 0, raising=False)
+    net = _Net(hold=True)
+    diag = RecordingDiag()
+    app = EngineApp(
+        VoiceRouter(RecordingBackend(), clock=lambda: 0.0),
+        post=[].append,
+        sound_backend=_Backend(),
+        media=_library(tmp_path, net),
+        diag=diag,
+    )
+    for index in range(media.MAX_IN_FLIGHT + 2):
+        _gmcp(app, "Client.Media.Load", {
+            "name": f"s{index}.wav",
+            "url": f"https://mud.example/s{index}.wav",
+        })
+    refused = [fields for stage, fields in diag.events if stage == "media.preload"]
+    assert len(refused) == 1, refused
+    assert refused[0]["status"] == "refused"
+
+
+async def test_a_backlog_drains_when_completions_come_from_another_thread(tmp_path):
+    # The real submit hands each download to a thread and calls back on the event loop, which is
+    # where the backlog has to be drained from. The fakes call back inline, so they cannot show
+    # whether that works: this drives a real loop and real threads.
+    loop = asyncio.get_running_loop()
+    started: list[str] = []
+
+    def submit(job, done) -> None:
+        def run() -> None:
+            try:
+                job()
+            except Exception as exc:  # noqa: BLE001 - handed back like the real submit
+                loop.call_soon_threadsafe(done, exc)
+            else:
+                loop.call_soon_threadsafe(done, None)
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def fetch(url: str, dest: Path, trusted_address: str = "") -> None:
+        started.append(url)
+        time.sleep(0.01)
+        dest.write_bytes(b"RIFF")
+
+    library = MediaLibrary(tmp_path / "cache", fetch=fetch, submit=submit)
+    ready: list[str] = []
+    for index in range(31):
+        library.fetch(f"s{index}.wav", f"https://mud.example/s{index}.wav", ready.append)
+
+    deadline = time.monotonic() + 15
+    while len(ready) < 31 and time.monotonic() < deadline:
+        await asyncio.sleep(0.02)
+
+    assert len(ready) == 31, f"only {len(ready)} of 31 landed"
+    assert len(set(started)) == 31
 
 
 def test_downloads_stop_once_the_worlds_media_folder_is_full(tmp_path, monkeypatch):
