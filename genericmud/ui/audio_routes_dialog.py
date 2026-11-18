@@ -44,7 +44,7 @@ class AudioRouteEditor(wx.Dialog):
             self._device.Set([f"Saved: {output.name}"])
             self._device.SetSelection(0)
         outer.Add(self._device, 0, wx.EXPAND | wx.ALL, 6)
-        outer.Add(wx.StaticText(self, label="&Fallback:"), 0, wx.ALL, 6)
+        outer.Add(wx.StaticText(self, label="Fall&back:"), 0, wx.ALL, 6)
         self._fallback = wx.Choice(self, choices=["System default", "Stay silent"])
         self._fallback.SetName("Fallback")
         self._fallback.SetSelection(FALLBACK_CHOICES.index(output.fallback) if output else 0)
