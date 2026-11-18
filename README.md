@@ -207,10 +207,10 @@ on almost any MUD. A few conveniences in the command box:
 ### Editable command buffer (native window)
 
 **View → Command input mode → Editable command buffer (VIPMud-style)** selects
-an optional editor for newly opened sessions. **Standard** remains the default
-with the behavior described above. The choice is saved globally; already open
-sessions keep their mode, text, and selection until closed. The web UI keeps its
-existing input behavior.
+an optional editor for the command box. **Standard** remains the default with the
+behavior described above. It is one setting for the whole client: switching it
+changes the box in **every open tab** at once, and whatever you had half-typed
+comes across with it. The web UI keeps its existing input behavior.
 
 The editable buffer holds old commands and several unsent drafts in their original
 places. Up and Down move through those lines. Down on the final unfinished line

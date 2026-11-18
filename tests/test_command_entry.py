@@ -63,8 +63,11 @@ def _probe():
         alpha = SessionPanel(book, loop, load_keymap("vipmud"), World("Alpha", "localhost", 4000),
                              prefs=prefs)
         beta = SessionPanel(book, loop, {}, World("Beta", "localhost", 4000), prefs=prefs)
-        prefs.command_input_mode = "standard"  # existing sessions retain their original controls
+        # A panel takes the mode in force when it is created; converting a tab that is already
+        # open is what the View menu does, and has its own test in test_command_input_mode.py.
+        prefs.command_input_mode = "standard"
         normal = SessionPanel(book, loop, {}, World("Normal", "localhost", 4000), prefs=prefs)
+        prefs.command_input_mode = "editable"  # alpha and beta are still in this mode
     panels = [alpha, beta, normal]
     for panel in panels:
         book.AddPage(panel, panel.world.name)
@@ -298,7 +301,7 @@ def _probe():
         enter()
         assert len(sent) == count + 1  # client commands work offline
         alpha._connect_finished = False
-        # Session switching cannot exchange documents; live preference changes cannot convert them.
+        # Session switching cannot exchange documents: each tab keeps its own.
         beta.input.WriteText("Beta draft")
         harness = SimpleNamespace(book=book, _update_active=lambda: None,
                                   _update_focus=lambda: None, _announce_tab=lambda index: None)

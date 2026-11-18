@@ -3,9 +3,12 @@
 The native wx window offers one global preference in **View → Command input mode**:
 **Standard** (the default) and **Editable command buffer (VIPMud-style)**.
 It is saved in `ui-prefs.toml` as `command_input_mode = "standard"` or `"editable"`.
-The choice applies only when opening a session. Existing sessions keep their controls,
-text, selection and mode; no live draft conversion takes place. The web frontend is
-unchanged. The unpublished prototype's boolean preference is migrated on load.
+The choice changes every open session's box at once. Everything in a standard box is unsent, so
+all of it comes across; the buffer, by contrast, keeps every command it has sent, so leaving it
+carries only the line the caret is on. Each session still owns its own document, and switching
+keeps the caret and selection within what came across, so it never moves text between worlds.
+The web frontend is unchanged. The unpublished prototype's boolean preference is migrated on
+load.
 
 ## What the player edits
 

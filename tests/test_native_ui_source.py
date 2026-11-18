@@ -7,6 +7,21 @@ import ast
 from tests.ui_source import ui_class_source, ui_defines, ui_modules, ui_source
 
 
+def test_the_command_input_mode_menu_applies_the_mode_rather_than_only_saving_it():
+    # Saving alone was the bug: the setting looked switched on, the box in front of the player
+    # did not change, and only a tooltip explained that it was waiting for a new tab. Both menu
+    # items now go through the handler that converts every open tab and says what it did.
+    menus = ui_source("GenericMudFrame.__init__")
+    assert '_set_command_input_mode("standard")' in menus
+    assert '_set_command_input_mode("editable")' in menus
+    assert 'self._save_pref("command_input_mode"' not in menus.split("_set_command_input_mode")[0]
+
+    apply_mode = ui_source("GenericMudFrame._set_command_input_mode")
+    assert "apply_command_input_mode(mode)" in apply_mode
+    assert "for index in range(self.book.GetPageCount())" in apply_mode
+    assert "self.announce(" in apply_mode
+
+
 def test_the_view_menu_can_let_every_open_world_speak():
     # Nine worlds, one in front: by default only that one speaks, and the setting is the
     # tab-level twin of Background silence, in the same menu and saved the same way.

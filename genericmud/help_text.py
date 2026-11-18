@@ -31,8 +31,9 @@ n), say hello, and help. From an empty box, Up and Down step through what
 you've typed; a command you're still writing is left alone. Shift+Enter starts
 another line, and Enter sends every line as its own command in Standard mode.
 View, Command input mode, Editable command buffer (VIPMud-style) selects another
-native input mode for new sessions. Standard is the default; open sessions keep
-their current mode and drafts. The web window keeps its existing input.
+native input mode. Standard is the default. It is one setting for every world:
+switching it changes the box in every open tab at once, and keeps whatever you
+had half-typed. The web window keeps its existing input.
 In the editable buffer, Up and Down move through old commands and unsent drafts.
 Down at an unfinished tail adds a blank line without sending the draft.
 Enter executes one logical line; older lines are copied to the tail.
