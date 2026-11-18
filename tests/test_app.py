@@ -36,6 +36,51 @@ def test_incoming_line_spoken_buffered_and_posted():
     assert any(m["type"] == "line" and m["text"] == "You see a dragon" for m in posted)
 
 
+def test_a_mud_that_ends_lines_with_lf_cr_leaves_no_carriage_return():
+    # Diku, Merc and ROM MUDs end a line with LF CR rather than CR LF. Splitting on the LF and
+    # stripping only a *trailing* CR left it at the head of the next line, where it reached the
+    # output, the log and copied text.
+    app, _backend, _sent, posted = _app()
+    app.on_telnet_event(DataReceived(b"The Temple\n\rSomeone tells you 'hi'\n\r"))
+    assert [line.plain_text for line in app.buffer.lines()] == [
+        "The Temple",
+        "Someone tells you 'hi'",
+    ]
+    assert [m["text"] for m in posted if m["type"] == "line"] == [
+        "The Temple",
+        "Someone tells you 'hi'",
+    ]
+
+
+def test_a_caret_trigger_fires_on_every_line_of_an_lf_cr_packet():
+    # The carriage return sat in front of the text, so an anchored pattern never matched any
+    # line but the first of a packet: the rule a player wrote was silently dead.
+    app, backend, _sent, _posted = _app()
+    fired: list[str] = []
+    app.engine.add_trigger(r"^Someone tells you", lambda ctx: fired.append(ctx.line.plain_text),
+                           regex=True)
+    app.on_telnet_event(DataReceived(b"The Temple\n\rSomeone tells you 'hi'\n\r"))
+    assert fired == ["Someone tells you 'hi'"]
+
+
+def test_a_carriage_return_inside_a_line_is_left_alone():
+    # Only the ends of a line are its ending. A MUD that redraws a progress bar with CRs in the
+    # middle is sending text, and the fix must not quietly rewrite it.
+    app, _backend, _sent, posted = _app()
+    app.on_telnet_event(DataReceived(b"Progress\r50%\rDone\n\r"))
+    assert [m["text"] for m in posted if m["type"] == "line"] == ["Progress\r50%\rDone"]
+
+
+def test_cr_lf_still_splits_where_it_always_did():
+    # The other convention must not regress while the first is fixed.
+    app, _backend, _sent, posted = _app()
+    app.on_telnet_event(DataReceived(b"The Temple\r\nSomeone tells you 'hi'\r\n"))
+    assert [m["text"] for m in posted if m["type"] == "line"] == [
+        "The Temple",
+        "Someone tells you 'hi'",
+    ]
+
+
 def test_command_stacking_splits_on_separator():
     app, _backend, sent, _posted = _app()
     app.on_ws_message({"type": "input", "text": "get sword;wield sword;n"})
@@ -687,6 +732,16 @@ def test_mxp_version_question_is_answered_on_a_secure_line():
     assert raw, "no reply was sent"
     assert raw[-1].startswith(b"\x1b[1z<VERSION ")
     assert raw[-1].endswith(b">\n")
+
+
+def test_a_secure_line_is_read_when_the_mud_ends_lines_with_lf_cr():
+    # The secure marker only counts at the head of a line, and a stray carriage return in front
+    # of it meant the line was taken as plain text: the version question was shown instead of
+    # answered, and the server concluded this client had no MXP.
+    app, _sent, raw = _mxp_app()
+    app.on_telnet_event(DataReceived(b"A temple\n\r\x1b[1z<version>\n\r"))
+    assert raw, "the version question was shown as text instead of answered"
+    assert raw[-1].startswith(b"\x1b[1z<VERSION ")
 
 
 def test_a_world_can_turn_mxp_off():

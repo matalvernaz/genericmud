@@ -95,6 +95,18 @@ def _link_positions(
     return spans
 
 
+def _without_carriage_returns(raw: str) -> str:
+    """A line's text with the carriage returns of its ending taken off, at either end.
+
+    MUDs end a line with CR LF or with LF CR, and splitting on the LF leaves the second kind's
+    carriage return at the head of the next line. It belongs to the ending, never to the text:
+    left in, it reached the output, the session log and anything copied, and it sat in front of
+    a ^-anchored pattern or an MXP line mode, so neither was recognised -- a Diku, Merc or ROM
+    MUD's rules silently never fired.
+    """
+    return raw.strip("\r")
+
+
 class IncomingTextMixin:
     """MUD text from telnet bytes through markup, triggers, logs, speech and output.
 
@@ -166,11 +178,11 @@ class IncomingTextMixin:
         self._pending += text
         while "\n" in self._pending:
             raw, self._pending = self._pending.split("\n", 1)
-            self._emit_line(raw.rstrip("\r"))
+            self._emit_line(_without_carriage_returns(raw))
         if self._pending:
             # A prompt with no trailing newline and no GA/EOR (some MUDs) would otherwise sit in
             # _pending unspoken forever, deadlocking auto-login. Flush it if no more bytes arrive
-            # shortly; a newer chunk bumps the generation so this scheduled flush no-ops. GA/EOR
+            # shortly; a newer chunk bumps the generation so this scheduled flush no-op. GA/EOR
             # still flush immediately via _flush_prompt, making this only a backstop.
             self._prompt_gen += 1
             gen = self._prompt_gen
@@ -182,7 +194,7 @@ class IncomingTextMixin:
 
     def _flush_prompt(self) -> None:
         if self._pending:
-            self._emit_line(self._pending)
+            self._emit_line(_without_carriage_returns(self._pending))
             self._pending = ""
 
     def _mxp_feed(
