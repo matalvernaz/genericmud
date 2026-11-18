@@ -45,8 +45,11 @@ MAX_MEDIA_BYTES = 64 * 1024 * 1024  # a long music track; nothing a sound cue ne
 # A world's whole media folder, so a MUD naming new files without end can't fill the disk. It's
 # checked before each download, so the downloads running at that moment can still finish.
 MAX_CACHE_BYTES = 2 * 1024 * 1024 * 1024
-MAX_IN_FLIGHT = 16  # a server spamming new names can't queue unbounded fetches
-_AT_ONCE = 4  # of those, how many one session downloads at the same time
+MAX_IN_FLIGHT = 16  # downloads one session has going at once; the rest of its backlog waits
+_AT_ONCE = 4  # of those, how many actually run at the same time
+# How many more may wait behind those. A server that preloads a whole sound set queues here
+# instead of being dropped, and one naming new files without end still can't fill memory.
+MAX_QUEUED = 256
 _TIMEOUT_SECONDS = 30  # for each read, so a server sending a byte at a time never trips it
 _DEADLINE_SECONDS = 600  # for the whole body: 64 MB still lands at about 1 Mbit/s
 _CHUNK = 65536
@@ -233,6 +236,9 @@ class MediaLibrary:
         self._submit = submit
         self._on_error = on_error  # (url, reason): a failed download, reported once per URL
         self._waiting: dict[Path, list[Callable[[str], None]]] = {}
+        # Started nothing yet: (name, url, callbacks) waiting for room, oldest first. A dict
+        # because insertion order is the queue, and a path can only be in it once.
+        self._queued: dict[Path, tuple[str, str, list[Callable[[str], None]]]] = {}
         self._failed: set[str] = set()  # URLs not retried this session (a 404 recurs per cue)
         self._slots = threading.BoundedSemaphore(_AT_ONCE)
         self._full = False  # the folder reached its cap: said once, then nothing more is fetched
@@ -246,8 +252,14 @@ class MediaLibrary:
         """Download ``name`` from ``url`` into the cache, then call ``on_ready(path)``.
 
         Returns False when the download was refused outright (unsafe name, not audio, no
-        cache, a URL that already failed, too many in flight, a full folder). A second
-        request for a file already downloading joins the first instead of fetching it twice.
+        cache, a URL that already failed, a full folder, or a backlog already at its ceiling).
+        A second request for a file already downloading, or already waiting, joins the first
+        instead of fetching it twice.
+
+        With ``MAX_IN_FLIGHT`` downloads going, the next ones wait their turn instead of being
+        refused. A server that preloads a whole sound set sends one request per file, so
+        refusing meant that every file past the sixteenth was dropped without a word and only
+        fetched when it was first played -- a late cue at exactly the moment a sound mattered.
         """
         if self.cache_dir is None or not url or url in self._failed or not is_downloadable(name):
             return False
@@ -260,9 +272,22 @@ class MediaLibrary:
             if on_ready is not None:
                 self._waiting[dest].append(on_ready)
             return True
+        if dest in self._queued:
+            if on_ready is not None:
+                self._queued[dest][2].append(on_ready)
+            return True
+        waiters = [on_ready] if on_ready is not None else []
         if len(self._waiting) >= MAX_IN_FLIGHT:
-            return False
-        self._waiting[dest] = [on_ready] if on_ready is not None else []
+            if len(self._queued) >= MAX_QUEUED:
+                return False  # a server naming new files without end is still bounded
+            self._queued[dest] = (name, url, waiters)
+            return True
+        self._start(name, url, dest, waiters)
+        return True
+
+    def _start(self, name: str, url: str, dest: Path, waiters: list[Callable[[str], None]]) -> None:
+        """Begin one download now; the caller has checked the name, the URL and the destination."""
+        self._waiting[dest] = waiters
         trusted_address = self.trusted_address()  # asked now: the job runs on another thread
         cache_dir = self.cache_dir
 
@@ -290,16 +315,41 @@ class MediaLibrary:
                 download()
 
         def done(error: BaseException | None) -> None:
-            waiters = self._waiting.pop(dest, [])
-            if isinstance(error, MediaFolderFull):
-                self._full = True
-            if error is not None or not dest.is_file():
-                self._failed.add(url)
-                if self._on_error is not None:
-                    self._on_error(url, str(error) if error else "nothing was downloaded")
-                return
-            for callback in waiters:
-                callback(str(dest))
+            try:
+                finishing = self._waiting.pop(dest, [])
+                if isinstance(error, MediaFolderFull):
+                    self._full = True
+                if error is not None or not dest.is_file():
+                    self._failed.add(url)
+                    if self._on_error is not None:
+                        self._on_error(url, str(error) if error else "nothing was downloaded")
+                    return
+                for callback in finishing:
+                    callback(str(dest))
+            finally:
+                # One finished means there is room for one more, however this one went.
+                self._start_queued()
 
         self._submit(job, done)
-        return True
+
+    def _start_queued(self) -> None:
+        """Start waiting downloads, oldest first, while there is room for them.
+
+        Called as each one finishes, so the backlog drains at the pace the downloads run. A
+        file whose URL has failed since, or whose name would no longer be taken, is dropped
+        rather than fetched, and a folder that has reached its cap empties the backlog: nothing
+        can land in it any more, and each attempt would only fail again.
+
+        There is nothing to queue when the submit runs a job inline: a job that finishes before
+        its ``fetch`` returns can never leave ``MAX_IN_FLIGHT`` unfinished, so this is only ever
+        reached from a callback that arrives later, one at a time.
+        """
+        if self._full:
+            self._queued.clear()
+            return
+        while self._queued and len(self._waiting) < MAX_IN_FLIGHT:
+            dest, (name, url, waiters) = next(iter(self._queued.items()))
+            del self._queued[dest]
+            if url in self._failed or not is_downloadable(name):
+                continue
+            self._start(name, url, dest, waiters)
