@@ -77,6 +77,95 @@ class CommandBoxMixin:
                 self.input.SetSelection(*selection)
         if not masked:
             secret.Destroy()  # secret text and its native undo buffer never enter the document
+            # A mode switch while the password field owned the box was put off until now.
+            self.apply_command_input_mode(self._prefs.command_input_mode)
+
+    def apply_command_input_mode(self, mode: str) -> bool:
+        """Give this tab the command box the client is now set to, keeping what is typed.
+
+        One setting for the whole client, and switching it rebuilds every open tab's box: a
+        player turning it on expects the box in front of them to change. It used to apply only
+        to tabs opened afterwards, which from the outside looked exactly like the setting doing
+        nothing at all.
+
+        Returns whether this tab changed, so the window can speak once however many tabs there
+        are. A tab showing a password field is left for later: the field owns the box until the
+        server stops hiding typing, and _set_input_masked calls this again when it goes.
+
+        What is typed comes across, with the caret and selection where they were, and so does
+        the focus: a switch is not a reason to lose a draft or to send the reader somewhere else.
+        """
+        want_buffer = mode == "editable"
+        if self._input_masked or want_buffer == (self._entry_input is not None):
+            return False
+        sizer = self.GetSizer()
+        old = self.input
+        focused = old.HasFocus()
+        start, end = old.GetSelection()
+        if want_buffer:
+            # Everything in a standard box is unsent, so all of it comes across.
+            typed = old.GetValue()
+            # Where the reader was, counted in the text rather than in either box's positions.
+            place = (len(old.GetRange(0, start)), len(old.GetRange(0, end)))
+        else:
+            # Leaving the buffer carries the line the reader is on, and nothing else. The buffer
+            # keeps every command it has sent, so carrying the whole document across made the
+            # next Enter send them all again: two commands, a switch back, `look`, and the MUD
+            # received the two commands twice.
+            first, last = old.line_bounds()
+            typed = old.text_range(first, last)
+            left = old.offset_from_position(first)
+            place = (
+                old.offset_from_position(start) - left,
+                old.offset_from_position(end) - left,
+            )
+        typed = typed.replace("\r\n", "\n").replace("\r", "\n")
+        place = (  # inside the text that actually came across
+            max(0, min(place[0], len(typed))),
+            max(0, min(place[1], len(typed))),
+        )
+        # A completion belongs to the box it was started in: its offsets mean nothing here.
+        self._completion.reset()
+        if isinstance(old, CommandEntryCtrl):
+            old.reset_recall()
+        old.Hide()
+        if want_buffer:
+            self._entry_input = CommandEntryCtrl(self)
+            self._entry_input.execute = self._send_entry
+            new = self._entry_input
+        else:
+            self._entry_input = None
+            new = wx.TextCtrl(self, style=wx.TE_MULTILINE | wx.TE_PROCESS_ENTER)
+            new.SetMinSize((-1, new.GetCharHeight() * 2 + 8))
+        new.SetValue(typed)
+        new.SetName(f"{self.world.name} command")
+        new.Bind(wx.EVT_TEXT_ENTER, self._on_send)
+        new.Bind(wx.EVT_KEY_DOWN, self._on_input_key)
+        new.Bind(wx.EVT_SET_FOCUS, self._on_input_focus)
+        self.input = new
+        # In the old box's place, so the box stays under the Command label rather than moving.
+        index = next(
+            (
+                number
+                for number, item in enumerate(sizer.GetChildren())
+                if item.GetWindow() is old
+            ),
+            sizer.GetItemCount(),
+        )
+        sizer.Detach(old)
+        sizer.Insert(index, new, 0, wx.EXPAND | wx.ALL, 2)
+        self.Layout()
+        position = getattr(new, "position_from_offset", None)
+        if position is not None:  # the editable buffer counts in its own positions
+            new.SetSelection(position(place[0]), position(place[1]))
+        else:
+            new.SetSelection(place[0], place[1])
+        if focused:
+            # Before the old control goes: destroying the focused window first moves focus
+            # somewhere else for a moment, and a screen reader says so.
+            new.SetFocus()
+        old.Destroy()
+        return True
 
     def _on_input_focus(self, event: wx.FocusEvent) -> None:
         if self._entry_from_output and isinstance(self.input, CommandEntryCtrl):

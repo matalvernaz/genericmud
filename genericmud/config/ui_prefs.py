@@ -12,7 +12,8 @@ once and expects to survive a restart:
 * ``numpad_compass`` -- numpad walks (8/2/4/6 + diagonals, 5/0 look, . scan,
   minus up, plus down). Off for NVDA desktop-layout users who keep the numpad
   for object review.
-* ``command_input_mode`` -- standard or editable command input for new native sessions.
+* ``command_input_mode`` -- standard or editable command input, for every native session at
+  once: switching it converts the box in each open tab, keeping that tab's draft.
 * ``autoretype`` -- Enter on an empty input resends the last command.
 * ``follow_mode`` -- speech interrupts on room movement, not on every line.
 * ``interrupt_mode`` -- every incoming line interrupts instead of queueing.

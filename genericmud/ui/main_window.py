@@ -186,12 +186,12 @@ class GenericMudFrame(SavedWorldsMixin, SoundpackSetupMixin, SelfUpdateMixin, wx
         editable_item.Check(self._prefs.command_input_mode == "editable")
         view_menu.AppendSubMenu(
             input_menu, "Command &input mode",
-            "Applies to newly opened sessions; existing sessions keep their mode",
+            "One setting for every world: switching it changes the box in every open tab",
         )
         self.Bind(wx.EVT_MENU,
-                  lambda _e: self._save_pref("command_input_mode", "standard"), standard_item)
+                  lambda _e: self._set_command_input_mode("standard"), standard_item)
         self.Bind(wx.EVT_MENU,
-                  lambda _e: self._save_pref("command_input_mode", "editable"), editable_item)
+                  lambda _e: self._set_command_input_mode("editable"), editable_item)
         menubar.Append(view_menu, "&View")
 
         help_menu = wx.Menu()
@@ -418,6 +418,25 @@ class GenericMudFrame(SavedWorldsMixin, SoundpackSetupMixin, SelfUpdateMixin, wx
     def _save_pref(self, attr: str, value: bool | str) -> None:
         setattr(self._prefs, attr, value)
         save_ui_prefs(self._prefs)
+
+    def _set_command_input_mode(self, mode: str) -> None:
+        """Switch every open world's command box, and say what the mode means.
+
+        One setting for the whole client, applied at once. Applying it only to tabs opened later
+        meant turning it on changed nothing that was on screen, which reads as a broken switch:
+        the menu item looked on, the box in front of the player behaved the same, and only a
+        tooltip said why. Nothing about the mode is per world, so nothing needs to wait for a
+        new tab.
+        """
+        self._save_pref("command_input_mode", mode)
+        for index in range(self.book.GetPageCount()):
+            self.book.GetPage(index).apply_command_input_mode(mode)
+        self.announce(
+            "Editable command buffer for every world. Enter sends the line you are on and "
+            "starts a new one; Shift+Enter sends it without moving."
+            if mode == "editable"
+            else "The standard command box for every world."
+        )
 
     def _on_connection_settings(self, _event: wx.CommandEvent) -> None:
         dialog = ConnectionSettingsDialog(self, self._prefs)
