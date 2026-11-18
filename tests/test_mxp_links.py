@@ -299,6 +299,25 @@ def test_two_links_keep_the_order_the_mud_sent_them():
     ]
 
 
+def test_a_link_marked_partway_through_a_line_reaches_the_line_message():
+    # Issue #110: a server that marks every tag separately. The link's words have to be found in
+    # the words the player hears, so the whole path is exercised, not just the parser: a marked
+    # opening tag and a marked closing tag in different stretches of the line.
+    app, _sent, _backend, posted = _build()
+    _say(
+        app,
+        "Exits: " + ESC + "[4z" + '<send href="look guard|consider guard">a guard'
+        + ESC + "[4z" + "</send> to the north.",
+    )
+    message = _line_message(posted)
+    assert message["text"] == "Exits: a guard to the north."
+    # Columns 7 to 14 are "a guard" in the words the player hears, and the two commands the menu
+    # offers came through with it and no caption of their own.
+    assert message["links"] == [
+        [7, 14, "look guard", False, [["look guard", ""], ["consider guard", ""]], ""]
+    ]
+
+
 def test_a_line_without_links_sends_none():
     app, _sent, _backend, posted = _build()
     _say(app, "An ordinary line.")

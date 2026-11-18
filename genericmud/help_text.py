@@ -437,6 +437,12 @@ Alt+Enter         Follow the link on this line: the keyboard form of clicking it
 Alt+T             Repeat the last tell
 Alt+C             Repeat the last chat line
 
+A MUD that tags each piece of a line separately, rather than the line as a whole,
+reads as prose here all the same: the tags are dropped and the links work wherever
+on the line they sit. What such a MUD cannot ask for partway through a line is a
+login prompt, a picture, or a variable its links expand into; those still need a
+whole line it owns.
+
 Finding text (Tab to the output first; these do nothing in the command box):
 Ctrl+F            Find in the output: what to look for, up or down, match case
 F3                Find the next match, same settings
