@@ -15,6 +15,8 @@ from genericmud.safepath import is_unsafe
 from genericmud.sound.bus import DEFAULT_CATEGORY, MUSIC_CATEGORY
 
 _PROMPT_IDLE_FLUSH_SECONDS = 0.25  # emit a newline-less prompt if the server sends no more data
+# The start of an escape sequence with its end not here yet: ESC, or ESC [ and its numbers.
+_UNFINISHED_ESCAPE_RE = re.compile(r"\x1b(?:\[[0-9;?]*)?\Z")
 
 
 # How much text an MXP <P> may hold before it is emitted anyway. A paragraph is meant to
@@ -112,9 +114,9 @@ class IncomingTextMixin:
 
     Part of EngineApp (engine_app.py). Every attribute below starts in its constructor.
 
-    Writes: _msdp_offered, _msp_url, _mxp, _mxp_held_lines, _mxp_join, _mxp_join_images,
-    _mxp_join_links, _mxp_negotiated, _mxp_timer_armed, _mxp_timer_token, _pending, _prompt_gen,
-    _pueblo_image_noted, _pueblo_links_noted.
+    Writes: _msdp_offered, _msp_url, _mxp, _mxp_continues, _mxp_held_lines, _mxp_join,
+    _mxp_join_images, _mxp_join_links, _mxp_negotiated, _mxp_timer_armed, _mxp_timer_token,
+    _pending, _prompt_gen, _pueblo_image_noted, _pueblo_links_noted.
 
     Reads: _closed, _diag, _login, _mush_packs, _password_guard, _post, _pueblo, _raw_send,
     _schedule, _walk, buffer, channels, codec, engine, images_url, interrupt_mode, media,
@@ -132,6 +134,9 @@ class IncomingTextMixin:
             self._handle_subnegotiation(event)
         elif isinstance(event, T.Command) and event.command in (T.GA, T.EOR):
             self._flush_prompt()  # prompt arrived without a trailing newline
+            # The MUD's own end of a record: what comes next starts a line of its own, even
+            # when an idle flush had already shown everything before it.
+            self._mxp_continues = False
         elif (
             isinstance(event, T.Negotiation)
             and event.command == T.WILL
@@ -178,7 +183,7 @@ class IncomingTextMixin:
         self._pending += text
         while "\n" in self._pending:
             raw, self._pending = self._pending.split("\n", 1)
-            self._emit_line(_without_carriage_returns(raw))
+            self._emit_line(_without_carriage_returns(raw), continues=self._take_continuation())
         if self._pending:
             # A prompt with no trailing newline and no GA/EOR (some MUDs) would otherwise sit in
             # _pending unspoken forever, deadlocking auto-login. Flush it if no more bytes arrive
@@ -190,15 +195,38 @@ class IncomingTextMixin:
 
     def _idle_flush_prompt(self, gen: int) -> None:
         if gen == self._prompt_gen and self._pending:
+            # An escape the pause cut in two waits for the rest of it: shown, it would be
+            # junk, and an MXP mode change in it would never be read.
+            unfinished = _UNFINISHED_ESCAPE_RE.search(self._pending)
+            held = unfinished.group() if unfinished is not None else ""
+            if len(held) == len(self._pending):
+                return  # nothing yet but the start of an escape
+            self._pending = self._pending[: len(self._pending) - len(held)]
             self._flush_prompt()
+            self._pending = held
+            # Only the clock said the line ended there, not the MUD, so whatever comes next is
+            # the rest of the same line: an MXP escape at its start is not at the head of one.
+            self._mxp_continues = True
 
     def _flush_prompt(self) -> None:
         if self._pending:
-            self._emit_line(_without_carriage_returns(self._pending))
+            self._emit_line(
+                _without_carriage_returns(self._pending), continues=self._take_continuation()
+            )
             self._pending = ""
 
+    def _take_continuation(self) -> bool:
+        """Whether the MUD line about to be emitted is the rest of one an idle flush showed.
+
+        Only the MUD's own lines take it: a pack's Simulate in between is not the rest of
+        anything, and must not use it up before the MUD's line arrives.
+        """
+        continues = self._mxp_continues
+        self._mxp_continues = False
+        return continues
+
     def _mxp_feed(
-        self, text: str
+        self, text: str, *, continues: bool = False
     ) -> tuple[str, list[SoundCue], list[tuple[str, str]], list[tuple[str, str]]]:
         """Parse one line as MXP, returning plain text, its sound cues and its links.
 
@@ -226,7 +254,7 @@ class IncomingTextMixin:
         # joined. Feeding the held text back in with the next line decoded it twice (an
         # escaped "&lt;password&gt;" came back as a live tag) and hid the next line's own mode
         # escape behind it.
-        outcome = self._mxp.feed(text)
+        outcome = self._mxp.feed(text, continues=continues)
         for payload in outcome.replies:
             self._mxp_reply(payload)
         for request in outcome.login:
@@ -296,7 +324,7 @@ class IncomingTextMixin:
         except (OSError, ConnectionError):
             pass  # a dead socket must not break the line that provoked the question
 
-    def _emit_line(self, text: str) -> None:
+    def _emit_line(self, text: str, *, continues: bool = False) -> None:
         # Strip markup before anything reads it; links and images ride along with the text.
         if self.pueblo_enabled:
             # Pueblo's HTML replaces MXP rather than nesting inside it: a world that switches
@@ -309,7 +337,7 @@ class IncomingTextMixin:
                 self._diag.event("pueblo.mode", html=self._pueblo.active)
             self._note_pueblo_image()
             return
-        text, mxp_cues, links, images = self._mxp_feed(text)
+        text, mxp_cues, links, images = self._mxp_feed(text, continues=continues)
         self._emit_parsed_line(text, mxp_cues, links, images)
 
     def _emit_parsed_line(

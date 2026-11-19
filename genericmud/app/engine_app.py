@@ -328,6 +328,8 @@ class EngineApp(
         self._world_paths: dict[tuple[Path, str], Path] = {}  # resolved once per session
         self._msdp_routed = 0  # subnegotiation count, for throttling the diag trace
         self._prompt_gen = 0  # bumps per data chunk so a stale idle prompt-flush no-ops
+        # The next line is the rest of one an idle flush already emitted (see _idle_flush_prompt).
+        self._mxp_continues = False
 
     def apply_world_settings(self, world: World) -> None:
         """Take a world's own command stacking and logging settings. Called before the world
@@ -371,6 +373,7 @@ class EngineApp(
         # mode, paragraph or held text carries over from the last one.
         self._mxp_negotiated = False
         self._mxp = MxpParser()
+        self._mxp_continues = False
         self._release_mxp_hold()
         # And Pueblo from nothing: a new socket has to switch its output to HTML again.
         self._pueblo = PuebloParser()
@@ -513,6 +516,7 @@ class EngineApp(
         # socket's read loop has run, so the server's fresh offer can't have arrived yet.
         self._mxp_negotiated = False
         self._mxp = MxpParser()
+        self._mxp_continues = False
         self._release_mxp_hold()
         self._pueblo = PuebloParser()  # and Pueblo waits to be told again
         self._pueblo_links_noted = False

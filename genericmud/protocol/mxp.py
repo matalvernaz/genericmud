@@ -43,7 +43,8 @@ here.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from urllib.parse import urlparse
 
@@ -207,6 +208,16 @@ class MxpParser:
             line = line[match.end():]
             self._apply_mode(int(match.group("mode")))
 
+    @contextmanager
+    def aside(self) -> Iterator[None]:
+        """Read lines that are not the MUD's, like a pack's Simulate, without disturbing the
+        line the MUD is partway through: its mode and any mark it left are as they were."""
+        saved = (self._mode, self._temp_secure, self._temp_secure_limited)
+        try:
+            yield
+        finally:
+            self._mode, self._temp_secure, self._temp_secure_limited = saved
+
     def _clear_mark(self) -> None:
         self._temp_secure = False
         self._temp_secure_limited = False
@@ -242,11 +253,19 @@ class MxpParser:
 
     # --- one line ------------------------------------------------------------
 
-    def feed(self, line: str) -> MxpOutcome:
-        """Parse one line from the MUD. ``line`` has no newline; the caller joins."""
+    def feed(self, line: str, *, continues: bool = False) -> MxpOutcome:
+        """Parse one line from the MUD. ``line`` has no newline; the caller joins.
+
+        ``continues`` says this is the rest of a line the caller already passed in part, because
+        the MUD paused partway through it (the client shows a prompt that never got its newline
+        after a moment's quiet). Nothing in it is at the head of a line: its escapes are read
+        as they are partway through one, and the line keeps the mode it had.
+        """
         # The image marker is this client's own, so one arriving in the text is somebody's
         # attempt to move where a real picture is drawn.
-        line = self._apply_modes(line.replace(IMAGE_MARK, ""))
+        line = line.replace(IMAGE_MARK, "")
+        if not continues:
+            line = self._apply_modes(line)
         cues: list[SoundCue] = []
         replies: list[str] = []
         links: list[Link] = []

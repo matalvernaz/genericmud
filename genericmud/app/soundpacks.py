@@ -29,7 +29,7 @@ class SoundpacksMixin:
     _save_scheduled, _simulate_depth, _ticks_armed, _vip_connected, _vip_packs, _world_packs,
     pack_updates.
 
-    Reads: _closed, _diag, _msdp_offered, _post, _schedule, asker, engine, packs, voice.
+    Reads: _closed, _diag, _msdp_offered, _mxp, _post, _schedule, asker, engine, packs, voice.
 
     Calls: _speak_system, incoming_text (_emit_line), mud_data (_dispatch_msdp_start), world_files
     (_persist_pack_vars).
@@ -197,8 +197,10 @@ class SoundpacksMixin:
             lines.pop()  # the text's own line ending
         self._simulate_depth += 1
         try:
-            for line in lines:
-                self._emit_line(line)
+            # Read aside from the MUD's own line, which a pause may have left partway through.
+            with self._mxp.aside():
+                for line in lines:
+                    self._emit_line(line)
         finally:
             self._simulate_depth -= 1
 

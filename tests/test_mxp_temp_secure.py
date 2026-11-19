@@ -13,8 +13,14 @@ from __future__ import annotations
 
 import time
 
+from genericmud.app import EngineApp
+from genericmud.app.incoming_text import _PROMPT_IDLE_FLUSH_SECONDS
+from genericmud.config.keymap import load_keymap
 from genericmud.model.buffer import Link
 from genericmud.protocol.mxp import MxpParser
+from genericmud.protocol.telnet import GA, OPT_MXP, WILL, Command, DataReceived, Negotiation
+from genericmud.voice.router import VoiceRouter
+from tests.helpers import RecordingBackend
 
 ESC = "\x1b"
 SECURE = ESC + "[1z"
@@ -270,3 +276,102 @@ def test_an_unfinished_tag_is_read_in_moments():
         _feed(line)
         assert time.perf_counter() - started < 1.0
 
+
+# --- a line the MUD paused partway through ----------------------------------------------------
+
+
+def test_the_rest_of_a_paused_line_reads_its_escapes_as_partway_through():
+    # After a moment's quiet the client shows what it has of a line, as it would a prompt. The
+    # rest of that line is not the head of a new one: a mark there is the limited one and a 1z
+    # is ignored. The MUD's next line starts afresh.
+    parser = MxpParser()
+    parser.feed(ESC + "[7z")
+    parser.feed("Bob says: ")
+    assert parser.feed(MARK + "<USER>", continues=True).login == []
+    assert parser.feed(SECURE + "<USER>", continues=True).login == []
+    assert parser.feed(MARK + "<USER>").login == ["user"]
+
+
+def test_the_rest_of_a_paused_line_keeps_the_mode_it_had():
+    parser = MxpParser()
+    parser.feed(LOCKED + "Bob says: ")
+    assert parser.feed("<b>hi</b>", continues=True).text == "<b>hi</b>"
+    assert parser.feed("<b>hi</b>").text == "hi"
+
+
+def test_a_mark_just_before_the_pause_still_marks_the_tag_after_it():
+    parser = MxpParser()
+    parser.feed("You see " + MARK)
+    out = parser.feed('<send href="look guard">a guard</send>', continues=True)
+    assert [(link.text, link.command) for link in out.links] == [("a guard", "look guard")]
+
+
+def _paused_session(default: bytes = b"\x1b[7z\r\n", start: bytes = b"Bob says: "):
+    """A session whose MUD sent ``default`` and then paused partway through a line.
+
+    Returns the session and the login requests MXP made of it.
+    """
+    scheduled: list[tuple[float, object]] = []
+    app = EngineApp(
+        VoiceRouter(RecordingBackend(), clock=lambda: 0.0),
+        send=[].append,
+        post=[].append,
+        keymap=load_keymap("vipmud"),
+        schedule=lambda delay, callback: scheduled.append((delay, callback)),
+    )
+    app.on_telnet_event(Negotiation(WILL, OPT_MXP))
+    requests: list[str] = []
+    app._mxp_login = requests.append
+    app.on_telnet_event(DataReceived(default))
+    app.on_telnet_event(DataReceived(start))
+    idle_flushes = [call for delay, call in scheduled if delay == _PROMPT_IDLE_FLUSH_SECONDS]
+    idle_flushes[-1]()  # nothing more arrived: the session shows what it has
+    return app, requests
+
+
+def test_text_that_arrives_after_a_pause_cannot_ask_for_the_login():
+    # The session shows a line with no newline once a quarter of a second passes with nothing
+    # more. Under a locked default, a mark at the start of the rest of that line has to stay
+    # the limited one, or late text could ask for the login where the same bytes arriving
+    # together could not.
+    app, requests = _paused_session()
+    app.on_telnet_event(DataReceived(b"\x1b[4z<USER>\r\n"))
+    assert requests == []
+    app.on_telnet_event(DataReceived(b"\x1b[4z<USER>\r\n"))
+    assert requests == ["user"]
+
+
+def test_a_packs_simulated_line_in_the_pause_leaves_the_rest_of_the_line_alone():
+    # A trigger on the line just shown can simulate one of its own; that is not the rest of the
+    # MUD's line, so the MUD's line, when it comes, is still read as the rest.
+    app, requests = _paused_session()
+    app._simulate("The pack says hello.")
+    app.on_telnet_event(DataReceived(b"\x1b[4z<USER>\r\n"))
+    assert requests == []
+
+
+def test_the_muds_own_prompt_end_after_a_pause_starts_the_next_line_afresh():
+    # A GA (or EOR) is the MUD saying where its prompt ends. If a pause had already shown the
+    # prompt, the next line is still one of its own, where a mark at the head is the full one.
+    app, requests = _paused_session()
+    app.on_telnet_event(Command(GA))
+    app.on_telnet_event(DataReceived(b"\x1b[4z<USER>\r\n"))
+    assert requests == ["user"]
+
+
+def test_a_simulated_line_in_the_pause_keeps_the_mode_the_muds_line_dropped_to():
+    # The MUD's line dropped from its secure default to open before the pause; a pack's
+    # Simulate in between must not put the rest of that line back on the secure default.
+    app, requests = _paused_session(b"\x1b[6z\r\n", b"Bob says: \x1b[0z")
+    app._simulate("The pack says hello.")
+    app.on_telnet_event(DataReceived(b"<USER>\r\n"))
+    assert requests == []
+
+
+def test_a_pause_inside_an_escape_still_lets_the_escape_work():
+    # The pause cut "ESC[0z" in two. Its start waits for the rest instead of being shown, so the
+    # drop to open still happens before the player's words.
+    app, requests = _paused_session(b"\x1b[5z\r\n", b"\x1b[1zBob says: \x1b[0")
+    app.on_telnet_event(DataReceived(b"z<USER>\r\n"))
+    assert requests == []
+    assert "\x1b" not in "".join(line.plain_text for line in app.buffer.lines())
