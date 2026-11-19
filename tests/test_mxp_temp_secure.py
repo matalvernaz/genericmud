@@ -11,6 +11,8 @@ tag after it, USER and IMAGE included, because the MUD owns the start of the lin
 
 from __future__ import annotations
 
+import time
+
 from genericmud.model.buffer import Link
 from genericmud.protocol.mxp import MxpParser
 
@@ -149,11 +151,19 @@ def test_1z_partway_through_a_line_still_makes_nothing_secure():
 
 def test_5_to_7_partway_through_a_line_do_not_change_the_default():
     # A player's own words can carry an escape; one arriving partway through a line must not
-    # decide how the next line is read.
-    for code in (5, 6, 7):
-        parser = MxpParser()
-        parser.feed(f"hi {ESC}[{code}z")
-        assert parser.feed("<b>still parsed</b>").text == "still parsed"
+    # decide how the next line is read. Each is checked against something only that default
+    # would change: 5z from a locked default, 6z with a link only a secure line makes, and 7z
+    # with markup an open line reads.
+    parser = MxpParser()
+    parser.feed(ESC + "[7z")
+    parser.feed(f"hi {ESC}[5z")
+    assert parser.feed("<b>still text</b>").text == "<b>still text</b>"
+    parser = MxpParser()
+    parser.feed(f"hi {ESC}[6z")
+    assert parser.feed('<send href="quit">still text</send>').links == []
+    parser = MxpParser()
+    parser.feed(f"hi {ESC}[7z")
+    assert parser.feed("<b>still parsed</b>").text == "still parsed"
 
 
 def test_the_handshake_escape_split_across_two_reads():
@@ -163,3 +173,100 @@ def test_the_handshake_escape_split_across_two_reads():
     parser.feed(ESC + "[7z")
     out = parser.feed(MARK + "<VERSION>")
     assert out.replies == ["<VERSION MXP=1.0 CLIENT=genericMud>"]
+
+
+# --- a mark on a line that is already secure, and what a mark may not outlast ----------------
+
+
+def test_a_marked_login_on_a_secure_line_still_asks_for_the_login():
+    # The line already made the stronger promise, so a mark on one of its tags as well must not
+    # take the login away from a server that does both.
+    assert _feed(SECURE + "Name: " + MARK + "<USER>").login == ["user"]
+    parser = MxpParser()
+    parser.feed(ESC + "[6z")
+    assert parser.feed("Password: " + MARK + "<PASSWORD>").login == ["password"]
+
+
+def test_a_marked_image_on_a_secure_line_still_shows():
+    assert _feed(SECURE + "Map: " + MARK + "<IMAGE map.png>").images == [("map.png", "")]
+
+
+def test_a_paragraph_a_mark_opens_partway_through_ends_with_the_line():
+    # A <P> that outlived its line would decide how every line after it is read, the same
+    # reason 1z partway through is ignored, so it ends with the line as one on an open line does.
+    parser = MxpParser()
+    assert parser.feed("Bob says: " + MARK + "<p>hello").join_next is False
+    assert parser.feed("The goblin hits you.").join_next is False
+
+
+def test_a_link_on_a_locked_line_keeps_its_words_as_typed():
+    # The line shows "&amp;" as typed, so the link's words have to match it or it can't be found.
+    out = _feed(LOCKED + "Buy " + MARK + '<send href="buy">fish &amp; chips' + MARK + "</send>")
+    assert out.text == "Buy fish &amp; chips"
+    assert [(link.text, link.command) for link in out.links] == [("fish &amp; chips", "buy")]
+
+
+def test_a_line_full_of_links_is_read_in_moments():
+    # Where a link's words start is noted without rebuilding the line read so far, so a server
+    # that fills one long line with links costs what they say and not the line again for each.
+    count = 32768
+    started = time.perf_counter()
+    out = _feed(SECURE + "<send x>y</send>" * count)
+    assert time.perf_counter() - started < 2.0
+    assert len(out.links) == count
+
+
+# --- what a change of mode partway through a line ends ---------------------------------------
+
+
+def test_a_mark_no_tag_used_does_not_cross_a_change_of_mode():
+    # A mark at the head that the MUD's own words never used must not carry over into a part of
+    # the line it has since opened or locked for other people's words.
+    for code in (0, 2, 3):
+        assert _feed(MARK + "Bob says: " + f"{ESC}[{code}z" + "<USER>").login == []
+
+
+def test_a_link_does_not_run_on_past_a_change_of_mode():
+    # A reset closes every open tag, and opening or locking the rest of the line hands it to
+    # words read another way, so a link still open there is dropped rather than closed later.
+    for code in (0, 2, 3):
+        change = f"{ESC}[{code}z"
+        line = SECURE + '<send href="go">a guard' + change + " and more" + MARK + "</send>"
+        assert _feed(line).links == []
+
+
+def test_a_variable_split_by_a_mark_on_a_secure_line_is_still_set():
+    parser = MxpParser()
+    parser.feed(SECURE + "<VAR hp>42" + MARK + "</VAR>")
+    assert parser.feed("HP: &hp;").text == "HP: 42"
+
+
+def test_a_link_split_inside_an_entity_matches_the_line():
+    # Each piece of a line is shown on its own, so "&am" and "p;" either side of a mark stay as
+    # typed; the link's words have to be read the same way or it can't be found.
+    out = _feed("x " + MARK + '<send href="go">a &am' + MARK + "<b>p; b" + MARK + "</send>")
+    assert out.text == "x a &amp; b"
+    assert [(link.text, link.command) for link in out.links] == [("a &amp; b", "go")]
+
+
+def test_a_link_keeps_the_words_the_player_was_shown_when_an_entity_changes():
+    # Each piece is shown as it is read, so a link's words from an earlier piece are what the
+    # player already got, even if the MUD redefines one of their entities later in the line.
+    parser = MxpParser()
+    parser.feed(SECURE + '<!ENTITY label "old">')
+    out = parser.feed(
+        SECURE + '<send href="go">&label;'
+        + MARK + '<!ENTITY label "new">'
+        + MARK + "</send> new"
+    )
+    assert out.text == "old new"
+    assert [(link.text, link.command) for link in out.links] == [("old", "go")]
+
+def test_an_unfinished_tag_is_read_in_moments():
+    # "<" and a long run of letters with no ">" once took seconds, on an open line anyone can
+    # write on and on a locked line the moment a mark has it read for a tag.
+    for line in ("Bob says: <" + "a" * 20000, LOCKED + MARK + "<" + "a" * 20000):
+        started = time.perf_counter()
+        _feed(line)
+        assert time.perf_counter() - started < 1.0
+

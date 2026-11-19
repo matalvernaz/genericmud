@@ -62,11 +62,13 @@ IMAGE_MARK = "\uf8ff"
 _LINE_MODE_RE = re.compile(r"\x1b\[(?P<mode>\d{1,2})z")
 
 # A tag: <NAME ...>, </NAME>, <!ELEMENT ...>. Attributes may be quoted and may contain
-# ">" inside quotes, which is why this is not a plain [^>]* match.
+# ">" inside quotes, which is why this is not a plain [^>]* match. Both parts are possessive
+# (*+): the name and the attributes can both take letters, so an unfinished "<aaaa..." would
+# otherwise be retried at every split between them, quadratic in a line a player can write.
 _TAG_RE = re.compile(
     r"<(?P<closing>/?)"
-    r"(?P<name>[A-Za-z!][A-Za-z0-9!]*)"
-    r"(?P<attrs>(?:[^<>\"']|\"[^\"]*\"|'[^']*')*)"
+    r"(?P<name>[A-Za-z!][A-Za-z0-9!]*+)"
+    r"(?P<attrs>(?:[^<>\"']|\"[^\"]*\"|'[^']*')*+)"
     r">"
 )
 # A numeric entity has at most seven digits (U+10FFFF is 1114111): anything longer is not a
@@ -173,11 +175,13 @@ class MxpParser:
         # The same mark, arrived at partway through a line rather than at its head, so it may not
         # promote the tags in _LIMITED_BLOCKED (see the module docstring).
         self._temp_secure_limited = False
-        # The pieces of this line read so far, before entities: a 4z splits a line into separate
-        # reads, and a <SEND> opened in one piece has to be closable in the next, so where its
-        # words begin has to be counted from the line and not from the piece.
-        self._line_pieces: list[str] = []
-        self._pending_link: tuple[int, Link] | None = None
+        # An open <SEND>/<A>, and an open <VAR>. A 4z splits a line into pieces read one at a
+        # time, and the closing tag can arrive in a later piece than the opening one, so each
+        # keeps where its text starts in the piece being read (an index into that piece's
+        # fragments), the text it covered in earlier pieces of the line, and the link or the
+        # variable's name. See _carry.
+        self._pending_link: tuple[int, list[str], Link] | None = None
+        self._pending_var: tuple[int, list[str], str] | None = None
         self._paragraph = False  # between <P> and </P> newlines are not breaks
         # A <P> opened on an open line, where players can write, ends with that line as every
         # open tag does at the newline. Otherwise "<p>" in one chat line would hold everyone's
@@ -226,8 +230,9 @@ class MxpParser:
             self._paragraph = False
             self._nobr = False
         elif code == 4:
-            # At the head of a line, the mark is the full one: everything a secure line could
-            # promote is promoted (see the module docstring on where a 4z may stand).
+            # At the head of a line, the mark is the full one: the next tag this client knows is
+            # trusted as if the line were secure, USER and IMAGE included (see the module
+            # docstring on where a 4z may stand).
             self._mark_next_tag(limited=False)
         elif code in (5, 6, 7):
             self._default_mode = {5: MODE_OPEN, 6: MODE_SECURE, 7: MODE_LOCKED}[code]
@@ -254,36 +259,31 @@ class MxpParser:
         # got an escape into their own words could otherwise make them secure. A 4z partway
         # through marks one tag and no more, which is how a server that marks every tag of
         # every line says so (issue #110).
-        self._line_pieces = []
-        self._pending_link = None  # an unclosed tag is forgotten at the newline
+        # An unclosed tag is forgotten at the newline.
+        self._pending_link = None
+        self._pending_var = None
         shown: list[str] = []
         position = 0
         for match in _LINE_MODE_RE.finditer(line):
             piece = line[position:match.start()]
-            shown.append(self._read_piece(piece, cues, replies, links, images, login))
+            shown.append(self._parse_piece(piece, cues, replies, links, images, login))
             code = int(match.group("mode"))
             if code in (0, 2, 3):
+                # A change in how the rest of the line is read ends what the piece before it
+                # left waiting: a mark no tag used, and a link or variable with no closing tag
+                # yet. None of them may carry trust, or words, over into text read another
+                # way, and a reset closes everything anyway.
+                self._clear_mark()
+                self._pending_link = None
+                self._pending_var = None
                 self._apply_mode(code)
             elif code == 4:
                 self._mark_next_tag(limited=True)
             position = match.end()
-        shown.append(self._read_piece(line[position:], cues, replies, links, images, login))
+        shown.append(self._parse_piece(line[position:], cues, replies, links, images, login))
         self._pending_link = None
+        self._pending_var = None
         return self._finish("".join(shown), cues, replies, links, images, login)
-
-    def _read_piece(
-        self,
-        text: str,
-        cues: list[SoundCue],
-        replies: list[str],
-        links: list[Link],
-        images: list[tuple[str, str]],
-        login: list[str],
-    ) -> str:
-        """Read one stretch of a line, and return the words it shows."""
-        piece, raw = self._parse_piece(text, cues, replies, links, images, login)
-        self._line_pieces.append(raw)
-        return piece
 
     def _parse_piece(
         self,
@@ -293,21 +293,20 @@ class MxpParser:
         links: list[Link],
         images: list[tuple[str, str]],
         login: list[str],
-    ) -> tuple[str, str]:
-        """Read one stretch of a line in the current mode.
-
-        Returns the words it shows, and the same text before entities are expanded: a link's
-        words are counted in the second, because "&amp;" is five characters here and one once it
-        is shown.
-        """
+    ) -> str:
+        """Read one stretch of a line in the current mode, and return the words it shows."""
         locked = self._mode == MODE_LOCKED
         # Tags first, entities second. &lt; exists precisely to write a literal "<", so
         # expanding entities before parsing tags would turn it into one and eat it.
         raw = self._parse_tags(text, cues, replies, links, images, login, locked=locked)
         # A locked line shows its text exactly as typed, entities included: "&lt;" there is the
         # five characters the MUD wanted read, not a "<".
-        return (raw if locked else self._expand_entities(raw)), raw
+        return self._shown(raw, locked)
 
+    def _shown(self, raw: str, locked: bool) -> str:
+        """Text after its tags are gone, as the player gets it: entities expanded, or as typed
+        on a locked line."""
+        return raw if locked else self._expand_entities(raw)
 
     def _finish(
         self,
@@ -426,13 +425,6 @@ class MxpParser:
         """
         out: list[str] = []
         position = 0
-        # Where this stretch sits among the line's pieces: the piece that opens a link has to be
-        # findable when the closing tag arrives in a later one.
-        this_piece = len(self._line_pieces)
-        # The text of a <VAR>, which is both the variable's value and what the player sees. A
-        # 4z cannot complete a <VAR> pair partway through a line anyway (the closing tag needs a
-        # mark of its own, and each piece of a line is read on its own), so this stays local.
-        pending_var: tuple[int, str] | None = None
         for match in _TAG_RE.finditer(text):
             name = match.group("name").lower()
             closing = bool(match.group("closing"))
@@ -440,9 +432,12 @@ class MxpParser:
             limited = self._temp_secure_limited
             self._clear_mark()  # one 4z promotes one tag, whatever that tag turns out to be
             secure_ok = self._mode == MODE_SECURE or marked
-            # What a mark partway through a line may actually do (see the module docstring).
-            promotes = secure_ok and not (
-                limited and (name in _LIMITED_BLOCKED or name.startswith("!"))
+            # A mark partway through a line vouches for one tag, not for the line: it can't
+            # promote what only a secure line may ask for (see the module docstring), and a <P>
+            # it opens ends with the line. A line that is secure already needs no vouching.
+            vouched = self._mode == MODE_SECURE or (marked and not limited)
+            promotes = secure_ok and (
+                vouched or not (name in _LIMITED_BLOCKED or name.startswith("!"))
             )
             if locked and not secure_ok:
                 # On a locked line only the marked tag is markup; "<b>" and "&lt;" are words.
@@ -468,52 +463,59 @@ class MxpParser:
             if (name in _OPEN_TAGS and not locked) or promotes:
                 self._act(
                     name, match.group("attrs"), closing, cues, replies, out, links, images,
-                    login, secure=promotes,
+                    login, secure=vouched,
                 )
             # A secure tag on an open line is dropped without action, exactly as the
             # security rule requires; its text stays, which is the safe half.
             if name == "var" and promotes:
+                # The text of a <VAR> is both the variable's value and what the player sees. Its
+                # closing tag can arrive in a later piece, as a link's can.
                 if closing:
-                    if pending_var is not None:
-                        index, var_name = pending_var
-                        self._set_entity(var_name, "".join(out[index:]))
-                        pending_var = None
+                    if self._pending_var is not None:
+                        start, carried, var_name = self._pending_var
+                        self._pending_var = None
+                        self._set_entity(var_name, "".join([*carried, *out[start:]]))
                 else:
-                    pending_var = (len(out), _first_token(match.group("attrs")))
+                    self._pending_var = (len(out), [], _first_token(match.group("attrs")))
             if name in ("send", "a") and not closing and promotes:
-                # Recorded as (which piece of the line, how far into it) rather than as an offset
-                # into the whole line: a 4z splits a line into pieces, and the reporter's server
-                # marks both halves of a link, so the closing tag usually arrives in a later
-                # piece -- while building the whole line's text again for every link on it
-                # would be quadratic work on a line the server chooses the length of.
-                self._pending_link = (this_piece, len("".join(out)), _link(
+                # Where its words start is an index into this piece's fragments, so noting it
+                # costs nothing however long the line is. A 4z splits a line into pieces, and
+                # the reporter's server marks both halves of a link, so the closing tag usually
+                # arrives in a later piece (see _carry).
+                self._pending_link = (len(out), [], _link(
                     match.group("attrs"), self._expand_entities
                 ))
             elif name in ("send", "a") and closing and self._pending_link is not None:
-                first, offset, link = self._pending_link
+                start, carried, link = self._pending_link
                 self._pending_link = None
                 if link.command:
                     # An image inside a link leaves a marker where it sits; that is not words,
-                    # so it must not become the link's name. The words are expanded the way
-                    # the line itself is, or a link whose words use an entity (&amp;, or a
+                    # so it must not become the link's name. Its words are what the player was
+                    # shown, piece by piece, or a link whose words use an entity (&amp;, or a
                     # MUD's own &target;) could never be found in the line it sits in.
-                    words = self._expand_entities(
-                        self._link_words(first, offset, out)
-                    ).replace(IMAGE_MARK, "")
-                    links.append(_with_words(link, words))
+                    words = "".join([*carried, self._shown("".join(out[start:]), locked)])
+                    links.append(_with_words(link, words.replace(IMAGE_MARK, "")))
         out.append(text[position:])
+        self._carry(out, locked)
         return "".join(out)
 
-    def _link_words(self, first: int, offset: int, out: list[str]) -> str:
-        """The words a link spans, from where its opening tag ended to where reading has reached.
+    def _carry(self, out: list[str], locked: bool) -> None:
+        """Carry an open link or variable on into the next piece of the line.
 
-        ``first`` is the piece the opening tag was in and ``offset`` how far into it, with ``out``
-        holding the fragments of the stretch being read now. Only the pieces the link covers are
-        joined, so a line a server filled with marked links costs what those links say and no more.
+        What it covered in this piece is kept as it stands now: a link's words as this piece is
+        shown, so an entity the MUD redefines later in the line can't change words the player
+        has already been given, and a variable's text before entities, which is its value. In
+        the next piece its text starts at the first fragment. Each piece is joined once, so a
+        line full of links costs what they say and no more.
         """
-        covered = [*self._line_pieces[first:], "".join(out)]
-        head, rest = covered[0], covered[1:]
-        return "".join([head[offset:], *rest])
+        if self._pending_link is not None:
+            start, carried, link = self._pending_link
+            carried.append(self._shown("".join(out[start:]), locked))
+            self._pending_link = (0, carried, link)
+        if self._pending_var is not None:
+            start, carried, var_name = self._pending_var
+            carried.append("".join(out[start:]))
+            self._pending_var = (0, carried, var_name)
 
     def _act(
         self,
