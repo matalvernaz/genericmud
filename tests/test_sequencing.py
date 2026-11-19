@@ -7,6 +7,8 @@ that should not also send what was typed.
 
 from __future__ import annotations
 
+import pytest
+
 from genericmud.automation.engine import AutomationEngine
 from genericmud.model.buffer import Line
 from genericmud.packs import user_rules
@@ -198,6 +200,7 @@ def test_two_rules_with_one_pattern_keep_their_file_order_across_a_save(tmp_path
 def test_the_list_says_a_rules_order_and_says_nothing_at_the_default():
     # The order decides which of two matching rules is heard first, and the list is the only
     # place to compare them without opening each one in turn.
+    pytest.importorskip("wx")
     from genericmud.ui.automation_manager import _rule_summary
 
     ordered = _rule_summary("trigger", UserTrigger(pattern="backup", order=20, send="x"))

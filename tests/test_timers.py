@@ -325,6 +325,7 @@ def test_the_manager_offers_timers_after_the_categories_that_were_there():
 
 
 def test_a_timer_reads_out_in_the_list():
+    pytest.importorskip("wx")
     from genericmud.ui.automation_manager import _rule_summary
 
     every = _rule_summary("timer", UserTimer(every=30, send="look"))

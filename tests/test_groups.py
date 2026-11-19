@@ -121,6 +121,7 @@ def test_the_group_survives_a_saved_rules_file(tmp_path):
 
 
 def test_the_list_says_which_group_a_rule_is_in():
+    pytest.importorskip("wx")
     from genericmud.ui.automation_manager import _rule_summary
 
     summary = _rule_summary("trigger", UserTrigger(pattern="backup", group="combat", send="x"))
@@ -255,6 +256,7 @@ def test_the_group_on_a_hotkey_and_a_data_rule_survives_a_saved_file(tmp_path):
 
 
 def test_the_list_says_which_group_a_hotkey_or_data_rule_is_in():
+    pytest.importorskip("wx")
     from genericmud.ui.automation_manager import _rule_summary
 
     hotkey = _rule_summary("key", UserKey(key="f2", speak="health", group="combat"))

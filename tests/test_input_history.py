@@ -8,6 +8,8 @@ left to the field so the caret moves and the text stays.
 
 from __future__ import annotations
 
+import pytest
+
 
 class _Box:
     """The parts of the command box these rules touch, without wx."""
@@ -30,6 +32,7 @@ class _Box:
 
 
 def _panel(history: list[str], value: str = "", caret: int | None = None):
+    pytest.importorskip("wx")
     from genericmud.ui import session_panel
 
     panel = session_panel.SessionPanel.__new__(session_panel.SessionPanel)

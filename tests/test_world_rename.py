@@ -33,6 +33,7 @@ class _Panel:
 
 def _frame(panels: list[_Panel], saved: list[World]):
     """A frame-shaped stub: its tabs, the worlds file, and where announcements went."""
+    pytest.importorskip("wx")
     from genericmud.ui import main_window
 
     frame = main_window.GenericMudFrame.__new__(main_window.GenericMudFrame)
@@ -347,6 +348,7 @@ def test_the_dialog_keeps_the_name_it_has_when_the_rule_refuses_it(window, monke
 
 def test_renaming_onto_another_worlds_name_is_refused(monkeypatch):
     # Logins are kept by world name, so this would replace that world and take its login with it.
+    pytest.importorskip("wx")
     from genericmud.ui import saved_worlds
 
     worlds = [World("Penultimate", "pen.example", 9500), World("Aardwolf", "aard.example", 4000)]
@@ -359,6 +361,7 @@ def test_renaming_onto_another_worlds_name_is_refused(monkeypatch):
 
 
 def test_its_own_name_is_no_clash_and_a_free_one_is_fine(monkeypatch):
+    pytest.importorskip("wx")
     from genericmud.ui import saved_worlds
 
     worlds = [World("Penultimate", "pen.example", 9500)]

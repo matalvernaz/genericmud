@@ -8,6 +8,8 @@ the freeze existed in the first place.
 
 from __future__ import annotations
 
+import pytest
+
 from genericmud.app import EngineApp
 from genericmud.config.keymap import load_keymap
 from genericmud.config.worlds import World
@@ -33,6 +35,7 @@ class _App:
 
 
 def _panel(world: World):
+    pytest.importorskip("wx")
     from genericmud.ui import session_panel
 
     panel = session_panel.SessionPanel.__new__(session_panel.SessionPanel)
@@ -43,6 +46,7 @@ def _panel(world: World):
 
 
 def _saving(monkeypatch, *worlds: World) -> None:
+    pytest.importorskip("wx")
     from genericmud.ui import session_connection
 
     monkeypatch.setattr(session_connection, "load_worlds", lambda: list(worlds))

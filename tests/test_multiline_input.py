@@ -7,6 +7,8 @@ list of commands, which is how a world with stacking off gets several at once.
 
 from __future__ import annotations
 
+import pytest
+
 from tests.ui_source import ui_class_source, ui_source
 
 
@@ -41,6 +43,7 @@ class _Loop:
 
 
 def _panel(*, value: str = "", connected: bool = True, masked: bool = False):
+    pytest.importorskip("wx")
     from genericmud.ui import command_box, session_panel
 
     panel = session_panel.SessionPanel.__new__(session_panel.SessionPanel)
@@ -215,6 +218,7 @@ def test_shift_enter_is_taken_by_the_handler_not_left_to_the_field():
 
 def test_the_history_does_not_grow_without_end():
     # A pasted file can be thousands of lines; each is a history entry, so it is capped.
+    pytest.importorskip("wx")
     from genericmud.ui import command_box
 
     panel = _panel()
