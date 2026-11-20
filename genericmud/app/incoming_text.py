@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import replace
 
+from genericmud.app.links import bare_link_spans
 from genericmud.bridge import protocol
 from genericmud.model.buffer import Line, Link
 from genericmud.protocol import telnet as T
@@ -424,6 +425,15 @@ class IncomingTextMixin:
         # only form in which a picture can be reached without seeing it.
         for _offset, url in shown:
             line_links.append(Link(url.rsplit("/", 1)[-1], url))
+        # Where every link's words sit, and then a bare address in the text as a link of its
+        # own: a MUD can print "the rules are at https://example.com/rules" and the player can
+        # follow it, without selecting and copying it out of the output. A MUD's own link over
+        # the same words wins, since following one may do something other than open a page.
+        link_spans = _link_positions(plain, line_links)
+        bare = bare_link_spans(plain, link_spans)
+        if bare:
+            line_links.extend(Link(plain[start:end], command) for start, end, command, *_ in bare)
+            link_spans = sorted([*link_spans, *bare], key=lambda span: span[0])
         line = Line(plain, spans=spans, links=line_links)
         self.engine.process_line(line)  # may set line.channel and gag flags
         if not line.omit_from_log:
@@ -462,11 +472,7 @@ class IncomingTextMixin:
                     display_when_gagged=line.display_when_gagged,
                     # Positions are only meaningful for the words the MUD sent; a substituted
                     # line shows a pack's own text, so it gets none.
-                    links=(
-                        _link_positions(line.plain_text, line.links)
-                        if line.substitute is None
-                        else []
-                    ),
+                    links=link_spans if line.substitute is None else [],
                     images=shown if line.substitute is None else [],
                 )
             )

@@ -342,6 +342,13 @@ always in the output box.
   it, and at either end you hear "no more links". Starting outside review,
   Alt+PageUp finds the newest link first. In a world whose soundpack or hotkeys
   use these keys (Erion's history browser does), they stay the soundpack's.
+- **An address written in the text is a link too** — `https://…`, `http://…`, or
+  the `www.` form — on any MUD, whether or not it sends markup, because that is
+  where people post a wiki or a forum. Following it opens it in your browser, and
+  **the address is said before the browser takes the keyboard focus**, so you
+  hear where you are being sent. A full stop, comma or closing bracket just after
+  an address belongs to the sentence, not the address. An address a MUD has
+  tagged as its own link keeps the MUD's command instead.
 - A MUD can give a link a caption saying what it does, the words a mouse user
   sees under the pointer. When the review cursor arrives on such a link you hear
   the word, then the caption, such as "link: Click to drink"; it isn't repeated

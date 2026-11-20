@@ -29,7 +29,7 @@ class FakeWindow:
         self.urls: list[str] = []
         self._opens = opens
 
-    def open_url(self, url: str) -> bool:
+    def open_url(self, url: str, *, announced: bool = False) -> bool:
         if self._opens:
             self.urls.append(url)
         return self._opens

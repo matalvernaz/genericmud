@@ -124,15 +124,23 @@ class PackWindowMixin:
 
         self._on_ui_thread(select, None)
 
-    def open_url(self, url: str) -> bool:
+    def open_url(self, url: str, *, announced: bool = False) -> bool:
+        """Open ``url`` in the browser, saying so in the output unless the caller already has.
+
+        A link is announced by the session *before* it calls this, because the browser takes the
+        keyboard focus and the address has to be heard first. Saying it here as well put the same
+        line in the output twice, once from each side. A pack calling OpenBrowser has said
+        nothing, so for it this note is the only sign that the focus went somewhere.
+        """
         if not self._alive:
             return False
-        wx.CallAfter(self._open_url, url)
+        wx.CallAfter(self._open_url, url, announced)
         return True
 
-    def _open_url(self, url: str) -> None:  # UI thread
-        # Said in the output too: a browser taking the focus is otherwise a surprise.
-        self._post(protocol.echo(f"* Opening {url}"))
+    def _open_url(self, url: str, announced: bool) -> None:  # UI thread
+        if not announced:
+            # Said in the output too: a browser taking the focus is otherwise a surprise.
+            self._post(protocol.echo(f"* Opening {url}"))
         webbrowser.open(url)
 
     def show_notepad(self, title: str, text: str) -> None:
