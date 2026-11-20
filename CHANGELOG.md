@@ -8,6 +8,29 @@ fails the build on purpose.
 
 Entries start at 0.7.1. Earlier releases were tagged before this file existed.
 
+## 0.29.1 — 2026-11-20
+
+**Secure connections on a Mac**
+
+* On a Mac, nothing secure worked: the update check, sounds a MUD has you download, soundpack
+  downloads and updates, and worlds with Use TLS on all failed with "unable to get local issuer
+  certificate". The app looked for its list of trusted certificates in a place that only existed
+  on the computer that built it. It now asks the Mac, the same list Safari trusts. The Mac
+  version you have can't check for updates, so it won't offer you this one: download it from
+  the release page.
+* On every system, genericMud now asks the operating system which certificates to trust. A
+  certificate it doesn't trust, or one made out to another name, is still refused, and on a Mac
+  or Windows the reason is said in plain words, like "“mud.example” certificate is not trusted".
+
+**MXP**, from MasterJake00
+
+* A MUD that marks each MXP tag on its own partway through a line now has its markup read
+  instead of shown as text. Its links work, and when it asks which client you're using,
+  genericMud answers instead of showing you the question. cateruels reported it from Crisol and
+  sent the cases to test it with.
+* A line full of links, or a "<" followed by thousands of letters, could freeze genericMud for
+  seconds, and anyone on a MUD could send the second one in a chat channel. Both are quick now.
+
 ## 0.29.0 — 2026-11-18
 
 **Sounds a MUD downloads**, from MasterJake00
