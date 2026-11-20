@@ -25,3 +25,20 @@ def client_context() -> ssl.SSLContext:
     both checked, and the operating system decides which certificates are trusted."""
     # PROTOCOL_TLS_CLIENT turns on both checks (CERT_REQUIRED and check_hostname).
     return truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+
+
+def put_refusal_in_words(error: BaseException) -> None:
+    """Make a refused certificate print as the operating system's own description of why.
+
+    On a Mac or Windows, truststore raises SSLCertVerificationError with that description as
+    its one argument ("“mud.example” certificate is not trusted"), and an SSLError with one
+    argument prints as a tuple: "('“mud.example” certificate is not trusted',)". "Connect
+    failed" and every retry message print the error, so a screen reader read the brackets and
+    quotes out. With strerror set it prints the description alone, as OpenSSL's refusals do.
+    """
+    if not isinstance(error, ssl.SSLError):
+        return
+    if error.strerror is not None or len(error.args) != 1:
+        return
+    if isinstance(error.args[0], str):
+        error.strerror = error.args[0]

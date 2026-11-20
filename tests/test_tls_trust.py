@@ -285,3 +285,33 @@ def test_every_platform_refuses_an_authority_the_computer_does_not_trust(
     with pytest.raises(urllib.error.URLError) as caught:
         reach(serve_https(trustme.CA()), tmp_path)
     assert _refused_certificate(caught.value), caught.value
+
+
+# What the player hears when a certificate is refused.
+
+
+async def test_a_refused_certificate_is_said_in_words(monkeypatch):
+    # On a Mac or Windows the refusal is truststore's SSLCertVerificationError carrying the
+    # system's description as its one argument (seen on the real Mac app against badssl.com),
+    # which an SSLError prints as a tuple, brackets and quotes read out on every retry.
+    description = "“mud.example” certificate is not trusted"
+
+    async def refuse(host, port, **options):
+        raise ssl.SSLCertVerificationError(description)
+
+    monkeypatch.setattr(asyncio, "open_connection", refuse)
+    connection = MudConnection()
+    statuses: list[str] = []
+    connection.on_status = statuses.append
+    connection.configure_reconnect(True, 5)
+    with pytest.raises(ssl.SSLCertVerificationError) as caught:
+        await asyncio.wait_for(connection.connect("mud.example", 4000, tls=True), timeout=10)
+    try:
+        # The window says and speaks "Connect failed: {error}", then passes str(error) on as
+        # the reason the retries announce.
+        assert str(caught.value) == description
+        assert connection.start_reconnect(detail=str(caught.value))
+        assert await _wait_for(lambda: statuses)
+        assert statuses[0] == f"connection unavailable: {description}; reconnecting every 5s"
+    finally:
+        await asyncio.wait_for(connection.close(), timeout=10)

@@ -26,7 +26,7 @@ from genericmud.protocol.telnet import (
     Subnegotiation,
     TelnetParser,
 )
-from genericmud.tls import client_context
+from genericmud.tls import client_context, put_refusal_in_words
 
 _READ_CHUNK = 4096
 CLIENT_NAME = "genericMud"
@@ -218,7 +218,8 @@ class MudConnection:
         self._handshakes.add(task)
         try:
             reader, writer = await asyncio.open_connection(host, port, ssl=ctx)
-        except OSError:
+        except OSError as error:
+            put_refusal_in_words(error)
             if self._closing or task.cancelling() > cancellations:
                 return  # a handshake that fails after cancellation is no longer reportable
             raise
