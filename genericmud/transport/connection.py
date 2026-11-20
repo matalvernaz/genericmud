@@ -26,6 +26,7 @@ from genericmud.protocol.telnet import (
     Subnegotiation,
     TelnetParser,
 )
+from genericmud.tls import client_context
 
 _READ_CHUNK = 4096
 CLIENT_NAME = "genericMud"
@@ -210,7 +211,7 @@ class MudConnection:
         self._ttype_cycle = 0  # else a reconnect answers the first SEND with the MTTS bits
         ctx: ssl.SSLContext | None = None
         if tls or ssl_context is not None:
-            ctx = ssl_context or ssl.create_default_context()
+            ctx = ssl_context or client_context()
         task = asyncio.current_task()
         assert task is not None
         cancellations = task.cancelling()

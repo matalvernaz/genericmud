@@ -27,6 +27,10 @@ dependencies = [
   # Keychain, Secret Service) so they are encrypted at rest with no master password to
   # type. Core rather than an extra: a world's login is not an optional feature.
   "keyring>=25",
+  # Secure connections trust what the computer trusts (the Keychain on a Mac, the certificate
+  # store on Windows, the system bundle on Linux) instead of OpenSSL's certificate folder,
+  # which in the standalone apps only exists on the machine that built them. See tls.py.
+  "truststore>=0.10",
 ]
 
 # A source/pip install gets a `genericmud` command on every platform (Windows/macOS/Linux).
@@ -68,6 +72,8 @@ dev = [
   "pytest>=8",
   "pytest-asyncio>=0.23",
   "ruff>=0.5",
+  # Test certificate authorities for the secure-connection tests (tests/test_tls_trust.py).
+  "trustme>=1.2",
 ]
 
 # wxPython publishes no Linux wheel to PyPI, so a plain resolve there falls to a 20-40 minute

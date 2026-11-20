@@ -27,6 +27,8 @@ from urllib.request import (
     build_opener,
 )
 
+from genericmud.tls import client_context
+
 IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 
 BASE_URL = "https://mudsoundpack.com"
@@ -157,7 +159,11 @@ class _CheckedHTTPSHandler(HTTPSHandler):
 
     def https_open(self, req):  # noqa: D102 - see _checked_connection
         factory = _checked_connection(http.client.HTTPSConnection, req, self.trusted)
-        return self.do_open(factory, req, context=self._context)
+        # The operating system's trusted certificates rather than OpenSSL's (see tls.py), in a
+        # context of this connection's own: truststore holds a context's lock through each
+        # handshake, so the one context HTTPSHandler keeps would make the parallel manifest
+        # downloads take turns.
+        return self.do_open(factory, req, context=client_context())
 
 
 def trusting_opener(trusted: frozenset[IPAddress]) -> OpenerDirector:

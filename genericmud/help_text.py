@@ -21,6 +21,9 @@ host aardmud.org, port 4000.
 If the MUD is down, or the connection drops, genericMud keeps trying every five
 seconds and says why it couldn't connect. File menu, Connection settings turns
 that off or changes how long it waits; Ctrl+D stops it for one tab.
+With Use TLS on, the MUD's certificate is checked against the certificates your
+computer trusts (on a Mac, the Keychain). One it doesn't trust is refused, and
+the connect failure says why.
 If accented or non-Latin letters come out garbled, edit the world and choose
 its Encoding. Russian MUDs often use Windows-1251 or KOI8-R, Chinese ones GBK
 or Big5. Automatic suits most MUDs.

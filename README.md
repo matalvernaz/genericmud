@@ -71,6 +71,13 @@ Saving without connecting is the way in when the MUD is down, or when you are
 setting worlds up before playing. There is deliberately no choice that does
 neither, so the OK button always has something to do.
 
+With **Use TLS** on, the MUD's certificate is checked against the certificates
+your computer trusts: the Keychain on a Mac, the certificate store on Windows,
+the system's certificate bundle on Linux. A certificate your computer doesn't
+trust, or one made out to another name, is refused, and the connect failure
+says which. Sound and soundpack downloads and the update check are checked the
+same way.
+
 Leave **Encoding** on Automatic unless accented or non-Latin letters come out
 wrong. Automatic reads UTF-8 and switches to Windows Western European the moment
 a MUD sends anything else, which suits most older European MUDs. A MUD that uses

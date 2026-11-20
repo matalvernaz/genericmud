@@ -40,6 +40,7 @@ from importlib.metadata import version as _pkg_version
 from pathlib import Path
 from urllib.request import Request, urlopen
 
+from genericmud.tls import client_context
 from genericmud.update import upgrade_manager
 
 logger = logging.getLogger(__name__)
@@ -107,7 +108,10 @@ def _get_json(url: str):
     request = Request(
         url, headers={"User-Agent": _USER_AGENT, "Accept": "application/vnd.github+json"}
     )
-    with urlopen(request, timeout=_API_TIMEOUT_S) as response:  # noqa: S310 - https api.github.com
+    # The operating system's trusted certificates: the standalone Mac app's own OpenSSL has
+    # none, so the check always failed there (see tls.py).
+    context = client_context()
+    with urlopen(request, timeout=_API_TIMEOUT_S, context=context) as response:  # noqa: S310 - https api.github.com
         return json.loads(response.read().decode("utf-8"))
 
 
@@ -308,7 +312,8 @@ def _download(url: str, dest: Path, progress_cb=None, expected_size: int = 0) ->
     doesn't always provide.
     """
     request = Request(url, headers={"User-Agent": _USER_AGENT})
-    with urlopen(request, timeout=_DOWNLOAD_TIMEOUT_S) as response:  # noqa: S310 - https github
+    context = client_context()
+    with urlopen(request, timeout=_DOWNLOAD_TIMEOUT_S, context=context) as response:  # noqa: S310 - https github
         header_size = int(response.headers.get("Content-Length") or 0)
         api_size = int(expected_size or 0)
         if header_size > 0 and api_size > 0 and header_size != api_size:
