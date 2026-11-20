@@ -440,6 +440,11 @@ Alt+Enter         Follow the link on this line: the keyboard form of clicking it
 Alt+T             Repeat the last tell
 Alt+C             Repeat the last chat line
 
+An address written in the text -- https://, http://, or the www. form -- is a
+link on any MUD, markup or not. Following one opens it in your browser, and the
+address is said first, before the browser takes the keyboard focus. A full stop,
+comma or bracket just after an address belongs to the sentence.
+
 A MUD that tags each piece of a line separately, rather than the line as a whole,
 reads as prose here all the same: the tags are dropped and the links work wherever
 on the line they sit. What such a MUD cannot ask for partway through a line is a

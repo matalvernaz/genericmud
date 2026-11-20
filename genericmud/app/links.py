@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from genericmud.app.typed_commands import CLIENT_PREFIX
 from genericmud.bridge import protocol
 from genericmud.model.buffer import Link
@@ -11,10 +13,88 @@ from genericmud.voice.router import REVIEW_CHANNEL
 # MUD can't send the platform off to launch a local application through the shell.
 _LINK_URL_SCHEMES = ("http://", "https://")
 
+# A bare address in the text, rather than one a markup tagged: what people write in a MUD.
+# Only the two schemes above are found, plus the "www." form, which is opened over https because
+# it is the one address shape where the text does not get to choose the scheme. Characters that
+# end an address in running prose -- a quote, an angle bracket, a backtick -- end it here too.
+_BARE_URL_RE = re.compile(r"(?:https?://|www\.)[^\s<>\"'`]+", re.IGNORECASE)
+# What may follow an address without being part of it: a sentence's full stop, a comma, a
+# markdown-ish asterisk.
+_BARE_URL_TAIL = ".,;:!?*"
+# A closing bracket after the address is the writer's, not the address's, unless the line opened
+# one that the address is inside: "(see https://example.com)" ends before the round one.
+_BARE_URL_PAIRS = {")": "(", "]": "[", "}": "{"}
+# Bounds, so one line of a server's choosing cannot become a wall of links or one link a
+# paragraph. Both are arbitrary and easy to change.
+_MAX_BARE_LINKS = 8
+_MAX_BARE_URL = 2000
+
 
 # The longest text a link may type into the command box. Starting a command is what the
 # spec has in mind ("tell Ariadne "); nobody needs a paragraph begun for them.
 _MAX_TYPED_LINK = 200
+
+
+def _address_end(text: str, start: int, end: int) -> int:
+    """Where the address that starts at ``start`` actually ends, given a candidate ``end``."""
+    while end > start:
+        last = text[end - 1]
+        if last in _BARE_URL_TAIL:
+            end -= 1
+            continue
+        opening = _BARE_URL_PAIRS.get(last)
+        if opening is not None and text[start:end].count(last) > text[start:end].count(opening):
+            end -= 1
+            continue
+        break
+    return end
+
+
+def _looks_like_address(address: str) -> bool:
+    """Whether what is left is an address, rather than a word that starts like one."""
+    lowered = address.lower()
+    if lowered.startswith("www."):
+        rest = address[len("www."):]
+        return "." in rest.rstrip(".") and len(rest) > 3
+    rest = address.split("://", 1)[1] if "://" in address else ""
+    return bool(rest) and not rest.startswith("/")
+
+
+def _opened_form(address: str) -> str:
+    """The address to open: the one written, with https:// in front of a bare "www." one.
+
+    Only the scheme this client already trusts is ever put on the front, so a line of text can
+    never choose what kind of address is opened.
+    """
+    return address if "://" in address else "https://" + address
+
+
+def bare_link_spans(
+    text: str, covered: list[tuple[int, int, str, bool, list[list[str]], str]]
+) -> list[tuple[int, int, str, bool, list[list[str]], str]]:
+    """Where each bare address in ``text`` sits, in the shape a tagged link's position takes.
+
+    ``covered`` is where the MUD's own links already are: its link wins, because following one
+    may do something other than open a page, and two links over the same words would leave the
+    reader choosing between them on one word.
+    """
+    taken = [(start, end) for start, end, *_rest in covered]
+    spans: list[tuple[int, int, str, bool, list[list[str]], str]] = []
+    for match in _BARE_URL_RE.finditer(text):
+        if len(spans) >= _MAX_BARE_LINKS:
+            break
+        start = match.start()
+        end = _address_end(text, start, match.end())
+        if end - start > _MAX_BARE_URL:
+            continue
+        address = text[start:end]
+        if not _looks_like_address(address):
+            continue
+        if any(start < other_end and other_start < end for other_start, other_end in taken):
+            continue
+        spans.append((start, end, _opened_form(address), False, [], ""))
+    return spans
+
 
 
 def _menu_note(link: Link) -> str:
@@ -216,14 +296,22 @@ class LinksMixin:
         return typed_refusal(command, self.command_separator)
 
     def _open_link(self, url: str) -> None:
-        """Open an <A HREF> link in the browser, announcing it because focus moves."""
+        """Open a link in the browser, saying the address before the focus goes with it.
+
+        Said first because the browser takes the keyboard focus, and with it the screen reader:
+        an address announced afterwards is one the player may never hear, which leaves a browser
+        tab they cannot account for. Both kinds of link come through here -- one the MUD tagged
+        and one found in its text -- so both are announced the same way.
+        """
+        self._speak_system(f"opening {url}")
         window = self.pack_window
         if window is not None:
-            if not window.open_url(url):
+            # announced=True: this method has just said the address, and the session's own line
+            # about it is already in the output. The window saying it again put the same line
+            # there twice, once from each side.
+            if not window.open_url(url, announced=True):
                 self._speak_system("no browser to open that link")
-                return
         else:
             # Nothing native to ask: the web UI runs inside a browser, so the renderer opens
             # the tab. Only the schemes checked by the caller ever reach here.
             self._post(protocol.open_url(url))
-        self._speak_system(f"opening {url}")

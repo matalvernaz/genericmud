@@ -52,7 +52,7 @@ class _Window:
         end = len(self.command) if last < 0 else min(last, len(self.command))
         self.selection = (max(0, first - 1), end)
 
-    def open_url(self, url: str) -> bool:
+    def open_url(self, url: str, *, announced: bool = False) -> bool:
         self.opened.append(url)
         return True
 
