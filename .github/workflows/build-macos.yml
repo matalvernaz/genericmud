@@ -48,10 +48,17 @@ jobs:
           uv run python tools/extract_changelog.py CHANGELOG.md "${{ github.ref_name }}" release_notes.md
           cat release_notes.md
 
+      # Freeze from what the app runs on, without the test tools: PyInstaller takes in any
+      # installed package a bundled library might import, so a test tool's dependencies
+      # would ship too (trustme's cryptography added 10 MB to the Mac app). Same as
+      # build_windows.bat's `uv run --no-dev`.
+      - name: Drop the test tools
+        run: uv sync --all-extras --locked --no-dev
+
       # Produces dist/genericMud.app (a real bundle VoiceOver drives). --windowed = no
       # console. Self-voice uses the built-in `say`; screen-reader review uses VoiceOver.
       - name: Build .app
-        run: uv run python tools/build_app.py
+        run: uv run --no-sync python tools/build_app.py
       # The licences of Python and the libraries the app runs on, which they ask to have
       # passed on with it (tools/third_party_notices.py, written by the build).
       - name: Check the licence notices went in

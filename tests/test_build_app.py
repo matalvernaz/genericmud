@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from tools.build_app import pyinstaller_args
@@ -106,3 +108,18 @@ def test_mac_and_linux_builds_still_take_pygame_whole(platform):
     args = pyinstaller_args(platform)
     assert args[args.index("pygame") - 1] == "--collect-all"
     assert "--exclude-module" not in args
+
+
+@pytest.mark.parametrize("platform", ["macos", "windows", "linux"])
+def test_every_build_freezes_without_the_test_tools(platform):
+    # PyInstaller takes in any installed package a bundled library might import, so the test
+    # tools (and trustme's cryptography) must be gone between the tests and the freeze, and
+    # the freeze must not sync them back in.
+    root = Path(__file__).resolve().parents[1]
+    workflow = (root / f".github/workflows/build-{platform}.yml").read_text(encoding="utf-8")
+    tests = workflow.index("pytest -q")
+    drop = workflow.index("uv sync --all-extras --locked --no-dev")
+    freeze = workflow.index("tools/build_app.py\n")
+    assert tests < drop < freeze
+    freeze_line = workflow[workflow.rindex("\n", 0, freeze) : freeze]
+    assert "uv run --no-sync python" in freeze_line

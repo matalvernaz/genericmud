@@ -84,12 +84,19 @@ jobs:
           Copy-Item zipextractor_src/AutoUpdater.NET/Resources/ZipExtractor.exe zipextractor_bin/
           Get-ChildItem zipextractor_bin/
 
+      # Freeze from what the app runs on, without the test tools: PyInstaller takes in any
+      # installed package a bundled library might import, so a test tool's dependencies
+      # would ship too (trustme's cryptography added 10 MB to the Mac app). Same as
+      # build_windows.bat's `uv run --no-dev`.
+      - name: Drop the test tools
+        run: uv sync --all-extras --locked --no-dev
+
       # The same freeze flags as macOS and Linux (tools/build_app.py), which also bundles
       # build/bass. --copy-metadata genericmud bundles the dist-info so
       # importlib.metadata.version() resolves in the frozen build: the self-updater needs the
       # real installed version to compare against releases.
       - name: Build
-        run: uv run python tools/build_app.py
+        run: uv run --no-sync python tools/build_app.py
       # The licences of Python and the libraries the app runs on, which they ask to have
       # passed on with it (tools/third_party_notices.py, written by the build).
       - name: Check the licence notices went in
