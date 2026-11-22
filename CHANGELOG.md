@@ -8,6 +8,45 @@ fails the build on purpose.
 
 Entries start at 0.7.1. Earlier releases were tagged before this file existed.
 
+## 0.30.0 — 2026-11-22
+
+**Links**
+
+* An address written in a MUD's text, one starting https://, http:// or www., is now a link you
+  can follow, whether or not the MUD sends markup: Alt+Enter, or Enter in the output box.
+  The address is said before your browser takes the focus, and a full stop, comma or bracket
+  just after it belongs to the sentence, not the address. From MasterJake00.
+* A MUD's own links now sit exactly on the words it marked. A word that appeared twice on a
+  line could put the link on the wrong copy, and a link whose words were coloured couldn't be
+  found at all: Alt+PageUp skipped it, and a command made from its words went to the MUD with
+  the colour codes in it.
+* Two links in one word, such as N and S side by side, can each be reached: jump to them, or
+  press Enter in the output box on the letter you want. On a line with several links, a word
+  that only matches one of them somewhere else on the line no longer follows that link.
+* An MXP link that doesn't say which command to send now sends its own words, as the MXP
+  standard says, so a link on the word north goes north. One marked to be finished first puts
+  its words in the command box.
+
+**Logging in**, reported by cateruels
+
+* "Answer the MUD's prompts" now answers a prompt that is just "Name:" or "Password:", and the
+  Spanish "Nombre:" and "Contraseña:".
+* "The MUD is still hiding what you type" is no longer said while a new character types a
+  password and then retypes it, or retries after a mismatch. It's still said when a MUD really
+  forgets to stop hiding what you type.
+
+**Shared worlds**, suggested by cateruels
+
+* A shared world zip now carries the world's login method and command stacking, so a MUD can
+  share a world that's set up the way it needs. Never the username or password. If a world by
+  that name is already saved, or a login is already saved under its name, the imported world
+  starts on No auto-connect, and you're told why.
+
+**One small change**
+
+* Characters from Unicode's Supplementary Private Use Area-B that a MUD sends are no longer
+  shown: genericMud uses them to keep track of where links are. No MUD is known to send them.
+
 ## 0.29.1 — 2026-11-20
 
 **Secure connections on a Mac**
