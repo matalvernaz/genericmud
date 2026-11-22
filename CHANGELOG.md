@@ -8,6 +8,18 @@ fails the build on purpose.
 
 Entries start at 0.7.1. Earlier releases were tagged before this file existed.
 
+## 0.30.1 — 2026-11-22
+
+**Soundpacks**
+
+* Erion's soundpack works again. Since its own update at the start of November it keeps its
+  settings in a small database, and genericMud didn't tell it where to keep one, so it switched
+  itself off with "Soundpack storage: Initialization failed". Your settings from before that
+  update carry over, and nothing needs turning back on. RareBird15 reported it.
+* A soundpack that saves several changes to its database at once, as the room mappers some
+  packs include do, now has them saved together, the way MUSHclient saves them, instead of one
+  at a time.
+
 ## 0.30.0 — 2026-11-22
 
 **Links**
