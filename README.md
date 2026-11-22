@@ -144,7 +144,7 @@ applied that you didn't choose. Pick the one your MUD expects.
 | Choice | What it sends |
 |---|---|
 | No auto-connect | Nothing. You log in yourself |
-| Answer the MUD's prompts | The name when asked, then the password once the MUD asks for it. Works with almost everything, and never sends the password before the username |
+| Answer the MUD's prompts | The name when asked, then the password once the MUD asks for it. Works with almost everything, and never sends the password before the username. It knows the usual English questions, a prompt that is just `Name:` or `Password:`, and the Spanish `Nombre:` and `Contraseña:`; for a MUD that asks some other way, Diku types the login without waiting |
 | MUSH/MOO | The single command `connect name password` |
 | Diku | The name, then the password, each on its own line |
 

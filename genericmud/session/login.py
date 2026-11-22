@@ -21,7 +21,10 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 
-# Substring cues for the (non-secret) username prompt.
+# Cues for the (non-secret) username prompt: substrings, plus a line that is nothing but the
+# word for "name" and a colon, which is how Diku/Merc/ROM muds and Spanish ones (issue #126,
+# Crisol: "Name:", "Nombre:") ask. Whole-line only, so a banner heading that happens to end in
+# "name:" can't send the username and arm the password watch.
 DEFAULT_USER_PROMPTS = (
     "what is your name",
     "enter your name",
@@ -29,13 +32,16 @@ DEFAULT_USER_PROMPTS = (
     "account name",
     "character name",
     "login:",
+    r"^\s*(?:name|nombre)\s*[:?]\s*$",
 )
 # Anchored password-prompt patterns: the word followed by prompt punctuation, or a bare
 # "Password" line. Deliberately NOT a bare substring, so a sentence mentioning "password"
-# can't cause the credential to be sent.
+# can't cause the credential to be sent. Spanish ("Contraseña:", issue #126) only as a whole
+# line, the same shapes as the bare English one.
 DEFAULT_PASS_PROMPTS = (
     r"pass(?:word|phrase)\s*[:>?]",
     r"^\s*pass(?:word|phrase)\s*$",
+    r"^\s*contrase(?:ñ|n)a\s*[:>?]?\s*$",
 )
 _MAX_LINES_AFTER_USER = 6  # give up watching for the password prompt after this many lines
 # Watch for the name prompt only near connect: covers banners/menus without leaving the
