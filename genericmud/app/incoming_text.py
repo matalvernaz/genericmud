@@ -3,15 +3,24 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 from dataclasses import replace
 
 from genericmud.app.links import bare_link_spans
 from genericmud.bridge import protocol
 from genericmud.model.buffer import Line, Link
 from genericmud.protocol import telnet as T
+from genericmud.protocol.marks import (
+    IMAGE_MARK,
+    lift_marks,
+    link_mark_number,
+    remap_through_edits,
+    remap_through_kept,
+    without_link_marks,
+)
 from genericmud.protocol.msp import SoundCue, parse_msp_line
-from genericmud.protocol.mxp import IMAGE_MARK, MxpParser, resolve_image_url
-from genericmud.render.ansi import parse_ansi
+from genericmud.protocol.mxp import MxpParser, resolve_image_url
+from genericmud.render.ansi import kept_characters, parse_ansi
 from genericmud.safepath import is_unsafe
 from genericmud.sound.bus import DEFAULT_CATEGORY, MUSIC_CATEGORY
 
@@ -40,62 +49,79 @@ def _redact_secret(text: str, secret: str) -> str:
     substring keeps a one-character password from redacting half the output, while still
     catching both shapes.
     """
+    return _redact_secret_with_edits(text, secret)[0]
+
+
+def _redact_secret_with_edits(text: str, secret: str) -> tuple[str, list[tuple[int, int, int]]]:
+    """:func:`_redact_secret`, with (start, end, new length) for each stretch it replaced, so a
+    position in ``text`` can be carried across to the result."""
     if not secret:
-        return text
-    pattern = re.compile(r"(?<!\S)" + re.escape(secret) + r"(?!\S)")
-    return pattern.sub("***", text)
-
-
-def _strip_image_marks(text: str) -> tuple[str, list[int]]:
-    """``text`` without its inline-image markers, and where each marker sat once they're gone.
-
-    Kept separate from the parser because the offset is only knowable here: everything between
-    the parser and this point (MXP tags, MSP markers, ANSI codes, password redaction) rewrites
-    the text, so a position counted any earlier would point at the wrong place.
-    """
-    if IMAGE_MARK not in text:
         return text, []
-    kept: list[str] = []
-    positions: list[int] = []
-    for char in text:
-        if char == IMAGE_MARK:
-            positions.append(len(kept))
-        else:
-            kept.append(char)
-    return "".join(kept), positions
+    pattern = re.compile(r"(?<!\S)" + re.escape(secret) + r"(?!\S)")
+    edits: list[tuple[int, int, int]] = []
+    pieces: list[str] = []
+    position = 0
+    for match in pattern.finditer(text):
+        pieces.append(text[position:match.start()])
+        pieces.append("***")
+        edits.append((match.start(), match.end(), 3))
+        position = match.end()
+    pieces.append(text[position:])
+    return "".join(pieces), edits
 
 
-def _link_positions(
-    text: str, links: list[Link]
-) -> list[tuple[int, int, str, bool, list[list[str]], str]]:
-    """Where each link's words sit: (start, end, command, insert, menu, hint).
+def _place_links(text: str, links: list[Link], marks: list[tuple[int, str]]) -> list[Link]:
+    """Each of the MUD's links with where its words sit in ``text``, from the parser's markers.
 
-    The parser reports a link by its words, not by position, because everything between the
-    parser and here (ANSI, MSP, redaction) rewrites the text. Searching forward from the
-    previous link keeps a word that appears twice ("a fountain by a fountain") pointing at the
-    right occurrence, in the order the MUD sent them. A link whose words are gone -- a pack
-    substituted the line -- is dropped: a wrong position would make the wrong words clickable.
+    A link is placed only when its number turns up exactly twice in the line (where its words
+    start and where they end) and on no other link of the line. Anything else -- a marker that
+    went missing, or a number reused by a paragraph that ran past the counter's end -- leaves
+    the link unplaced, found by its words as links always were, rather than moved onto another
+    link's words with that link's command. Its words are what the line shows between the two,
+    without the spaces round them. The marker number has done its job once this has run, so
+    the links that come out carry none.
     """
-    spans: list[tuple[int, int, str, bool, list[list[str]], str]] = []
-    cursor = 0
+    where: dict[int, list[int]] = {}
+    for at, char in marks:
+        number = link_mark_number(char)
+        if number is not None:
+            where.setdefault(number, []).append(at)
+    numbers = Counter(link.mark for link in links if link.mark >= 0)
+    placed: list[Link] = []
     for link in links:
-        if not link.text:
+        spots = where.get(link.mark, []) if link.mark >= 0 else []
+        if len(spots) != 2 or numbers[link.mark] != 1:
+            placed.append(replace(link, mark=-1))
             continue
-        start = text.find(link.text, cursor)
-        if start < 0:
+        start, end = spots
+        while start < end and text[start].isspace():
+            start += 1
+        while end > start and text[end - 1].isspace():
+            end -= 1
+        if start >= end:
+            placed.append(replace(link, mark=-1))  # its words were all inside something removed
             continue
-        cursor = start + len(link.text)
-        spans.append(
-            (
-                start,
-                cursor,
-                link.command,
-                link.insert,
-                [list(item) for item in link.choices],
-                link.hint,
-            )
-        )
-    return spans
+        placed.append(replace(link, text=text[start:end], start=start, end=end, mark=-1))
+    return placed
+
+
+def _link_span(link: Link) -> tuple[int, int, str, bool, list[list[str]], str]:
+    """A placed link as the window draws it: (start, end, command, insert, menu, hint)."""
+    return (
+        link.start,
+        link.end,
+        link.command,
+        link.insert,
+        [list(item) for item in link.choices],
+        link.hint,
+    )
+
+
+def _in_text_order(links: list[Link]) -> list[Link]:
+    """The links of a line as they sit in it, so review meets them in the order it reads them;
+    any whose position isn't known keep their order after the rest."""
+    placed = sorted((link for link in links if link.placed), key=lambda link: link.start)
+    return [*placed, *(link for link in links if not link.placed)]
 
 
 def _without_carriage_returns(raw: str) -> str:
@@ -153,7 +179,7 @@ class IncomingTextMixin:
         ):
             self._mxp_negotiated = event.command == T.WILL
             if not self._mxp_negotiated:
-                self._mxp = MxpParser()
+                self._mxp = MxpParser(mark_links=True)
                 self._release_mxp_hold()
         elif (
             isinstance(event, T.Negotiation)
@@ -267,7 +293,9 @@ class IncomingTextMixin:
             self._release_mxp_hold()
             return joined, outcome.cues, links, images
         self._mxp_held_lines += 1
-        if self._mxp_held_lines >= _MXP_MAX_JOIN_LINES or len(joined) >= _MXP_MAX_JOIN_CHARS:
+        # Counted as it always was: the markers round a link's words are not text.
+        held_chars = len(without_link_marks(joined))
+        if self._mxp_held_lines >= _MXP_MAX_JOIN_LINES or held_chars >= _MXP_MAX_JOIN_CHARS:
             self._release_mxp_hold()
             if self._diag is not None:
                 self._diag.event("mxp.join_flushed", reason="size")
@@ -300,7 +328,10 @@ class IncomingTextMixin:
 
     def _mxp_deadline_reached(self, token: int) -> None:
         """Say what a long-held paragraph has so far, rather than leave the user in silence."""
-        if token != self._mxp_timer_token or not self._mxp_join or self._closed:
+        # A paragraph holding nothing but a link with no words holds no text: its markers are
+        # not text, and an empty hold waits for its next line as it always has.
+        held_text = without_link_marks(self._mxp_join)
+        if token != self._mxp_timer_token or not held_text or self._closed:
             return
         held = self._mxp_join
         held_links = self._mxp_join_links
@@ -354,7 +385,16 @@ class IncomingTextMixin:
         through :meth:`_emit_line` would feed it to the parser again, find the paragraph still
         open, and hold it a second time -- the flush would emit nothing at all.
         """
-        text, cues = parse_msp_line(text)  # strip MSP markers before colour parsing
+        # The parser's markers (where each link's words start and end, where each image sits)
+        # come out before anything reads the text, so MSP, colour codes and password hiding see
+        # exactly what they always saw. Each marker's position is carried through what those
+        # passes take out. A marker that reached here on a line no parser read (MXP off) is
+        # removed the same way, and no link carries its number. See genericmud.protocol.marks.
+        text, marks = lift_marks(text)
+        positions = [at for at, _char in marks]
+        msp_kept: list[bool] = []
+        text, cues = parse_msp_line(text, kept=msp_kept)  # strip MSP markers before colour parsing
+        positions = remap_through_kept(positions, msp_kept)
         for cue in [*(mxp_cues or []), *cues]:
             channel = MUSIC_CATEGORY if cue.kind == "music" else DEFAULT_CATEGORY
             if cue.is_stop:
@@ -391,23 +431,23 @@ class IncomingTextMixin:
                         path, DEFAULT_CATEGORY, gain=gain, loop=loop, times=times
                     ),
                 )
+        positions = remap_through_kept(positions, kept_characters(text))
         spans = parse_ansi(text)
         plain = "".join(span.text for span in spans)
         if self._password_guard:
             # A blind login is typed before the server has switched echo off, so a server
             # that echoes what it reads sends the password back. It must not reach the
             # output box, the screen reader, the session log or a soundpack.
-            redacted = _redact_secret(plain, self._password_guard)
-            if redacted != plain:
+            redacted, edits = _redact_secret_with_edits(plain, self._password_guard)
+            if edits:
                 plain, spans = redacted, []  # the colours belonged to the text that's gone
+                positions = remap_through_edits(positions, edits)
+        marks = [(at, char) for at, (_old, char) in zip(positions, marks, strict=True)]
         # Inline images: the parser left a marker wherever one sits, and only now is its offset
         # knowable. An image whose address can't be worked out simply isn't there.
-        plain, marks = _strip_image_marks(plain)
-        if marks:
-            spans = [replace(span, text=span.text.replace(IMAGE_MARK, "")) for span in spans]
-            spans = [span for span in spans if span.text]
+        image_offsets = [at for at, char in marks if char == IMAGE_MARK]
         shown: list[tuple[int, str]] = []
-        for (file, base), offset in zip(images or [], marks, strict=False):
+        for (file, base), offset in zip(images or [], image_offsets, strict=False):
             url = resolve_image_url(
                 file, base, self.images_url, self.media.trusted_address()
             )
@@ -419,21 +459,27 @@ class IncomingTextMixin:
             return  # blank line: any sound cues already fired; don't show/speak "blank"
         for pack in self._mush_packs:
             pack.dispatch_line(plain)
-        line_links = list(links or [])
+        # Each of the MUD's links where the parser's markers put it.
+        mud_links = _place_links(plain, list(links or []), marks)
+        line_links = list(mud_links)
         # A text client has no way to show a picture, so an image also becomes a link: the
         # same thing MUSHclient does with one (it turns <IMAGE> into a hyperlink), and the
         # only form in which a picture can be reached without seeing it.
         for _offset, url in shown:
             line_links.append(Link(url.rsplit("/", 1)[-1], url))
-        # Where every link's words sit, and then a bare address in the text as a link of its
-        # own: a MUD can print "the rules are at https://example.com/rules" and the player can
-        # follow it, without selecting and copying it out of the output. A MUD's own link over
-        # the same words wins, since following one may do something other than open a page.
-        link_spans = _link_positions(plain, line_links)
-        bare = bare_link_spans(plain, link_spans)
-        if bare:
-            line_links.extend(Link(plain[start:end], command) for start, end, command, *_ in bare)
-            link_spans = sorted([*link_spans, *bare], key=lambda span: span[0])
+        # And a bare address in the text as a link of its own: a MUD can print "the rules are
+        # at https://example.com/rules" and the player can follow it, without selecting and
+        # copying it out of the output. A MUD's own link over the same words wins, since
+        # following one may do something other than open a page. A MUD link with words whose
+        # place isn't known means there are words the address could be sitting in, so that
+        # line gets none.
+        link_spans = [_link_span(link) for link in mud_links if link.placed]
+        bare: list[Link] = []
+        if not any(link.text and not link.placed for link in mud_links):
+            bare = [
+                Link(plain[start:end], command, start=start, end=end)
+                for start, end, command, *_rest in bare_link_spans(plain, link_spans)
+            ]
         line = Line(plain, spans=spans, links=line_links)
         self.engine.process_line(line)  # may set line.channel and gag flags
         if not line.omit_from_log:
@@ -451,10 +497,16 @@ class IncomingTextMixin:
             self._walk.on_line(line.plain_text)  # halt the walk if a step was blocked
         if line.substitute is not None:
             # A pack replaced the line (VIPMud #Sub). The log, login and the walker keep what
-            # the MUD sent; the player sees and hears the replacement.
+            # the MUD sent; the player sees and hears the replacement. The MUD's links stay
+            # with it, found by their words as they always were: where they sat belonged to
+            # the words that are gone. An address found in those words goes with them.
             line.plain_text, line.spans = line.substitute, []
+            line.links = [replace(link, start=-1, end=-1) for link in line.links]
             if not line.plain_text.strip():
                 return
+        else:
+            line.links = _in_text_order([*line.links, *bare])
+            link_spans = [_link_span(link) for link in line.links if link.placed]
         policy = self.channels.policy(line.channel)
         if policy.speak and not line.gagged and self.engine.line_speech and line.plain_text.strip():
             self.voice.speak(

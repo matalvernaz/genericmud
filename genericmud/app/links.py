@@ -28,6 +28,10 @@ _BARE_URL_PAIRS = {")": "(", "]": "[", "}": "{"}
 # paragraph. Both are arbitrary and easy to change.
 _MAX_BARE_LINKS = 8
 _MAX_BARE_URL = 2000
+# How many things that start like an address a line is checked for, found or not. Each is
+# compared with the MUD's own links on the line, so a line of thousands of them must not cost
+# thousands of comparisons each.
+_MAX_BARE_CANDIDATES = 32
 
 
 # The longest text a link may type into the command box. Starting a command is what the
@@ -36,14 +40,21 @@ _MAX_TYPED_LINK = 200
 
 
 def _address_end(text: str, start: int, end: int) -> int:
-    """Where the address that starts at ``start`` actually ends, given a candidate ``end``."""
+    """Where the address that starts at ``start`` actually ends, given a candidate ``end``.
+
+    The brackets are counted once and the count kept as closing ones come off the end, so a
+    candidate ending in thousands of them costs what it says and not its length again for each.
+    """
+    candidate = text[start:end]
+    closing = {close: candidate.count(close) for close in _BARE_URL_PAIRS}
+    opening = {close: candidate.count(open_) for close, open_ in _BARE_URL_PAIRS.items()}
     while end > start:
         last = text[end - 1]
         if last in _BARE_URL_TAIL:
             end -= 1
             continue
-        opening = _BARE_URL_PAIRS.get(last)
-        if opening is not None and text[start:end].count(last) > text[start:end].count(opening):
+        if last in closing and closing[last] > opening[last]:
+            closing[last] -= 1
             end -= 1
             continue
         break
@@ -74,14 +85,14 @@ def bare_link_spans(
 ) -> list[tuple[int, int, str, bool, list[list[str]], str]]:
     """Where each bare address in ``text`` sits, in the shape a tagged link's position takes.
 
-    ``covered`` is where the MUD's own links already are: its link wins, because following one
-    may do something other than open a page, and two links over the same words would leave the
-    reader choosing between them on one word.
+    ``covered`` is where the MUD's own links already are, exactly, from the parser's markers:
+    its link wins, because following one may do something other than open a page, and two links
+    over the same words would leave the reader choosing between them on one word.
     """
     taken = [(start, end) for start, end, *_rest in covered]
     spans: list[tuple[int, int, str, bool, list[list[str]], str]] = []
-    for match in _BARE_URL_RE.finditer(text):
-        if len(spans) >= _MAX_BARE_LINKS:
+    for examined, match in enumerate(_BARE_URL_RE.finditer(text)):
+        if len(spans) >= _MAX_BARE_LINKS or examined >= _MAX_BARE_CANDIDATES:
             break
         start = match.start()
         end = _address_end(text, start, match.end())

@@ -31,6 +31,12 @@ class Link:
     the MUD gave it. Following a menu never sends anything by itself -- it asks which of them
     the player meant. ``command`` stays the first choice, so anything that does not know about
     menus still has a sensible answer.
+
+    ``start`` and ``end`` are where the link's words sit in its line's text, once the line is
+    finished; -1 when that is not known (an image's link, a link whose markers did not survive,
+    or a line a pack replaced), and then the link is found by its words as it always was.
+    ``mark`` is the number of the markers the parser left round its words (see
+    :mod:`genericmud.protocol.marks`), which is how the engine finds them; -1 for none.
     """
 
     text: str
@@ -38,6 +44,14 @@ class Link:
     insert: bool = False
     hint: str = ""  # the caption the link carries for itself ("Click to buy a sword")
     choices: tuple[tuple[str, str], ...] = ()  # (command, caption) for a menu
+    start: int = -1
+    end: int = -1
+    mark: int = -1
+
+    @property
+    def placed(self) -> bool:
+        """Whether this link's position in its line is known exactly."""
+        return 0 <= self.start < self.end
 
 
 @dataclass

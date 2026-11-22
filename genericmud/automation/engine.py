@@ -57,7 +57,8 @@ class PackWindow(Protocol):
         """Replace the command box's selection with ``text``; the text replaced."""
     def select_command(self, first: int, last: int) -> None:
         """Select columns ``first`` to ``last`` (1 is the first, -1 the end)."""
-    def open_url(self, url: str) -> bool: ...
+    def open_url(self, url: str, *, announced: bool = False) -> bool:
+        """Open ``url`` in the browser; ``announced`` when the caller has already said so."""
     def show_notepad(self, title: str, text: str) -> None:
         """Show a pack's notepad, read-only, without stopping the game."""
 

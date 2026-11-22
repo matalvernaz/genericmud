@@ -335,7 +335,10 @@ always in the output box.
   line carries several links, **Alt+Left/Right** into the word you want first —
   the cursor's word picks the link — and if the cursor isn't inside one, the
   links are read out rather than guessed. While the output box has focus, plain
-  **Enter** does the same thing.
+  **Enter** does the same thing, for the link under the caret. A link is the words
+  the MUD marked, wherever they sit, coloured or not: the same word elsewhere on
+  the line isn't it. Two links in one word, such as N and S side by side, are
+  each reached by jumping to them or with Enter on that letter.
 - **Alt+PageDown** jumps on to the next link in the output and **Alt+PageUp**
   back to the previous one, skipping lines without any. You hear the link's
   words and the line it's on, the cursor lands on the link so Alt+Enter follows

@@ -436,7 +436,9 @@ Alt+PageDown / Alt+PageUp   Jump to the next / previous link in the output;
                   Alt+Enter then follows it
 Alt+Enter         Follow the link on this line: the keyboard form of clicking it
                   (Enter does the same while the output box has focus). On a
-                  line with several links, Alt+Left / Right into one first
+                  line with several links, Alt+Left / Right into one first.
+                  Two links in one word are reached by jumping to them, or
+                  with Enter on that letter
 Alt+T             Repeat the last tell
 Alt+C             Repeat the last chat line
 

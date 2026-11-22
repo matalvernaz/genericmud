@@ -297,3 +297,59 @@ def test_a_line_without_an_address_gets_no_links(line):
     app, _backend, posted = _build()
     _say(app, line)
     assert _line_message(posted)["links"] == []
+
+
+# --- found in order, cheaply, and only in the MUD's own words -------------------------------------
+
+
+def test_link_jumping_meets_an_address_before_a_muds_link_on_the_same_line():
+    app, backend, _posted = _build()
+    _say(app, SECURE + 'Rules at https://example.com/rules or go <send href="north">north</send>.')
+    line = "Rules at https://example.com/rules or go north."
+    _press(app, "alt+pageup")
+    assert backend.spoken[-1] == f"north: {line}"
+    _press(app, "alt+pageup")
+    assert backend.spoken[-1] == f"https://example.com/rules: {line}"
+    _press(app, "alt+pageup")
+    assert backend.spoken[-1] == "no more links"
+
+
+def test_a_long_run_of_closing_brackets_after_an_address_is_read_in_moments():
+    import time
+
+    started = time.perf_counter()
+    spans = _spans("https://x" + ")" * 100_000)
+    assert time.perf_counter() - started < 1.0
+    assert [span[2] for span in spans] == ["https://x"]
+
+
+def test_a_line_of_muds_links_over_addresses_is_read_in_moments():
+    import time
+
+    words = [f"https://e{number}.com" for number in range(20_000)]
+    text = " ".join(words)
+    covered, position = [], 0
+    for word in words:
+        covered.append((position, position + len(word), "say x", False, [], ""))
+        position += len(word) + 1
+    started = time.perf_counter()
+    assert _spans(text, covered) == []
+    assert time.perf_counter() - started < 1.0
+
+
+def test_an_address_a_pack_replaced_is_no_link():
+    # The address was in words the player no longer gets, so following the line must not open it.
+    from genericmud.scripting.api import ScriptApi
+    from genericmud.scripting.vipmud_dialect import VipMudPack
+
+    backend = RecordingBackend()
+    window = FakeWindow(backend)
+    app, backend, posted = _build(backend, window=window)
+    VipMudPack(ScriptApi(app.engine, source="vip")).load_source(
+        "#trigger {The rules are at *} {#sub {Rules posted.}}"
+    )
+    _say(app, "The rules are at https://example.com/rules")
+    assert _line_message(posted)["links"] == []
+    _press(app)
+    assert window.urls == []
+    assert backend.spoken[-1] == "no link on this line"

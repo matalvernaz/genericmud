@@ -24,6 +24,11 @@ class ReviewCursor:
         self._word = 0
         self._char = 0
         self.active = False
+        # (seq, column): the character a link jump or the output box's caret put the cursor on,
+        # finer than the word, so two links in one word ("NS") are each reachable. It is the
+        # line's own seq, never its index, so eviction can't move it onto another line, and any
+        # other movement ends it: see _pinned_column.
+        self._pin: tuple[int, int] | None = None
 
     def _index(self) -> int:
         """The current line's index into the live buffer, derived from its seq.
@@ -47,16 +52,19 @@ class ReviewCursor:
 
     def enter(self) -> str:
         """Enter review at the most recent line; freezes auto-scroll for the caller."""
+        self._pin = None
         self.active = True
         self._set_line(len(self._buffer) - 1)
         self._word = self._char = 0
         return self._line_text()
 
     def exit(self) -> None:
+        self._pin = None
         self.active = False
 
     def go_to(self, index: int) -> str:
         """Enter review on the buffer line at ``index`` (clamped), at its first word."""
+        self._pin = None
         self.active = True
         self._set_line(index)
         self._word = self._char = 0
@@ -79,24 +87,31 @@ class ReviewCursor:
         else:
             self._word = max(0, len(text.split()) - 1)
         self._char = 0
+        # The caret's own character, too: one word can hold two links ("NS"), and the one
+        # under the caret is the one meant.
+        self._pin_column(column)
         return self.current_word()
 
     def next_line(self) -> str:
+        self._pin = None
         self._set_line(self._index() + 1)
         self._word = self._char = 0
         return self._line_text()
 
     def prev_line(self) -> str:
+        self._pin = None
         self._set_line(self._index() - 1)
         self._word = self._char = 0
         return self._line_text()
 
     def top(self) -> str:
+        self._pin = None
         self._set_line(0)
         self._word = self._char = 0
         return self._line_text()
 
     def bottom(self) -> str:
+        self._pin = None
         self._set_line(len(self._buffer) - 1)
         self._word = self._char = 0
         return self._line_text()
@@ -111,10 +126,12 @@ class ReviewCursor:
         return words[self._word]
 
     def next_word(self) -> str:
+        self._pin = None
         self._word += 1
         return self.current_word()
 
     def prev_word(self) -> str:
+        self._pin = None
         self._word -= 1
         return self.current_word()
 
@@ -126,10 +143,12 @@ class ReviewCursor:
         return text[self._char]
 
     def next_char(self) -> str:
+        self._pin = None
         self._char += 1
         return self.current_char()
 
     def prev_char(self) -> str:
+        self._pin = None
         self._char -= 1
         return self.current_char()
 
@@ -161,6 +180,7 @@ class ReviewCursor:
         search walks through matches. ``include_current`` is for the first search after
         positioning at an end of the buffer. Does not wrap.
         """
+        self._pin = None
         count = len(self._buffer)
         if count == 0 or not term:
             return ""
@@ -209,8 +229,8 @@ class ReviewCursor:
             return []
         return list(self._buffer[self._index()].links)
 
-    def _link_at(self, word: str) -> Link | None:
-        """The link one of whose own words is ``word``.
+    def _link_at(self, word: str, links: list[Link]) -> Link | None:
+        """The link among ``links`` one of whose own words is ``word``.
 
         Compared word by word, not as a substring: "a" is inside "fountain", and a cursor on
         "a" is not on the link.
@@ -218,24 +238,43 @@ class ReviewCursor:
         key = _word_key(word)
         if not key:
             return None
-        for link in self.links():
+        for link in links:
             if key in {_word_key(part) for part in link.text.split()}:
                 return link
         return None
 
     def link(self) -> Link | None:
-        """The link the cursor's word sits in, or the line's only link, or ``None``.
+        """The link under the cursor, or the line's only link, or ``None``.
 
-        Matching on the word is what makes a line carrying several links usable from the
-        keyboard: the reader walks to a word with Alt+Right (the same way a mouse follows
-        the word under its pointer) and presses the follow key. Where the word belongs to
-        no link, a line with exactly one link still follows it -- so the plain "act on this
-        line" gesture works -- and with several the caller names them instead of guessing.
+        A link whose place in the line is known is found by place: the character a link jump or
+        the caret put the cursor on, then the word the cursor is on. One link in that word is
+        the one meant; two in one word ("NS") are named by the follow key rather than guessed
+        between. A link whose place isn't known (a pack replaced its line) is found by its
+        words, which is what makes a line carrying several links usable from the keyboard: the
+        reader walks to a word with Alt+Right, the way a mouse follows the word under its
+        pointer, and presses the follow key. Where the cursor is on no link, a line with exactly
+        one link still follows it -- so the plain "act on this line" gesture works -- and with
+        several the caller names them instead of guessing.
         """
         links = self.links()
         if not links:
             return None
-        under = self._link_at(self.current_word())
+        text = self._line_text()
+        placed = [link for link in links if link.placed and link.end <= len(text)]
+        pinned = self._pinned_column()
+        if pinned is not None:
+            hit = next((link for link in placed if link.start <= pinned < link.end), None)
+            if hit is not None:
+                return hit
+        word = self._word_span()
+        if word is not None:
+            covering = [link for link in placed if link.start < word[1] and word[0] < link.end]
+            if len(covering) == 1:
+                return covering[0]
+            if covering:
+                return None
+        unplaced = [link for link in links if not (link.placed and link.end <= len(text))]
+        under = self._link_at(self.current_word(), unplaced)
         if under is not None:
             return under
         return links[0] if len(links) == 1 else None
@@ -243,26 +282,28 @@ class ReviewCursor:
     # --- jumping from link to link (Alt+PageDown / Alt+PageUp) ---
 
     def next_link(self, *, inclusive: bool = False) -> Link | None:
-        """Move to the next MXP link after the cursor's word, on this line or a later one.
+        """Move to the next MXP link after the cursor, on this line or a later one.
 
-        The cursor parks on the link's first word, so the follow key acts on that link.
-        ``inclusive`` also counts a link that starts at the cursor's own word, for a reader
-        who has only just arrived. None, with the cursor left where it was, at the end.
+        The cursor parks on the link's first character, so the follow key acts on that link
+        even when it shares a word with another. ``inclusive`` also counts a link that starts
+        where the cursor is, for a reader who has only just arrived. None, with the cursor left
+        where it was, at the end.
         """
         if len(self._buffer) == 0:
             return None
         start = self._index()
+        here = self._here()
         for index in range(start, len(self._buffer)):
             line = self._buffer[index]
-            for link, word in _link_words(line.plain_text, line.links):
-                if index == start and (word < self._word or (word == self._word and not inclusive)):
+            for link, word, column in _link_words(line.plain_text, line.links):
+                if index == start and (column < here or (column == here and not inclusive)):
                     continue
-                self._park(index, word)
+                self._park(index, word, column)
                 return link
         return None
 
     def prev_link(self, *, from_line_end: bool = False) -> Link | None:
-        """Move to the link before the cursor's word, on this line or an earlier one.
+        """Move to the link before the cursor, on this line or an earlier one.
 
         ``from_line_end`` counts every link on the cursor's own line, for a reader who has
         only just arrived at the newest line. None, with the cursor left where it was, at the
@@ -271,42 +312,87 @@ class ReviewCursor:
         if len(self._buffer) == 0:
             return None
         start = self._index()
+        here = self._here()
         for index in range(start, -1, -1):
             line = self._buffer[index]
-            for link, word in reversed(_link_words(line.plain_text, line.links)):
-                if index == start and not from_line_end and word >= self._word:
+            for link, word, column in reversed(_link_words(line.plain_text, line.links)):
+                if index == start and not from_line_end and column >= here:
                     continue
-                self._park(index, word)
+                self._park(index, word, column)
                 return link
         return None
 
-    def _park(self, index: int, word: int) -> None:
+    def _park(self, index: int, word: int, column: int) -> None:
         self.active = True
         self._set_line(index)
         self._word = word
         self._char = 0
+        self._pin_column(column)
+
+    # --- where in the line the cursor is, finer than the word ---
+
+    def _pin_column(self, column: int) -> None:
+        self._pin = (self._buffer[self._index()].seq, column) if len(self._buffer) else None
+
+    def _pinned_column(self) -> int | None:
+        """The pinned character, while the cursor is still on the very line it was pinned on.
+
+        Compared with the seq of the line actually under the cursor, not the cursor's own
+        anchor: once that line is evicted the cursor shows the oldest line left, and the pin
+        must not land on it.
+        """
+        if self._pin is None or len(self._buffer) == 0:
+            return None
+        seq, column = self._pin
+        if self._buffer[self._index()].seq != seq:
+            return None
+        return column
+
+    def _word_span(self) -> tuple[int, int] | None:
+        """Where the cursor's word sits in its line, or None on a line with no words."""
+        spans = [match.span() for match in re.finditer(r"\S+", self._line_text())]
+        if not spans:
+            return None
+        return spans[max(0, min(self._word, len(spans) - 1))]
+
+    def _here(self) -> int:
+        """The character link jumps count from: the pinned one, or the start of the word."""
+        pinned = self._pinned_column()
+        if pinned is not None:
+            return pinned
+        word = self._word_span()
+        return word[0] if word is not None else 0
 
 
-def _link_words(text: str, links: list[Link]) -> list[tuple[Link, int]]:
-    """Each link on a line with the number of the word it starts in, in the order they appear.
+def _link_words(text: str, links: list[Link]) -> list[tuple[Link, int, int]]:
+    """Each link on a line with the word and the character it starts at, in the order they sit.
 
-    A link is found by its words, searching on from the one before, as the window places
-    them; a link whose words aren't in the line (a pack substituted it) is left out.
+    A link whose place is known starts where its words do. One whose place isn't (a pack
+    replaced its line) is found by its words, searching on from the one before, as links always
+    were; one whose words aren't in the line is left out.
     """
     spans = [match.span() for match in re.finditer(r"\S+", text)]
-    found: list[tuple[Link, int]] = []
+
+    def word_at(column: int) -> int | None:
+        return next((number for number, (_begin, end) in enumerate(spans) if end > column), None)
+
+    found: list[tuple[Link, int, int]] = []
     searched_to = 0
     for link in links:
-        if not link.text.strip():
-            continue
-        start = text.find(link.text, searched_to)
-        if start < 0:
-            continue
-        searched_to = start + len(link.text)
-        first = start + len(link.text) - len(link.text.lstrip())
-        word = next((number for number, (_begin, end) in enumerate(spans) if end > first), None)
+        if link.placed and link.end <= len(text):
+            column = link.start
+        else:
+            if not link.text.strip():
+                continue
+            start = text.find(link.text, searched_to)
+            if start < 0:
+                continue
+            searched_to = start + len(link.text)
+            column = start + len(link.text) - len(link.text.lstrip())
+        word = word_at(column)
         if word is not None:
-            found.append((link, word))
+            found.append((link, word, column))
+    found.sort(key=lambda item: item[2])
     return found
 
 

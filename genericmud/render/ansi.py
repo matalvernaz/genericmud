@@ -43,6 +43,17 @@ class Span:
     bold: bool = False
 
 
+def kept_characters(text: str) -> list[bool]:
+    """Which characters of ``text`` :func:`parse_ansi` keeps: everything outside an escape.
+
+    The engine uses it to carry a position in ``text`` across to the parsed line's words.
+    """
+    kept = [True] * len(text)
+    for match in _ESC_SEQ.finditer(text):
+        kept[match.start():match.end()] = [False] * (match.end() - match.start())
+    return kept
+
+
 def parse_ansi(text: str) -> list[Span]:
     """Split ``text`` into styled spans. ``"".join(s.text ...)`` equals strip_ansi(text)."""
     spans: list[Span] = []

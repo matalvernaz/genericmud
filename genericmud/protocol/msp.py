@@ -50,7 +50,9 @@ class SoundCue:
         return self.repeats < 0
 
 
-def parse_msp_line(text: str, *, allow_midline: bool = True) -> tuple[str, list[SoundCue]]:
+def parse_msp_line(
+    text: str, *, allow_midline: bool = True, kept: list[bool] | None = None
+) -> tuple[str, list[SoundCue]]:
     """Return (text with honoured MSP tags removed, cues in order of appearance).
 
     With ``allow_midline=False`` only tags that open the line are honoured, and one buried in
@@ -62,29 +64,49 @@ def parse_msp_line(text: str, *, allow_midline: bool = True) -> tuple[str, list[
     It defaults to on regardless, because servers are known to append cues to real output
     lines and switching that off would take soundpack audio away wholesale. Wire it to a
     per-world setting rather than changing the default blind.
+
+    ``kept``, when given, is filled with one flag per character of ``text``: whether it is still
+    in the result. The engine uses it to carry a position in ``text`` across to the result.
     """
     cues: list[SoundCue] = []
 
-    def take(kind: str):
-        def _repl(match: re.Match[str]) -> str:
-            cue = _parse_cue(kind, match.group("body"))
-            if cue is not None:
-                cues.append(cue)
-            return ""
-
-        return _repl
-
     if allow_midline:
-        clean = _SOUND_RE.sub(take("sound"), text)
-        clean = _MUSIC_RE.sub(take("music"), clean)
+        # SOUND first, then MUSIC on what is left, as two passes: a MUSIC tag whose halves
+        # only meet once a SOUND tag between them is gone still counts, as it always has.
+        # ``survivors`` is, for each character still in ``clean``, where it was in ``text``.
+        clean = text
+        survivors = list(range(len(text)))
+        for pattern, kind in ((_SOUND_RE, "sound"), (_MUSIC_RE, "music")):
+            pieces: list[str] = []
+            still: list[int] = []
+            position = 0
+            for match in pattern.finditer(clean):
+                cue = _parse_cue(kind, match.group("body"))
+                if cue is not None:
+                    cues.append(cue)
+                pieces.append(clean[position:match.start()])
+                still.extend(survivors[position:match.start()])
+                position = match.end()
+            pieces.append(clean[position:])
+            still.extend(survivors[position:])
+            clean = "".join(pieces)
+            survivors = still
+        if kept is not None:
+            kept[:] = [False] * len(text)
+            for index in survivors:
+                kept[index] = True
         return clean, cues
 
     rest = text
+    removed = 0
     while (match := _LEADING_RE.match(rest)) is not None:
         cue = _parse_cue(match.group("kind").lower(), match.group("body"))
         if cue is not None:
             cues.append(cue)
         rest = rest[match.end() :]
+        removed += match.end()
+    if kept is not None:
+        kept[:] = [index >= removed for index in range(len(text))]
     return rest, cues
 
 

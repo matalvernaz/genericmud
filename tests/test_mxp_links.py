@@ -8,7 +8,6 @@ presses one key, and on a line carrying several links the cursor's word picks wh
 from __future__ import annotations
 
 from genericmud.app import EngineApp
-from genericmud.app.incoming_text import _link_positions
 from genericmud.bridge import protocol
 from genericmud.config.keymap import load_keymap
 from genericmud.model.buffer import Buffer, Line, Link
@@ -101,7 +100,9 @@ def test_the_link_rides_along_to_the_buffer_line():
     _say(app, SECURE + 'Exits: <send href="north">north</send>')
     line = app.buffer.lines()[-1]
     assert line.plain_text == "Exits: north"
-    assert line.links == [Link("north", "north")]
+    # Where its words sit comes with it, so review and the output box find these words and no
+    # others that happen to match.
+    assert line.links == [Link("north", "north", start=7, end=12)]
 
 
 def test_a_link_on_a_joined_paragraph_is_not_duplicated():
@@ -111,7 +112,7 @@ def test_a_link_on_a_joined_paragraph_is_not_duplicated():
     _say(app, SECURE + '<P>Look: <send href="look">look</send>')
     _say(app, SECURE + "</P>")
     links = app.buffer.lines()[-1].links
-    assert links == [Link("look", "look")]
+    assert links == [Link("look", "look", start=6, end=10)]
 
 
 # --- following one ----------------------------------------------------------
@@ -233,7 +234,8 @@ def test_a_window_that_refuses_the_url_says_so_instead():
 
 
 def test_a_link_with_no_command_is_not_recorded_at_all():
-    # Nothing to follow, so it never becomes a link in the first place.
+    # Nothing to follow, so it never becomes a link in the first place. (A <SEND> that names no
+    # command at all sends its own words; an empty HREF names nothing.)
     assert MxpParser().feed(SECURE + '<send href="">nothing</send>').links == []
 
 
@@ -326,8 +328,22 @@ def test_a_line_without_links_sends_none():
 
 def test_a_link_whose_words_are_gone_gets_no_position():
     # What a pack substitution leaves behind: guessing a position would make the wrong words
-    # clickable, so the link is dropped from the rendering rather than misplaced.
-    assert _link_positions("a pack's own text", [Link("fountain", "drink fountain")]) == []
+    # clickable, so the link is dropped from the rendering rather than misplaced. It stays on
+    # the line, found by its words, as it always was.
+    from genericmud.scripting.api import ScriptApi
+    from genericmud.scripting.vipmud_dialect import VipMudPack
+
+    app, _sent, _backend, posted = _build()
+    VipMudPack(ScriptApi(app.engine, source="vip")).load_source(
+        "#trigger {You see a fountain*} {#sub {a pack's own text}}"
+    )
+    _say(app, SECURE + 'You see a <send href="drink fountain">fountain</send> here.')
+    assert _line_message(posted)["links"] == []
+    line = app.buffer.lines()[-1]
+    assert line.plain_text == "a pack's own text"
+    assert [(link.text, link.command, link.placed) for link in line.links] == [
+        ("fountain", "drink fountain", False)
+    ]
 
 
 def test_a_clicked_link_sends_its_command():
@@ -361,3 +377,23 @@ def test_a_clicked_link_with_no_command_does_nothing():
     app, sent, _backend, _posted = _build()
     app.on_ws_message({"type": protocol.LINK, "text": "x", "command": "   "})
     assert sent == []
+
+
+# --- a <SEND> that names no command ------------------------------------------------------------
+
+
+def test_a_send_that_names_no_command_sends_its_own_words():
+    # The spec: with no HREF, the text of the link is the command.
+    assert MxpParser().feed(SECURE + "Exits: <send>north</send>").links == [
+        Link("north", "north")
+    ]
+    app, sent, _backend = _app()
+    _say(app, SECURE + "Exits: <send>north</send>")
+    _press(app)
+    assert sent == ["north"]
+
+
+def test_a_send_with_only_the_prompt_keyword_types_its_own_words():
+    # PROMPT unquoted is the flag, not the command: the words go in the command box to finish.
+    outcome = MxpParser().feed(SECURE + "<send prompt>tell Bob </send>")
+    assert outcome.links == [Link("tell Bob", "tell Bob", insert=True)]

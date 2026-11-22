@@ -49,14 +49,26 @@ from dataclasses import dataclass, field, replace
 from urllib.parse import urlparse
 
 from genericmud.model.buffer import Link
+from genericmud.protocol.marks import (
+    IMAGE_MARK,
+    LINK_MARK_COUNT,
+    has_marks,
+    is_link_mark,
+    lift_marks,
+    link_mark,
+    remap_through_edits,
+    restore_marks,
+    without_marks,
+)
 from genericmud.protocol.msp import SoundCue, _parse_cue
+from genericmud.render.ansi import strip_ansi
 from genericmud.safepath import is_allowed_host, is_unsafe
 
-# Where an inline image sits in the text. The parser cannot report a character offset (the ANSI,
-# MSP and redaction passes that follow all rewrite the text), so an image leaves this marker
-# behind and the engine turns it into an offset once the line is finished. The marker is never
-# spoken, logged or shown: it is stripped out before the line exists.
-IMAGE_MARK = "\uf8ff"
+# IMAGE_MARK is where an inline image sits in the text, and a link's words sit between two
+# markers of its own when the engine asks for them: see genericmud.protocol.marks. The parser
+# cannot report a character offset (the ANSI, MSP and redaction passes that follow all rewrite
+# the text), so it leaves the markers behind and the engine turns them into offsets once the line
+# is finished. They are never spoken, logged or shown.
 
 # The line-mode escape. Servers send it as decimal text, and it can appear more than
 # once on a line (lock a mode, then mark this line).
@@ -124,9 +136,9 @@ _MAX_ENTITY_VALUE = 512
 # The words that follow an <!ENTITY> definition and describe it rather than giving its value.
 _ENTITY_FLAGS = frozenset({"PRIVATE", "PUBLISH", "DELETE", "ADD", "REMOVE"})
 # What a stored value may never carry into the output: control characters (which is where an
-# ANSI or line-mode escape would come from) and this module's own image marker, which the
-# engine uses to place a picture. A value is text, so it may not become either.
-_ENTITY_UNSAFE = re.compile("[\x00-\x1f\x7f-\x9f" + IMAGE_MARK + "]")
+# ANSI or line-mode escape would come from) and the markers the engine uses to place a picture
+# or a link. A value is text, so it may not become any of them.
+_ENTITY_UNSAFE = re.compile("[\x00-\x1f\x7f-\x9f" + IMAGE_MARK + "\U00100000-\U0010fffd]")
 # An entity name has to be one &name; can actually refer to, or it could never be expanded.
 _ENTITY_NAME = re.compile(r"[A-Za-z][A-Za-z0-9]{0,31}")
 # Inside a <SEND>, &text; stands for the link's own words: <send "examine &text;">sword</send>
@@ -169,7 +181,14 @@ class MxpOutcome:
 class MxpParser:
     """Turns tagged MXP lines into plain text plus the few things worth acting on."""
 
-    def __init__(self, *, client_version: str = "") -> None:
+    def __init__(self, *, client_version: str = "", mark_links: bool = False) -> None:
+        # Leave markers round each link's words, so the engine can place it exactly (see
+        # genericmud.protocol.marks). Off for a parser whose text is read as it stands.
+        self._mark_links = mark_links
+        # The number the next link's markers get. It carries on from line to line, because a
+        # paragraph joins several lines' links into one line, and wraps; the engine places no
+        # link whose number turns up on another link of the same line.
+        self._next_mark = 0
         self._default_mode = MODE_OPEN  # what a line is read as when it says nothing
         self._mode = MODE_OPEN  # this line's mode, set by an escape on it
         self._temp_secure = False  # mode 4: the next tag only
@@ -181,7 +200,9 @@ class MxpParser:
         # keeps where its text starts in the piece being read (an index into that piece's
         # fragments), the text it covered in earlier pieces of the line, and the link or the
         # variable's name. See _carry.
-        self._pending_link: tuple[int, list[str], Link] | None = None
+        # A link also notes whether its tag named a command at all: one that didn't sends its
+        # own words, and one whose HREF is empty sends nothing and is no link.
+        self._pending_link: tuple[int, list[str], Link, bool] | None = None
         self._pending_var: tuple[int, list[str], str] | None = None
         self._paragraph = False  # between <P> and </P> newlines are not breaks
         # A <P> opened on an open line, where players can write, ends with that line as every
@@ -261,9 +282,9 @@ class MxpParser:
         after a moment's quiet). Nothing in it is at the head of a line: its escapes are read
         as they are partway through one, and the line keeps the mode it had.
         """
-        # The image marker is this client's own, so one arriving in the text is somebody's
-        # attempt to move where a real picture is drawn.
-        line = line.replace(IMAGE_MARK, "")
+        # The markers are this client's own, so one arriving in the text is somebody's attempt
+        # to move where a real picture is drawn or where a link sits.
+        line = without_marks(line)
         if not continues:
             line = self._apply_modes(line)
         cues: list[SoundCue] = []
@@ -324,8 +345,21 @@ class MxpParser:
 
     def _shown(self, raw: str, locked: bool) -> str:
         """Text after its tags are gone, as the player gets it: entities expanded, or as typed
-        on a locked line."""
-        return raw if locked else self._expand_entities(raw)
+        on a locked line.
+
+        A marker left where a tag was is lifted out first and put back after, so an entity a
+        tag happened to split ("&am<send>p;") is read exactly as it is without markers.
+        """
+        if locked:
+            return raw
+        if not has_marks(raw):
+            return self._expand_entities(raw)
+        bare, marks = lift_marks(raw)
+        expanded, edits = self._expand_entities_with_edits(bare)
+        moved = remap_through_edits([at for at, _char in marks], edits)
+        return restore_marks(
+            expanded, [(at, char) for at, (_old, char) in zip(moved, marks, strict=True)]
+        )
 
     def _finish(
         self,
@@ -361,23 +395,42 @@ class MxpParser:
 
     # --- the pieces ----------------------------------------------------------
 
-    def _expand_entities(self, text: str) -> str:
-        def replace(match: re.Match[str]) -> str:
-            name = match.group("name")
-            if name.startswith("#"):
-                code = int(name[1:])
-                return chr(code) if _printable_code_point(code) else ""
-            # The HTML names first and always: a MUD redefining &lt; could otherwise write a
-            # "<" into text that was already read for tags, which is how escaped markup is
-            # meant to stay escaped.
-            known = _ENTITIES.get(name.lower())
-            if known is not None:
-                return known
-            # MUD-defined names are case sensitive, as the spec says, and an unknown one stays
-            # as it was written rather than becoming nothing.
-            return self._entities.get(name, match.group(0))
+    def _entity_value(self, match: re.Match[str]) -> str:
+        """What one ``&name;`` stands for, or the text as written when it stands for nothing."""
+        name = match.group("name")
+        if name.startswith("#"):
+            code = int(name[1:])
+            return chr(code) if _printable_code_point(code) else ""
+        # The HTML names first and always: a MUD redefining &lt; could otherwise write a
+        # "<" into text that was already read for tags, which is how escaped markup is
+        # meant to stay escaped.
+        known = _ENTITIES.get(name.lower())
+        if known is not None:
+            return known
+        # MUD-defined names are case sensitive, as the spec says, and an unknown one stays
+        # as it was written rather than becoming nothing.
+        return self._entities.get(name, match.group(0))
 
-        return _ENTITY_RE.sub(replace, text)
+    def _expand_entities(self, text: str) -> str:
+        return _ENTITY_RE.sub(self._entity_value, text)
+
+    def _expand_entities_with_edits(self, text: str) -> tuple[str, list[tuple[int, int, int]]]:
+        """The same expansion, with (start, end, new length) for every entity that changed.
+
+        An entity left as written is not an edit, so a position inside it stays where it is.
+        """
+        pieces: list[str] = []
+        edits: list[tuple[int, int, int]] = []
+        position = 0
+        for match in _ENTITY_RE.finditer(text):
+            value = self._entity_value(match)
+            pieces.append(text[position:match.start()])
+            pieces.append(value)
+            if value != match.group(0):
+                edits.append((match.start(), match.end(), len(value)))
+            position = match.end()
+        pieces.append(text[position:])
+        return "".join(pieces), edits
 
     # --- MUD-defined variables ------------------------------------------------
 
@@ -501,19 +554,37 @@ class MxpParser:
                 # costs nothing however long the line is. A 4z splits a line into pieces, and
                 # the reporter's server marks both halves of a link, so the closing tag usually
                 # arrives in a later piece (see _carry).
-                self._pending_link = (len(out), [], _link(
-                    match.group("attrs"), self._expand_entities
-                ))
+                attrs = match.group("attrs")
+                link = _link(attrs, self._expand_entities)
+                if self._mark_links:
+                    # Its marker goes where its words start. A link that is never closed leaves
+                    # this one alone in the line, and the engine places nothing for it.
+                    number = self._next_mark
+                    self._next_mark = (number + 1) % LINK_MARK_COUNT
+                    out.append(link_mark(number))
+                    link = replace(link, mark=number)
+                self._pending_link = (len(out), [], link, _names_a_command(attrs))
             elif name in ("send", "a") and closing and self._pending_link is not None:
-                start, carried, link = self._pending_link
+                start, carried, link, named = self._pending_link
                 self._pending_link = None
-                if link.command:
-                    # An image inside a link leaves a marker where it sits; that is not words,
-                    # so it must not become the link's name. Its words are what the player was
-                    # shown, piece by piece, or a link whose words use an entity (&amp;, or a
-                    # MUD's own &target;) could never be found in the line it sits in.
-                    words = "".join([*carried, self._shown("".join(out[start:]), locked)])
-                    links.append(_with_words(link, words.replace(IMAGE_MARK, "")))
+                # Its words are what the player was shown, piece by piece, or a link whose
+                # words use an entity (&amp;, or a MUD's own &target;) could never be found in
+                # the line it sits in. An image inside a link leaves a marker where it sits, and
+                # a colour code inside one is shown as colour: neither is words, so neither may
+                # become the link's name or go to the MUD in its command.
+                words = _link_words(
+                    "".join([*carried, self._shown("".join(out[start:]), locked)])
+                )
+                finished = _with_words(link, words)
+                if not named and words:
+                    # A <SEND> that names no command sends its own words: <send>north</send>
+                    # goes north, as the spec has it. One whose HREF is empty names nothing to
+                    # send and stays no link at all.
+                    finished = replace(finished, command=words)
+                if finished.command:
+                    links.append(finished)
+                    if finished.mark >= 0:
+                        out.append(link_mark(finished.mark))  # where its words end
         out.append(text[position:])
         self._carry(out, locked)
         return "".join(out)
@@ -528,9 +599,9 @@ class MxpParser:
         line full of links costs what they say and no more.
         """
         if self._pending_link is not None:
-            start, carried, link = self._pending_link
+            start, carried, link, named = self._pending_link
             carried.append(self._shown("".join(out[start:]), locked))
-            self._pending_link = (0, carried, link)
+            self._pending_link = (0, carried, link, named)
         if self._pending_var is not None:
             start, carried, var_name = self._pending_var
             carried.append("".join(out[start:]))
@@ -601,12 +672,14 @@ class MxpParser:
 def _printable_code_point(code: int) -> bool:
     """Whether a numeric entity may become text: not a control character (C0, DEL or the C1
     range, which includes a one-byte ANSI escape), not half of a surrogate pair (which can't
-    be written to a log), and not this client's own image marker."""
+    be written to a log), and not one of this client's own markers."""
     if code < 32 or 0x7F <= code <= 0x9F:
         return False
     if 0xD800 <= code <= 0xDFFF:
         return False
-    return code < 0x110000 and chr(code) != IMAGE_MARK
+    if code >= 0x110000:
+        return False
+    return chr(code) != IMAGE_MARK and not is_link_mark(chr(code))
 
 
 def _support_reply(attrs: str) -> str:
@@ -629,6 +702,12 @@ def _support_reply(attrs: str) -> str:
         base = request.split(".")[0]
         answers.append(("+" if base in supported else "-") + request.upper())
     return "<SUPPORTS " + " ".join(answers) + ">"
+
+
+def _link_words(shown: str) -> str:
+    """A link's words as the player hears them: no image marker, no colour codes, and none of
+    the spaces round them."""
+    return strip_ansi(shown.replace(IMAGE_MARK, "")).strip()
 
 
 def _with_words(link: Link, words: str) -> Link:
@@ -669,6 +748,11 @@ def _link(attrs: str, expand: Callable[[str], str] = lambda value: value) -> Lin
         for token in tokens:
             if "=" in token and token[0] not in "\"'":
                 continue  # EXPIRE= and any other named argument comes before or after
+            if token.lower() == "prompt":
+                # The PROMPT keyword, unquoted, is the flag and never the command: <send
+                # prompt>tell Bob </send> types its own words. A link that sends the word
+                # "prompt" quotes it, or names it HREF.
+                continue
             command = _unquote(token)
             break
     # The MUD's variables are filled in before a menu is split, as Mudlet does: a variable
@@ -700,7 +784,7 @@ def _link(attrs: str, expand: Callable[[str], str] = lambda value: value) -> Lin
         "",
         single,
         # A menu is not a typed command: PROMPT belongs to the one command it describes.
-        False if choices else _has_prompt_flag(attrs, command),
+        False if choices else _has_prompt_flag(attrs),
         own_caption,
         choices,
     )
@@ -735,20 +819,31 @@ def _attribute(attrs: str, name: str) -> str:
 _NAMED_ARGUMENT = re.compile(r"""[A-Za-z_][\w-]*\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)""")
 
 
-def _has_prompt_flag(attrs: str, command: str) -> bool:
+def _names_a_command(attrs: str) -> bool:
+    """Whether a ``<SEND>``/``<A>`` tag names a command at all: an HREF, even an empty one, or
+    a bare argument that isn't the PROMPT keyword (see :func:`_link`)."""
+    if re.search(r"HREF\s*=", attrs, re.IGNORECASE) is not None:
+        return True
+    for token in _tokens(attrs.strip()):
+        if "=" in token and token[0] not in "\"'":
+            continue
+        if token.lower() == "prompt":
+            continue
+        return True
+    return False
+
+
+def _has_prompt_flag(attrs: str) -> bool:
     """Whether a ``<SEND>`` asks for its command to be typed rather than sent.
 
     Only a bare keyword counts: not a quoted argument (the command itself is usually quoted,
     and a command that happens to read "tell prompt " is a command), and not the value of a
-    named one (``hint=prompt`` is a caption). A tag whose whole command is the word "prompt"
-    is sending that word, not asking for the flag.
+    named one (``hint=prompt`` is a caption). A link that sends the word "prompt" writes it
+    quoted or as its HREF, so the unquoted keyword is always the flag (see :func:`_link`).
     """
     outside = _NAMED_ARGUMENT.sub(" ", attrs)
     outside = re.sub(r"\"[^\"]*\"|'[^']*'", " ", outside)
-    found = re.findall(r"(?<![\w-])prompt(?![\w-])", outside, re.IGNORECASE)
-    if not found:
-        return False
-    return not (command.lower() == "prompt" and len(found) == 1)
+    return re.search(r"(?<![\w-])prompt(?![\w-])", outside, re.IGNORECASE) is not None
 
 
 def _unquote(value: str) -> str:

@@ -256,10 +256,10 @@ class EngineApp(
         # what makes the client announce itself, and a world that does not speak Pueblo reads
         # that announcement as a character name at its login screen.
         self.pueblo_enabled = pueblo
-        self._pueblo = PuebloParser()
+        self._pueblo = PuebloParser(mark_links=True)
         self._pueblo_links_noted = False  # the first offered link is logged, once
         self._pueblo_image_noted = False  # and so is the first picture or sound
-        self._mxp = MxpParser()
+        self._mxp = MxpParser(mark_links=True)
         self._mxp_join = ""  # text held across lines by <NOBR> or an open <P>
         # Whether this connection's server has offered MXP (IAC WILL MXP). The world's setting
         # only says MXP is welcome; until a server offers it, "<p>" in its text is somebody's
@@ -372,11 +372,11 @@ class EngineApp(
         # A new connection starts MXP from nothing: the server has to offer it again, and no
         # mode, paragraph or held text carries over from the last one.
         self._mxp_negotiated = False
-        self._mxp = MxpParser()
+        self._mxp = MxpParser(mark_links=True)
         self._mxp_continues = False
         self._release_mxp_hold()
         # And Pueblo from nothing: a new socket has to switch its output to HTML again.
-        self._pueblo = PuebloParser()
+        self._pueblo = PuebloParser(mark_links=True)
         self._pueblo_links_noted = False
         self._pueblo_image_noted = False
         self._media_facing = 0.0  # facing north again until this connection's MUD says otherwise
@@ -515,10 +515,10 @@ class EngineApp(
         # here because both reconnect paths call this straight after connect(), before the new
         # socket's read loop has run, so the server's fresh offer can't have arrived yet.
         self._mxp_negotiated = False
-        self._mxp = MxpParser()
+        self._mxp = MxpParser(mark_links=True)
         self._mxp_continues = False
         self._release_mxp_hold()
-        self._pueblo = PuebloParser()  # and Pueblo waits to be told again
+        self._pueblo = PuebloParser(mark_links=True)  # and Pueblo waits to be told again
         self._pueblo_links_noted = False
         self._pueblo_image_noted = False
         self._media_facing = 0.0  # and the player faces north until the MUD says otherwise

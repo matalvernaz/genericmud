@@ -29,9 +29,19 @@ world's escaping is worth knowing about before trusting its links.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, replace
 
 from genericmud.model.buffer import Link
+from genericmud.protocol.marks import (
+    LINK_MARK_COUNT,
+    has_marks,
+    lift_marks,
+    link_mark,
+    remap_through_edits,
+    restore_marks,
+    without_marks,
+)
 from genericmud.protocol.mxp import _printable_code_point
 
 CLIENT_VERSION = "2.50"
@@ -97,7 +107,11 @@ class PuebloParser:
     MUD that merely *mentions* Pueblo in its greeting from having its text read as markup.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, mark_links: bool = False) -> None:
+        # Leave markers round each link's words, so the engine can place it exactly (see
+        # genericmud.protocol.marks). Off for a parser whose text is read as it stands.
+        self._mark_links = mark_links
+        self._next_mark = 0  # the number the next link's markers get; carries on and wraps
         self.active = False
         # The first picture or sound the world sent, or None. Kept for the diagnostics only:
         # nothing here shows or plays one, but "my MUD's pictures are missing" and "my MUD sends
@@ -111,6 +125,9 @@ class PuebloParser:
         newlines. A line that only carried the mode switch says nothing, so it comes back as
         no lines at all -- the reader should not hear the client's own handshake spoken.
         """
+        # The markers are this client's own, so one arriving in the text is somebody's attempt
+        # to move where a link sits.
+        line = without_marks(line)
         mode = _MODE.search(line)
         if mode is not None:
             self.active = _PAGE_MODES[mode.group(1).lower()]
@@ -127,11 +144,18 @@ class PuebloParser:
             source = _attribute(found.group(1), "src").strip() if found is not None else ""
             if source:
                 self.first_image = source
-        pieces = [_read_piece(piece) for piece in _BREAKS.split(body)]
-        while pieces and not pieces[-1].text.strip():
+        numbering = self._number_link if self._mark_links else None
+        pieces = [_read_piece(piece, numbering) for piece in _BREAKS.split(body)]
+        # Blank as the reader gets it: a link's markers are not words.
+        while pieces and not without_marks(pieces[-1].text).strip():
             pieces.pop()  # a break at the end is not a blank line of its own, and a mode
             # switch on its own leaves nothing to say at all
         return pieces
+
+    def _number_link(self) -> int:
+        number = self._next_mark
+        self._next_mark = (number + 1) % LINK_MARK_COUNT
+        return number
 
 
 def _without_comments(text: str) -> str:
@@ -184,9 +208,15 @@ def _without_fenced(text: str) -> str:
     return "".join(kept)
 
 
-def _read_piece(piece: str) -> PuebloLine:
-    """One piece of HTML as words plus the commands it offers."""
+def _read_piece(piece: str, number_link: Callable[[], int] | None = None) -> PuebloLine:
+    """One piece of HTML as words plus the commands it offers.
+
+    With ``number_link``, each link's words are wrapped in its markers (see
+    genericmud.protocol.marks) before the tags go, so the engine can place it exactly.
+    """
     links: list[Link] = []
+    marked: list[str] = []
+    position = 0
     for match in _LINK.finditer(piece):
         attributes, inner = match.group(1), match.group(2)
         command = _attribute(attributes, "xch_cmd") or _command_from_href(
@@ -197,8 +227,16 @@ def _read_piece(piece: str) -> PuebloLine:
         if not command.strip() or not words:
             continue
         hint = _attribute(attributes, "xch_hint") or _attribute(attributes, "title")
-        links.append(Link(words, command, hint=hint))
-    return PuebloLine(_plain(piece), tuple(links))
+        link = Link(words, command, hint=hint)
+        if number_link is not None:
+            number = number_link()
+            link = replace(link, mark=number)
+            marked.append(piece[position:match.start(2)])
+            marked.append(link_mark(number) + inner + link_mark(number))
+            position = match.end(2)
+        links.append(link)
+    marked.append(piece[position:])
+    return PuebloLine(_plain("".join(marked)), tuple(links))
 
 
 def _command_from_href(href: str) -> str:
@@ -225,9 +263,19 @@ def _plain(piece: str) -> str:
     """The words of one piece of HTML: tags gone, then the characters entities stand for.
 
     Tags first, entities second. Decoding first would turn an entity standing for a ``<``
-    into a real tag opener, and everything after it would be dropped as markup.
+    into a real tag opener, and everything after it would be dropped as markup. A link's
+    markers are lifted out before the entities are read and put back after, so an entity a tag
+    happened to split is read exactly as it is without them.
     """
-    return _read_entities(_TAG.sub("", piece))
+    text = _TAG.sub("", piece)
+    if not has_marks(text):
+        return _read_entities(text)
+    bare, marks = lift_marks(text)
+    read, edits = _read_entities_with_edits(bare)
+    moved = remap_through_edits([at for at, _char in marks], edits)
+    return restore_marks(
+        read, [(at, char) for at, (_old, char) in zip(moved, marks, strict=True)]
+    )
 
 
 def _read_entities(text: str) -> str:
@@ -237,18 +285,39 @@ def _read_entities(text: str) -> str:
     reader is owed it rather than a silent gap. Pueblo uses the small HTML set.
     """
 
-    def replace(match: re.Match[str]) -> str:
-        name = match.group(1)
-        if not name.startswith("#"):
-            return _ENTITIES.get(name.lower(), match.group(0))
-        hexadecimal = name[:2].lower() == "#x"
-        try:
-            code = int(name[2:] if hexadecimal else name[1:], 16 if hexadecimal else 10)
-        except ValueError:
-            return match.group(0)
-        # As MXP does: no control characters (an escape would start ANSI), no half of a
-        # surrogate pair (a log cannot be written with one, and speech drops the line), and not
-        # the client's own picture marker.
-        return chr(code) if _printable_code_point(code) else ""
+    return _ENTITY.sub(_entity_value, text)
 
-    return _ENTITY.sub(replace, text)
+
+def _entity_value(match: re.Match[str]) -> str:
+    """What one entity stands for, or the text as written when it stands for nothing here."""
+    name = match.group(1)
+    if not name.startswith("#"):
+        return _ENTITIES.get(name.lower(), match.group(0))
+    hexadecimal = name[:2].lower() == "#x"
+    try:
+        code = int(name[2:] if hexadecimal else name[1:], 16 if hexadecimal else 10)
+    except ValueError:
+        return match.group(0)
+    # As MXP does: no control characters (an escape would start ANSI), no half of a
+    # surrogate pair (a log cannot be written with one, and speech drops the line), and none
+    # of the client's own markers.
+    return chr(code) if _printable_code_point(code) else ""
+
+
+def _read_entities_with_edits(text: str) -> tuple[str, list[tuple[int, int, int]]]:
+    """:func:`_read_entities`, with (start, end, new length) for every entity that changed.
+
+    An entity left as written is not an edit, so a position inside it stays where it is.
+    """
+    pieces: list[str] = []
+    edits: list[tuple[int, int, int]] = []
+    position = 0
+    for match in _ENTITY.finditer(text):
+        value = _entity_value(match)
+        pieces.append(text[position:match.start()])
+        pieces.append(value)
+        if value != match.group(0):
+            edits.append((match.start(), match.end(), len(value)))
+        position = match.end()
+    pieces.append(text[position:])
+    return "".join(pieces), edits
