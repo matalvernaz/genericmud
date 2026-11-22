@@ -265,12 +265,16 @@ class ReviewCursor:
         jumped = self._pinned_link()
         if jumped is not None:
             return jumped
-        found = _link_words(self._line_text(), links)
+        text = self._line_text()
+        found = _link_words(text, links)
         pinned = self._pinned_column()
         if pinned is not None:
-            hit = next((link for link, _word, start, end in found if start <= pinned < end), None)
-            if hit is not None:
-                return hit
+            # Where a link the markup placed and one only found by its words both cover the
+            # caret's character, the placed one is where the MUD put a link: it wins.
+            hits = [link for link, _word, start, end in found if start <= pinned < end]
+            exact = [link for link in hits if link.placed and link.end <= len(text)]
+            if hits:
+                return exact[0] if exact else hits[0]
         word = self._word_span()
         if word is not None:
             covering = [
@@ -280,7 +284,6 @@ class ReviewCursor:
                 return covering[0]
             if covering:
                 return None
-        text = self._line_text()
         unplaced = [link for link in links if not (link.placed and link.end <= len(text))]
         under = self._link_at(self.current_word(), unplaced)
         if under is not None:

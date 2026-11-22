@@ -242,3 +242,23 @@ def test_a_world_without_the_setting_writes_none(tmp_path):
     path = tmp_path / "worlds.toml"
     save_worlds([World("Plain", "plain.example", 4000)], path)
     assert "images_url" not in path.read_text(encoding="utf-8")
+
+
+def test_enter_on_a_letter_the_mud_linked_follows_the_muds_link_not_the_pictures():
+    # The picture's link is found by its name, "map.png"; the MUD linked just "png". With the
+    # caret on a letter of "png" the MUD's link is the one that sits there.
+    from genericmud.bridge import protocol
+
+    app, sent, _backend, posted = _app(images_url=ART)
+    _say(app, SECURE + '<IMAGE fname="map.png">map.<send href="look png">png</send> here')
+    text = app.buffer.lines()[-1].plain_text
+    assert text == "map.png here"
+
+    def enter(column: int) -> None:
+        app.on_ws_message({"type": protocol.LINK_AT, "text": text, "from_end": 0, "column": column})
+
+    enter(text.index("png") + 1)
+    assert sent == ["look png"]
+    enter(1)  # on "map": only the picture's link is there
+    opened = [message for message in posted if message.get("type") == protocol.OPEN_URL]
+    assert [message.get("url") for message in opened] == [ART + "map.png"]
