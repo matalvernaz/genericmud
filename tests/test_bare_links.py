@@ -353,3 +353,20 @@ def test_an_address_a_pack_replaced_is_no_link():
     _press(app)
     assert window.urls == []
     assert backend.spoken[-1] == "no link on this line"
+
+
+def test_a_www_address_with_another_address_in_its_query_is_opened_not_typed():
+    backend = RecordingBackend()
+    window = FakeWindow(backend)
+    sent: list[str] = []
+    app = EngineApp(
+        VoiceRouter(backend, clock=lambda: 0.0),
+        send=sent.append,
+        post=lambda _message: None,
+        keymap=load_keymap("vipmud"),
+    )
+    app.pack_window = window
+    _say(app, "sign in at www.example.com/?next=https://example.org please")
+    _press(app)
+    assert window.urls == ["https://www.example.com/?next=https://example.org"]
+    assert sent == []

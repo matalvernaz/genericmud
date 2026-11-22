@@ -11,6 +11,7 @@ anti-flooding split).
 from __future__ import annotations
 
 import re
+from bisect import bisect_right
 
 from genericmud.model.buffer import Buffer, Link
 
@@ -24,11 +25,12 @@ class ReviewCursor:
         self._word = 0
         self._char = 0
         self.active = False
-        # (seq, column): the character a link jump or the output box's caret put the cursor on,
-        # finer than the word, so two links in one word ("NS") are each reachable. It is the
-        # line's own seq, never its index, so eviction can't move it onto another line, and any
-        # other movement ends it: see _pinned_column.
-        self._pin: tuple[int, int] | None = None
+        # (seq, column, link): the character a link jump or the output box's caret put the cursor
+        # on, finer than the word, so two links in one word ("NS") are each reachable, and for a
+        # jump the very link it announced, so the follow key acts on that one and no other. It is
+        # the line's own seq, never its index, so eviction can't move it onto another line, and
+        # any other movement ends it: see _pinned_column.
+        self._pin: tuple[int, int, Link | None] | None = None
 
     def _index(self) -> int:
         """The current line's index into the live buffer, derived from its seq.
@@ -89,7 +91,7 @@ class ReviewCursor:
         self._char = 0
         # The caret's own character, too: one word can hold two links ("NS"), and the one
         # under the caret is the one meant.
-        self._pin_column(column)
+        self._pin_column(column, None)
         return self.current_word()
 
     def next_line(self) -> str:
@@ -246,33 +248,39 @@ class ReviewCursor:
     def link(self) -> Link | None:
         """The link under the cursor, or the line's only link, or ``None``.
 
-        A link whose place in the line is known is found by place: the character a link jump or
-        the caret put the cursor on, then the word the cursor is on. One link in that word is
-        the one meant; two in one word ("NS") are named by the follow key rather than guessed
-        between. A link whose place isn't known (a pack replaced its line) is found by its
-        words, which is what makes a line carrying several links usable from the keyboard: the
-        reader walks to a word with Alt+Right, the way a mouse follows the word under its
-        pointer, and presses the follow key. Where the cursor is on no link, a line with exactly
-        one link still follows it -- so the plain "act on this line" gesture works -- and with
-        several the caller names them instead of guessing.
+        After a link jump, the link the jump announced. Otherwise by place: the character the
+        caret put the cursor on, then the word the cursor is on. A link sits where its markup put
+        it, or, where that isn't known (a pack replaced its line), where its words were found.
+        One link in the word is the one meant; two in one word ("NS") are named by the follow key
+        rather than guessed between. A link whose place isn't known is also matched by its words
+        wherever the cursor meets them, which is what makes a line carrying several links usable
+        from the keyboard: the reader walks to a word with Alt+Right, the way a mouse follows the
+        word under its pointer, and presses the follow key. Where the cursor is on no link, a line
+        with exactly one link still follows it -- so the plain "act on this line" gesture works --
+        and with several the caller names them instead of guessing.
         """
         links = self.links()
         if not links:
             return None
-        text = self._line_text()
-        placed = [link for link in links if link.placed and link.end <= len(text)]
+        jumped = self._pinned_link()
+        if jumped is not None:
+            return jumped
+        found = _link_words(self._line_text(), links)
         pinned = self._pinned_column()
         if pinned is not None:
-            hit = next((link for link in placed if link.start <= pinned < link.end), None)
+            hit = next((link for link, _word, start, end in found if start <= pinned < end), None)
             if hit is not None:
                 return hit
         word = self._word_span()
         if word is not None:
-            covering = [link for link in placed if link.start < word[1] and word[0] < link.end]
+            covering = [
+                link for link, _word, start, end in found if start < word[1] and word[0] < end
+            ]
             if len(covering) == 1:
                 return covering[0]
             if covering:
                 return None
+        text = self._line_text()
         unplaced = [link for link in links if not (link.placed and link.end <= len(text))]
         under = self._link_at(self.current_word(), unplaced)
         if under is not None:
@@ -295,10 +303,10 @@ class ReviewCursor:
         here = self._here()
         for index in range(start, len(self._buffer)):
             line = self._buffer[index]
-            for link, word, column in _link_words(line.plain_text, line.links):
+            for link, word, column, _end in _link_words(line.plain_text, line.links):
                 if index == start and (column < here or (column == here and not inclusive)):
                     continue
-                self._park(index, word, column)
+                self._park(index, word, column, link)
                 return link
         return None
 
@@ -315,24 +323,24 @@ class ReviewCursor:
         here = self._here()
         for index in range(start, -1, -1):
             line = self._buffer[index]
-            for link, word, column in reversed(_link_words(line.plain_text, line.links)):
+            for link, word, column, _end in reversed(_link_words(line.plain_text, line.links)):
                 if index == start and not from_line_end and column >= here:
                     continue
-                self._park(index, word, column)
+                self._park(index, word, column, link)
                 return link
         return None
 
-    def _park(self, index: int, word: int, column: int) -> None:
+    def _park(self, index: int, word: int, column: int, link: Link) -> None:
         self.active = True
         self._set_line(index)
         self._word = word
         self._char = 0
-        self._pin_column(column)
+        self._pin_column(column, link)
 
     # --- where in the line the cursor is, finer than the word ---
 
-    def _pin_column(self, column: int) -> None:
-        self._pin = (self._buffer[self._index()].seq, column) if len(self._buffer) else None
+    def _pin_column(self, column: int, link: Link | None) -> None:
+        self._pin = (self._buffer[self._index()].seq, column, link) if len(self._buffer) else None
 
     def _pinned_column(self) -> int | None:
         """The pinned character, while the cursor is still on the very line it was pinned on.
@@ -343,10 +351,17 @@ class ReviewCursor:
         """
         if self._pin is None or len(self._buffer) == 0:
             return None
-        seq, column = self._pin
+        seq, column, _link = self._pin
         if self._buffer[self._index()].seq != seq:
             return None
         return column
+
+    def _pinned_link(self) -> Link | None:
+        """The link a jump parked on, while the pin holds and the link is still on the line."""
+        if self._pinned_column() is None or self._pin is None or self._pin[2] is None:
+            return None
+        jumped = self._pin[2]
+        return jumped if any(link is jumped for link in self.links()) else None
 
     def _word_span(self) -> tuple[int, int] | None:
         """Where the cursor's word sits in its line, or None on a line with no words."""
@@ -364,23 +379,26 @@ class ReviewCursor:
         return word[0] if word is not None else 0
 
 
-def _link_words(text: str, links: list[Link]) -> list[tuple[Link, int, int]]:
-    """Each link on a line with the word and the character it starts at, in the order they sit.
+def _link_words(text: str, links: list[Link]) -> list[tuple[Link, int, int, int]]:
+    """Each link on a line with the word it starts in and where its words start and end, in the
+    order they sit.
 
     A link whose place is known starts where its words do. One whose place isn't (a pack
     replaced its line) is found by its words, searching on from the one before, as links always
     were; one whose words aren't in the line is left out.
     """
     spans = [match.span() for match in re.finditer(r"\S+", text)]
+    ends = [end for _begin, end in spans]
 
     def word_at(column: int) -> int | None:
-        return next((number for number, (_begin, end) in enumerate(spans) if end > column), None)
+        number = bisect_right(ends, column)  # the first word ending after it
+        return number if number < len(spans) else None
 
-    found: list[tuple[Link, int, int]] = []
+    found: list[tuple[Link, int, int, int]] = []
     searched_to = 0
     for link in links:
         if link.placed and link.end <= len(text):
-            column = link.start
+            column, end = link.start, link.end
         else:
             if not link.text.strip():
                 continue
@@ -389,12 +407,12 @@ def _link_words(text: str, links: list[Link]) -> list[tuple[Link, int, int]]:
                 continue
             searched_to = start + len(link.text)
             column = start + len(link.text) - len(link.text.lstrip())
+            end = start + len(link.text.rstrip())
         word = word_at(column)
         if word is not None:
-            found.append((link, word, column))
+            found.append((link, word, column, end))
     found.sort(key=lambda item: item[2])
     return found
-
 
 def _word_key(text: str) -> str:
     """Letters and digits only, lowercased, so "north," and "North" both match "north"."""

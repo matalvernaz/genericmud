@@ -204,3 +204,59 @@ def test_reading_keeps_the_pin():
         method = getattr(cursor, name)
         method(1) if name == "recall" else method()
         assert cursor._pinned_column() == 4, name
+
+
+def _image_and_address() -> Line:
+    # An inline picture called map.png is offered as a link to it, found by its name; the text
+    # right after it holds an address, a link the engine placed exactly. One word holds both.
+    text = "map.png(https://example.com) here"
+    return Line(
+        text,
+        links=[
+            Link("map.png", "http://pictures.example/map.png"),
+            Link("https://example.com", "https://example.com", start=8, end=27),
+        ],
+    )
+
+
+def test_the_follow_key_acts_on_the_link_a_jump_announced():
+    buffer = Buffer()
+    buffer.append(_image_and_address())
+    cursor = ReviewCursor(buffer)
+    cursor.go_to(0)
+    picture = cursor.next_link(inclusive=True)
+    assert picture.command == "http://pictures.example/map.png"
+    assert cursor.link() is picture
+    address = cursor.next_link()
+    assert address.command == "https://example.com"
+    assert cursor.link() is address
+
+
+def test_the_caret_on_a_link_found_by_its_words_picks_that_link():
+    buffer = Buffer()
+    buffer.append(_image_and_address())
+    cursor = ReviewCursor(buffer)
+    cursor.go_to(0)
+    cursor.go_to_column(2)  # on "map"
+    assert cursor.link().command == "http://pictures.example/map.png"
+    cursor.go_to_column(12)  # on the address
+    assert cursor.link().command == "https://example.com"
+
+
+def test_jumping_along_a_line_of_thousands_of_links_is_quick():
+    import time
+
+    words = [f"w{number}" for number in range(20_000)]
+    text = " ".join(words)
+    links, position = [], 0
+    for word in words:
+        links.append(Link(word, word, start=position, end=position + len(word)))
+        position += len(word) + 1
+    buffer = Buffer()
+    buffer.append(Line(text, links=links))
+    cursor = ReviewCursor(buffer)
+    cursor.go_to(0)
+    started = time.perf_counter()
+    assert cursor.next_link(inclusive=True).command == "w0"
+    assert cursor.link().command == "w0"
+    assert time.perf_counter() - started < 1.0

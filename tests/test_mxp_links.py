@@ -397,3 +397,8 @@ def test_a_send_with_only_the_prompt_keyword_types_its_own_words():
     # PROMPT unquoted is the flag, not the command: the words go in the command box to finish.
     outcome = MxpParser().feed(SECURE + "<send prompt>tell Bob </send>")
     assert outcome.links == [Link("tell Bob", "tell Bob", insert=True)]
+
+
+def test_an_a_tag_with_no_href_is_still_no_link():
+    # Only <SEND> sends its own words: an <A> without an address is an anchor or decoration.
+    assert MxpParser().feed(SECURE + "<a>north</a> and <a name=\"x\">south</a>").links == []

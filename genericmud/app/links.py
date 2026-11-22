@@ -75,9 +75,11 @@ def _opened_form(address: str) -> str:
     """The address to open: the one written, with https:// in front of a bare "www." one.
 
     Only the scheme this client already trusts is ever put on the front, so a line of text can
-    never choose what kind of address is opened.
+    never choose what kind of address is opened. The scheme is what the address starts with: a
+    "www." address carrying another address in its query ("?next=https://...") is still a
+    "www." one, and left without https:// it would be typed at the MUD instead of opened.
     """
-    return address if "://" in address else "https://" + address
+    return address if address.lower().startswith(_LINK_URL_SCHEMES) else "https://" + address
 
 
 def bare_link_spans(

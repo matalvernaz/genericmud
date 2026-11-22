@@ -200,8 +200,9 @@ class MxpParser:
         # keeps where its text starts in the piece being read (an index into that piece's
         # fragments), the text it covered in earlier pieces of the line, and the link or the
         # variable's name. See _carry.
-        # A link also notes whether its tag named a command at all: one that didn't sends its
-        # own words, and one whose HREF is empty sends nothing and is no link.
+        # A link also notes whether it sends its own words: a <SEND> that names no command at
+        # all does, as the spec has it. One whose HREF is empty sends nothing and is no link, and
+        # an <A> with no HREF (an anchor, or decoration) never was one.
         self._pending_link: tuple[int, list[str], Link, bool] | None = None
         self._pending_var: tuple[int, list[str], str] | None = None
         self._paragraph = False  # between <P> and </P> newlines are not breaks
@@ -563,9 +564,10 @@ class MxpParser:
                     self._next_mark = (number + 1) % LINK_MARK_COUNT
                     out.append(link_mark(number))
                     link = replace(link, mark=number)
-                self._pending_link = (len(out), [], link, _names_a_command(attrs))
+                uses_words = name == "send" and not _names_a_command(attrs)
+                self._pending_link = (len(out), [], link, uses_words)
             elif name in ("send", "a") and closing and self._pending_link is not None:
-                start, carried, link, named = self._pending_link
+                start, carried, link, uses_words = self._pending_link
                 self._pending_link = None
                 # Its words are what the player was shown, piece by piece, or a link whose
                 # words use an entity (&amp;, or a MUD's own &target;) could never be found in
@@ -576,7 +578,7 @@ class MxpParser:
                     "".join([*carried, self._shown("".join(out[start:]), locked)])
                 )
                 finished = _with_words(link, words)
-                if not named and words:
+                if uses_words and words:
                     # A <SEND> that names no command sends its own words: <send>north</send>
                     # goes north, as the spec has it. One whose HREF is empty names nothing to
                     # send and stays no link at all.
@@ -599,9 +601,9 @@ class MxpParser:
         line full of links costs what they say and no more.
         """
         if self._pending_link is not None:
-            start, carried, link, named = self._pending_link
+            start, carried, link, uses_words = self._pending_link
             carried.append(self._shown("".join(out[start:]), locked))
-            self._pending_link = (0, carried, link, named)
+            self._pending_link = (0, carried, link, uses_words)
         if self._pending_var is not None:
             start, carried, var_name = self._pending_var
             carried.append("".join(out[start:]))

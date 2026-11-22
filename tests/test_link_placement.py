@@ -406,3 +406,45 @@ def test_what_the_colour_pass_keeps_rebuilds_exactly_what_it_returns():
         kept = kept_characters(text)
         joined = "".join(span.text for span in parse_ansi(text))
         assert "".join(c for c, keep in zip(text, kept, strict=True) if keep) == joined
+
+
+def test_a_line_dense_with_links_over_entities_is_placed_quickly():
+    import time
+
+    line = SECURE + '<send href="x">&amp;</send> ' * 5000
+    started = time.perf_counter()
+    outcome = MxpParser(mark_links=True).feed(line)
+    assert time.perf_counter() - started < 2.0
+    assert len(outcome.links) == 5000
+    app, _sent, _backend, posted = _build()
+    started = time.perf_counter()
+    _say(app, line)
+    assert time.perf_counter() - started < 4.0
+    assert len(_lines(posted)[-1]["links"]) == 5000
+
+
+def test_remapping_through_edits_matches_the_one_position_at_a_time_reading():
+    generator = random.Random(3)
+
+    def one_at_a_time(position, edits):
+        shift = 0
+        for start, end, new_length in edits:
+            if end <= position:
+                shift += new_length - (end - start)
+                continue
+            if start < position:
+                return start + shift + new_length
+            break
+        return position + shift
+
+    for _ in range(3000):
+        edits, at = [], 0
+        for _ in range(generator.randint(0, 6)):
+            start = at + generator.randint(0, 4)
+            end = start + generator.randint(0, 5)
+            edits.append((start, end, generator.randint(0, 4)))
+            at = end
+        positions = [generator.randint(0, at + 5) for _ in range(generator.randint(0, 8))]
+        assert marks.remap_through_edits(positions, edits) == [
+            one_at_a_time(position, edits) for position in positions
+        ]

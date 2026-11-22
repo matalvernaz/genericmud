@@ -124,16 +124,20 @@ def remap_through_edits(
     """
     if not edits:
         return list(positions)
-    mapped: list[int] = []
-    for position in positions:
-        shift = 0
-        landed: int | None = None
-        for start, end, new_length in edits:
-            if end <= position:
-                shift += new_length - (end - start)
-                continue
-            if start < position:
-                landed = start + shift + new_length
-            break
-        mapped.append(landed if landed is not None else position + shift)
+    # One pass over the positions in order and the edits in order, so a line with thousands of
+    # each costs what they are and not one times the other.
+    mapped = [0] * len(positions)
+    shift = 0
+    upcoming = 0
+    for index in sorted(range(len(positions)), key=positions.__getitem__):
+        position = positions[index]
+        while upcoming < len(edits) and edits[upcoming][1] <= position:
+            start, end, new_length = edits[upcoming]
+            shift += new_length - (end - start)
+            upcoming += 1
+        if upcoming < len(edits) and edits[upcoming][0] < position:
+            start, _end, new_length = edits[upcoming]
+            mapped[index] = start + shift + new_length
+        else:
+            mapped[index] = position + shift
     return mapped
