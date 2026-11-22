@@ -3056,7 +3056,27 @@ class MushclientPack:
             return directory(client / "sounds" if client is not None else None)
         if number == 82:  # preferences DB pathname; host-owned and never opened by packs
             return (client / "MUSHclient_prefs.sqlite").as_posix() if client is not None else ""
+        if number == 85:  # plugin state files directory
+            return directory(self._state_dir())
         return ""
+
+    def _state_dir(self) -> Path | None:
+        """Where plugins keep their state files: MUSHclient's worlds/plugins/state, inside the
+        pack, made if it isn't there.
+
+        Erion's soundpack keeps its settings in a SQLite database there (issue #129), named by
+        the world and the plugin. Inside the pack, the sqlite3 bridge's confinement already lets
+        it open one, and a pack update never touches files the pack didn't ship.
+        """
+        client = self._client_dir
+        if client is None:
+            return None
+        state = client / "worlds" / "plugins" / "state"
+        try:
+            state.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return None
+        return state
 
     def _get_info_value(self, number: int):
         """GetInfo's yes/no (100s), counter (200s) and date (300s) codes."""

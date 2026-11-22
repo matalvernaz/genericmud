@@ -832,6 +832,62 @@ def test_sqlite_bridge_prepared_statement_round_trip(tmp_path):
     assert sink.sent == ["101", "100", "tell:hello"]
 
 
+def _sqlite_pack(tmp_path):
+    sink = RecordingSink()
+    pack = MushclientPack(
+        ScriptApi(AutomationEngine(sink), source="m", base_dir=str(tmp_path))
+    )
+    return pack, sink
+
+
+def test_getinfo_85_is_the_plugin_state_folder_and_it_is_made(tmp_path):
+    # Issue #129: Erion's soundpack keeps its settings in a database in MUSHclient's plugin
+    # state folder, and gave up when GetInfo(85) answered "".
+    pack, sink = _sqlite_pack(tmp_path)
+    pack.load_source("<muclient><script><![CDATA[Send(GetInfo(85))]]></script></muclient>")
+    state = tmp_path.resolve() / "worlds" / "plugins" / "state"
+    assert sink.sent == [state.as_posix() + "/"]
+    assert state.is_dir()
+
+
+def test_a_transaction_split_across_exec_calls_commits_in_the_state_folder(tmp_path):
+    # BEGIN, the statements and COMMIT are separate calls, as packs write them. The bridge used
+    # to commit the open transaction before each exec, so the pack's own COMMIT failed.
+    pack, sink = _sqlite_pack(tmp_path)
+    pack.load_source(
+        "<muclient><script><![CDATA["
+        "local db = assert(sqlite3.open(GetInfo(85) .. 'settings.sqlite3')); "
+        "Send(tostring(db:exec('BEGIN IMMEDIATE'))); "
+        "Send(tostring(db:exec('CREATE TABLE settings (name TEXT PRIMARY KEY, value TEXT)'))); "
+        "local put = db:prepare('INSERT INTO settings VALUES (?, ?)'); "
+        "put:bind_values('music', '0'); Send(tostring(put:step())); put:finalize(); "
+        "Send(tostring(db:exec('COMMIT'))); db:close()"
+        "]]></script></muclient>"
+    )
+    assert sink.sent == ["0", "0", "101", "0"]
+    database = tmp_path / "worlds" / "plugins" / "state" / "settings.sqlite3"
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("SELECT name, value FROM settings").fetchall() == [
+            ("music", "0")
+        ]
+
+
+def test_a_rolled_back_transaction_leaves_nothing_behind(tmp_path):
+    pack, sink = _sqlite_pack(tmp_path)
+    pack.load_source(
+        "<muclient><script><![CDATA["
+        "local db = assert(sqlite3.open(GetInfo(85) .. 'scratch.sqlite3')); "
+        "db:exec('CREATE TABLE notes (body TEXT)'); "
+        "Send(tostring(db:exec('BEGIN IMMEDIATE'))); "
+        "Send(tostring(db:exec(\"INSERT INTO notes VALUES ('kept?')\"))); "
+        "Send(tostring(db:exec('ROLLBACK'))); "
+        "for row in db:nrows('SELECT count(*) AS n FROM notes') do Send(tostring(row.n)) end; "
+        "db:close()"
+        "]]></script></muclient>"
+    )
+    assert sink.sent == ["0", "0", "0", "0"]
+
+
 def test_sppath_defaults_to_pack_dir_for_the_sounds_fallback(tmp_path):
     # The fix for the Erion installer case (loaded with @sppath=''): default @sppath to the pack
     # dir so _find_in_sounds_dir has somewhere to walk, mirroring the VIPMud default.

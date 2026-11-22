@@ -63,7 +63,11 @@ def make_sqlite_bridge(lua, base_dir: str | None, anchor: Callable[[], Path | No
         if path is None or not path.parent.is_dir():
             return None
         try:
-            connection = sqlite3.connect(path, isolation_level=None)
+            # SQLite's own autocommit, with no transaction control of Python's: a pack's
+            # "BEGIN IMMEDIATE", its statements and its "COMMIT" are separate exec calls, and
+            # Python's legacy mode commits an open transaction before each executescript, so
+            # the pack's COMMIT found none and failed (issue #129).
+            connection = sqlite3.connect(path, autocommit=True)
             connection.set_authorizer(_no_attach)
             connection.row_factory = sqlite3.Row
         except sqlite3.Error:
