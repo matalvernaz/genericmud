@@ -315,6 +315,10 @@ class EngineApp(
         self._mxp_login_sent: set[str] = set()
         self._mxp_login_armed = False
         self._hidden_answers = 0  # lines typed since the MUD hid input; the second gets a hint
+        # Whether the MUD's latest line asked for a password: the next hidden line answers it,
+        # and an answer that was asked for is no sign the hiding has outstayed its welcome.
+        self._password_asked = False
+        self._still_hidden_said = False  # the hint, once per hidden stretch
         self._hidden_timeout_token = 0  # bumped to cancel a pending hidden-input timeout
         self._ticks_armed = False  # the OnPluginTick chain is scheduled at most once
         self._closed = False  # ends the tick chain at shutdown

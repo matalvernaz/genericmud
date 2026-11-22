@@ -43,6 +43,10 @@ DEFAULT_PASS_PROMPTS = (
     r"^\s*pass(?:word|phrase)\s*$",
     r"^\s*contrase(?:ñ|n)a\s*[:>?]?\s*$",
 )
+# A line that mentions a password at all, in the same two languages: what tells a hidden answer
+# the MUD asked for (a password, its retype) from one it didn't. Loose on purpose, since all it
+# ever does is keep a hint from being spoken.
+ASKS_FOR_A_PASSWORD = re.compile(r"\b(?:pass(?:word|phrase)s?|contrase(?:ñ|n)as?)\b", re.IGNORECASE)
 _MAX_LINES_AFTER_USER = 6  # give up watching for the password prompt after this many lines
 # Watch for the name prompt only near connect: covers banners/menus without leaving the
 # credential armed for a later in-game "by what name..." line if the prompt never matched.

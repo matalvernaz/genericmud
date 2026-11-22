@@ -25,7 +25,8 @@ class AutologinMixin:
     Part of EngineApp (engine_app.py). Every attribute below starts in its constructor.
 
     Writes: _hidden_answers, _hidden_timeout_token, _input_masked, _login, _login_phase_started,
-    _mxp_login_armed, _mxp_login_sent, _password_guard, _pending_login, _post_connect_sent.
+    _mxp_login_armed, _mxp_login_sent, _password_asked, _password_guard, _pending_login,
+    _post_connect_sent, _still_hidden_said.
 
     Reads: _clock, _diag, _post, _schedule, _send, _withdraw_option, connect_method, credentials,
     log_commands, name, post_connect_commands, pueblo_enabled.
@@ -158,11 +159,17 @@ class AutologinMixin:
                 self._login.disarm()  # the user is answering the prompt themselves
             if self.log_commands:
                 self._log("> ***")
+        # One answer per asking: a MUD that asks for a password and then for it again (a new
+        # character's retype, or a retry after a mismatch) gets each answer it asked for, and
+        # only a line nobody asked for counts against the hiding.
+        asked = self._password_asked
+        self._password_asked = False
         self._send(text)
         self._hidden_answers += 1
-        if self._hidden_answers == 2:
+        if self._hidden_answers >= 2 and not asked and not self._still_hidden_said:
             # Once per hidden stretch, like Mudlet's box saying "still hidden" when it comes
             # back: a MUD that never ends the hiding leaves this the only clue to the way out.
+            self._still_hidden_said = True
             self._speak_system(
                 "The MUD is still hiding what you type. If it shouldn't be, press Escape.",
                 interrupt=False,
@@ -221,6 +228,7 @@ class AutologinMixin:
             return
         self._input_masked = masked
         self._hidden_answers = 0
+        self._still_hidden_said = False
         if not masked:
             # Hiding a prompt keeps a pending timeout: auto-login's password may have gone
             # out before the WILL ECHO for it arrived.

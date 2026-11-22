@@ -22,6 +22,7 @@ from genericmud.protocol.msp import SoundCue, parse_msp_line
 from genericmud.protocol.mxp import MxpParser, resolve_image_url
 from genericmud.render.ansi import kept_characters, parse_ansi
 from genericmud.safepath import is_unsafe
+from genericmud.session.login import ASKS_FOR_A_PASSWORD
 from genericmud.sound.bus import DEFAULT_CATEGORY, MUSIC_CATEGORY
 
 _PROMPT_IDLE_FLUSH_SECONDS = 0.25  # emit a newline-less prompt if the server sends no more data
@@ -143,7 +144,7 @@ class IncomingTextMixin:
 
     Writes: _msdp_offered, _msp_url, _mxp, _mxp_continues, _mxp_held_lines, _mxp_join,
     _mxp_join_images, _mxp_join_links, _mxp_negotiated, _mxp_timer_armed, _mxp_timer_token,
-    _pending, _prompt_gen, _pueblo_image_noted, _pueblo_links_noted.
+    _password_asked, _pending, _prompt_gen, _pueblo_image_noted, _pueblo_links_noted.
 
     Reads: _closed, _diag, _login, _mush_packs, _password_guard, _post, _pueblo, _raw_send,
     _schedule, _walk, buffer, channels, codec, engine, images_url, interrupt_mode, media,
@@ -487,6 +488,9 @@ class IncomingTextMixin:
             # to leave out stays out, which is how a repeating notice is read (or silenced) now
             # without being written down for the next reader of the file.
             self._log(line.plain_text)
+        # Whatever the connect method, note whether the MUD's latest line asked for a password,
+        # so typing that answers it isn't taken for typing the MUD forgot to stop hiding.
+        self._password_asked = ASKS_FOR_A_PASSWORD.search(line.plain_text) is not None
         if self._login is not None and not self._login.done:
             self._login.feed(line.plain_text)  # answer name/password prompts
             if self._login.done:
