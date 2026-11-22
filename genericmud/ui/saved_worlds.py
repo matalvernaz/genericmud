@@ -12,9 +12,15 @@ from pathlib import Path
 import wx
 
 from genericmud.config.world_files import WORLD_FILE_ROOTS
-from genericmud.config.worlds import World, config_dir, load_worlds, save_worlds
+from genericmud.config.worlds import (
+    DEFAULT_CONNECT_METHOD,
+    World,
+    config_dir,
+    load_worlds,
+    save_worlds,
+)
 from genericmud.packs import PackError, slugify
-from genericmud.packs.world_share import export_world, import_world
+from genericmud.packs.world_share import export_world, import_world, login_method_refusal
 from genericmud.safepath import world_component
 from genericmud.ui.connect_dialog import (
     _ID_DELETE_WORLD,
@@ -403,6 +409,19 @@ class SavedWorldsMixin:
             except (OSError, ValueError, PackError) as error:
                 self.announce(f"Import failed: {error}")
             else:
+                # A zip may name a login method, but never one that would send a login the
+                # player already saved to the zip's own host.
+                refusal = login_method_refusal(world, load_worlds(), self._credentials)
+                if refusal is not None:
+                    world.connect_method = DEFAULT_CONNECT_METHOD
                 if self._save_world(world):
-                    self.announce(f"Imported {world.name}. It's in the saved-world list now.")
+                    note = (
+                        f" Its login method was left on No auto-connect, because {refusal}."
+                        " To choose one, edit the world from the saved-world list, Ctrl+O."
+                        if refusal is not None
+                        else ""
+                    )
+                    self.announce(
+                        f"Imported {world.name}. It's in the saved-world list now.{note}"
+                    )
         dialog.Destroy()

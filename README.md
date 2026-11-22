@@ -913,7 +913,12 @@ never an address on your own network except the machine the MUD runs on.
 your triggers, aliases, hotkeys, channels, every sound file they use, and its
 automation scripts — as one zip. Send it to a friend; they pick **File → Import
 a World** and the whole thing lands in their Connect dialog, sounds and scripts
-included.
+included. The zip says how the world logs in (the login method, never your
+username or password) and how it stacks commands, so a MUD can share a world
+that is set up the way it needs. If a world by that name is already saved, or a
+login is already saved under the name, the imported world's login method is left
+on No auto-connect and you're told why: a zip can't decide where a login you
+saved is sent.
 
 ## Keeping it up to date
 

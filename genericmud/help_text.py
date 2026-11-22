@@ -129,6 +129,9 @@ Sharing:
 File menu, Export This World saves your whole setup — connection, triggers,
 sounds, and automation scripts — as one zip. A friend imports it with File
 menu, Import a World.
+The zip carries the login method and command stacking, never the login itself.
+An imported world that replaces a saved one, or whose name already has a saved
+login, starts on No auto-connect.
 
 The full shortcut list is under Help, Keyboard Shortcuts.
 """

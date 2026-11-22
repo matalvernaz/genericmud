@@ -37,6 +37,13 @@ class CredentialStore(Protocol):
 
     def delete(self, world: str) -> None: ...
 
+    def has_login(self, world: str) -> bool | None:
+        """Whether anything is kept under ``world``: False only when the store can say there
+        is nothing, None when it can't say (a locked or unreadable store). :meth:`get` answers
+        None for both, which is right for logging in and wrong for deciding that no login
+        exists."""
+        ...
+
 
 class PlaintextCredentialStore:
     def __init__(self, path: str | Path) -> None:
@@ -61,6 +68,18 @@ class PlaintextCredentialStore:
         data = self._load()
         if data.pop(world, None) is not None:
             self._save(data)
+
+    def has_login(self, world: str) -> bool | None:
+        if not self._path.exists():
+            return False
+        try:
+            with open(self._path, encoding="utf-8") as handle:
+                data = json.load(handle)
+        except (OSError, ValueError):
+            return None  # there is a file, and what is in it can't be read
+        if not isinstance(data, dict):
+            return None
+        return world in data
 
     def _load(self) -> dict:
         if not self._path.is_file():
@@ -115,6 +134,13 @@ class KeyringCredentialStore:
     def set(self, world: str, username: str, password: str) -> None:
         payload = json.dumps({"username": username, "password": password})
         self._keyring.set_password(self._service, world, payload)
+
+    def has_login(self, world: str) -> bool | None:
+        try:
+            raw = self._keyring.get_password(self._service, world)
+        except Exception:  # noqa: BLE001 - locked or gone: it can't say what it holds
+            return None
+        return raw is not None
 
     def delete(self, world: str) -> None:
         try:

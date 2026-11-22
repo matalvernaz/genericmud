@@ -5,7 +5,8 @@ and sandboxed automation scripts into one file a friend can be sent; import
 unpacks that file into the local userpacks tree and hands back a :class:`World`
 ready to save and connect. The zip layout is flat and boring on purpose::
 
-    world.json      {"name", "host", "port", "tls", "encoding"}
+    world.json      {"name", "host", "port", "tls", "encoding", "connect_method",
+                     "command_stacking", "command_separator"}
     rules.json      the soundpack builder's rules (optional)
     sounds/...      cue files referenced by the rules (optional)
     scripts/*.lua   sandboxed per-world automation scripts (optional)
@@ -21,9 +22,10 @@ import json
 import shutil
 import tempfile
 import zipfile
+from collections.abc import Iterable
 from pathlib import Path
 
-from genericmud.config.worlds import World, parse_port
+from genericmud.config.worlds import DEFAULT_CONNECT_METHOD, World, parse_port
 from genericmud.packs.store import extract_pack
 from genericmud.packs.user_rules import RULES_FILENAME, SOUNDS_DIRNAME
 from genericmud.protocol.charset import normalize_encoding
@@ -46,10 +48,15 @@ def export_world(world: World, pack_dir: Path | None, dest: Path) -> int:
     useful "here's how to connect" share.
     """
     # The encoding travels with the world: a friend connecting to the same KOI8-R MUD needs
-    # it as much as the port. The sounds folder does not; it's a path on this machine.
+    # it as much as the port. So do the way it logs in and its command stacking (issue #128):
+    # a MUD sharing a world for its players knows which login method answers its prompts, and
+    # neither is a secret -- the username and password stay in the credential store. The
+    # sounds folder does not travel; it's a path on this machine.
     meta = {
         "name": world.name, "host": world.host, "port": world.port, "tls": world.tls,
-        "encoding": world.encoding,
+        "encoding": world.encoding, "connect_method": world.connect_method,
+        "command_stacking": world.command_stacking,
+        "command_separator": world.command_separator,
     }
     count = 1
     with zipfile.ZipFile(dest, "w", compression=zipfile.ZIP_DEFLATED) as archive:
@@ -123,10 +130,42 @@ def import_world(zip_path: Path, userpacks_root: Path) -> World:
         port = parse_port(meta.get("port") or 23)
     except ValueError:
         port = 23
+    # Anything missing or unusable becomes what a new world starts with, as World's own
+    # checks decide: an older zip, or one written by hand, still imports.
     return World(
         name=name, host=host, port=port, tls=meta.get("tls") is True,
         encoding=normalize_encoding(meta.get("encoding")),
+        connect_method=meta.get("connect_method"),
+        command_stacking=meta.get("command_stacking") is not False,
+        command_separator=meta.get("command_separator"),
     )
+
+
+def login_method_refusal(
+    world: World, saved_worlds: Iterable[World], credentials: object
+) -> str | None:
+    """Why an imported world may not keep the login method its zip came with, or None.
+
+    Logins are kept by world name, and a zip names its own host. If a login is already kept
+    under the name the import lands on, the zip's method would send that login to the zip's
+    host on the next connect, without the player having chosen either. So the method is only
+    kept when the import adds a new world AND the credential store can say there is no login
+    under its name. Replacing a saved world never keeps it, whatever the store says (its login
+    stays with the name, and a store can match names in its own way); a store that can't
+    answer, or isn't there, counts as one that might hold a login.
+    """
+    if world.connect_method == DEFAULT_CONNECT_METHOD:
+        return None
+    name = world.name.casefold()
+    if any(saved.name.casefold() == name for saved in saved_worlds):
+        return "it replaces a saved world, whose login stays with that name"
+    has_login = getattr(credentials, "has_login", None)
+    stored = has_login(world.name) if has_login is not None else None
+    if stored is False:
+        return None
+    if stored is True:
+        return "a login is already saved under that name"
+    return "the saved logins couldn't be checked"
 
 
 def _unique_pack_dir(root: Path, name: str) -> tuple[Path, str]:
