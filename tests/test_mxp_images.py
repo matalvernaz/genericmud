@@ -262,3 +262,39 @@ def test_enter_on_a_letter_the_mud_linked_follows_the_muds_link_not_the_pictures
     enter(1)  # on "map": only the picture's link is there
     opened = [message for message in posted if message.get("type") == protocol.OPEN_URL]
     assert [message.get("url") for message in opened] == [ART + "map.png"]
+
+
+def _picture_under_a_link():
+    # The MUD links the very words that name the picture: both links start on the same letter.
+    from genericmud.bridge import protocol
+
+    app, sent, backend, posted = _app(images_url=ART)
+    _say(app, SECURE + '<IMAGE fname="map.png"><send href="look map">map.png</send> here')
+
+    def opened() -> list[str]:
+        return [m.get("url") for m in posted if m.get("type") == protocol.OPEN_URL]
+
+    return app, sent, backend, opened
+
+
+def test_two_links_starting_on_the_same_letter_are_both_reached_jumping_forward():
+    app, sent, backend, opened = _picture_under_a_link()
+    for _ in range(2):
+        app.on_ws_message({"type": "key", "key": "alt+pagedown"})
+        app.on_ws_message({"type": "key", "key": "alt+enter"})
+    assert sent == ["look map"]
+    assert opened() == [ART + "map.png"]
+    app.on_ws_message({"type": "key", "key": "alt+pagedown"})
+    assert backend.spoken[-1] == "no more links"
+
+
+def test_two_links_starting_on_the_same_letter_are_both_reached_jumping_back():
+    app, sent, backend, opened = _picture_under_a_link()
+    app.on_ws_message({"type": "key", "key": "alt+pageup"})
+    app.on_ws_message({"type": "key", "key": "alt+enter"})
+    assert opened() == [ART + "map.png"]
+    app.on_ws_message({"type": "key", "key": "alt+pageup"})
+    app.on_ws_message({"type": "key", "key": "alt+enter"})
+    assert sent == ["look map"]
+    app.on_ws_message({"type": "key", "key": "alt+pageup"})
+    assert backend.spoken[-1] == "no more links"

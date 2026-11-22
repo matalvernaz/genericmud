@@ -304,11 +304,13 @@ class ReviewCursor:
             return None
         start = self._index()
         here = self._here()
+        jumped = self._pinned_link()
         for index in range(start, len(self._buffer)):
             line = self._buffer[index]
-            for link, word, column, _end in _link_words(line.plain_text, line.links):
-                if index == start and (column < here or (column == here and not inclusive)):
-                    continue
+            found = _link_words(line.plain_text, line.links)
+            if index == start:
+                found = _links_after(found, here, jumped, inclusive=inclusive)
+            for link, word, column, _end in found:
                 self._park(index, word, column, link)
                 return link
         return None
@@ -324,11 +326,13 @@ class ReviewCursor:
             return None
         start = self._index()
         here = self._here()
+        jumped = self._pinned_link()
         for index in range(start, -1, -1):
             line = self._buffer[index]
-            for link, word, column, _end in reversed(_link_words(line.plain_text, line.links)):
-                if index == start and not from_line_end and column >= here:
-                    continue
+            found = _link_words(line.plain_text, line.links)
+            if index == start and not from_line_end:
+                found = _links_before(found, here, jumped)
+            for link, word, column, _end in reversed(found):
                 self._park(index, word, column, link)
                 return link
         return None
@@ -416,6 +420,33 @@ def _link_words(text: str, links: list[Link]) -> list[tuple[Link, int, int, int]
             found.append((link, word, column, end))
     found.sort(key=lambda item: item[2])
     return found
+
+def _links_after(
+    found: list[tuple[Link, int, int, int]], here: int, jumped: Link | None, *, inclusive: bool
+) -> list[tuple[Link, int, int, int]]:
+    """The links on the cursor's line that come after it.
+
+    After a jump, the ones after the link it parked on, in order: two links can start on the
+    same character (a picture found by its name and the MUD's link over those words), and
+    counting by character alone would skip the second for good.
+    """
+    if jumped is not None:
+        for position, item in enumerate(found):
+            if item[0] is jumped:
+                return found[position + 1:]
+    return [item for item in found if item[2] > here or (inclusive and item[2] == here)]
+
+
+def _links_before(
+    found: list[tuple[Link, int, int, int]], here: int, jumped: Link | None
+) -> list[tuple[Link, int, int, int]]:
+    """The links on the cursor's line that come before it; see :func:`_links_after`."""
+    if jumped is not None:
+        for position, item in enumerate(found):
+            if item[0] is jumped:
+                return found[:position]
+    return [item for item in found if item[2] < here]
+
 
 def _word_key(text: str) -> str:
     """Letters and digits only, lowercased, so "north," and "North" both match "north"."""
