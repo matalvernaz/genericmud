@@ -8,6 +8,24 @@ fails the build on purpose.
 
 Entries start at 0.7.1. Earlier releases were tagged before this file existed.
 
+## 0.30.2 — 2026-11-24
+
+**Soundpacks**
+
+* Your soundpack's commands now work while a MUD hides what you type. genericMud used to send
+  everything typed then straight to the MUD, so on Erion the soundpack's own commands, such as
+  volup and sound music, sometimes went to the game, which said they weren't commands. MUSHclient
+  keeps running a soundpack's commands while typing is hidden, and now genericMud does too, your
+  own aliases included. RareBird15 reported it.
+* When a MUD asks for a password as it hides your typing, what you type still goes straight to
+  the MUD exactly as typed, and no soundpack or alias sees it, until it stops hiding. genericMud
+  now knows a password prompt in English, Spanish, Catalan, Portuguese, French, German, Dutch,
+  the Scandinavian languages, Finnish, Polish, Czech, Slovak, Russian, Ukrainian, Turkish and
+  Hungarian, or by PIN in capitals. At a prompt worded any other way, an alias that matches
+  what you type will see it, as in MUSHclient.
+* The diagnostic log now notes when a MUD starts and stops hiding what you type, so it can show
+  why a command never reached your soundpack. It never records what you typed.
+
 ## 0.30.1 — 2026-11-22
 
 **Soundpacks**
