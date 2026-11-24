@@ -13,10 +13,10 @@ Entries start at 0.7.1. Earlier releases were tagged before this file existed.
 **Soundpacks**
 
 * Your soundpack's commands now work while a MUD hides what you type. genericMud used to send
-  everything typed then straight to the MUD, so on Erion the soundpack's own commands, such as
-  volup and sound music, sometimes went to the game, which said they weren't commands. MUSHclient
-  keeps running a soundpack's commands while typing is hidden, and now genericMud does too, your
-  own aliases included. RareBird15 reported it.
+  everything typed then straight to the MUD, past the soundpack, so a soundpack command typed
+  while a MUD hid typing went to the game instead. MUSHclient keeps running a soundpack's
+  commands while typing is hidden, and now genericMud does too, your own aliases included. Found
+  while looking into RareBird15's report of Erion's soundpack commands reaching the game.
 * When a MUD asks for a password as it hides your typing, what you type still goes straight to
   the MUD exactly as typed, and no soundpack or alias sees it, until it stops hiding. genericMud
   now knows a password prompt in English, Spanish, Catalan, Portuguese, French, German, Dutch,
