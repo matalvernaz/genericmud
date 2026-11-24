@@ -17,6 +17,10 @@ _HIDDEN_INPUT_TIMEOUT_SECONDS = 60.0
 # commands are typed anyway. A MUD that asks sends its prompt within a second or two; this
 # only exists so a MUD that never asks can't hold those commands for the whole session.
 _POST_CONNECT_FALLBACK_SECONDS = 30.0
+# A password prompt counts for the hiding the MUD starts after it while no more than this many
+# other lines with words have arrived in between. A MUD sends its WILL ECHO with the prompt, so
+# this only leaves room for a chat line or two slipping between them.
+_PROMPT_LOOKBACK_LINES = 3
 
 
 class AutologinMixin:
@@ -24,14 +28,15 @@ class AutologinMixin:
 
     Part of EngineApp (engine_app.py). Every attribute below starts in its constructor.
 
-    Writes: _hidden_answers, _hidden_timeout_token, _input_masked, _login, _login_phase_started,
-    _mxp_login_armed, _mxp_login_sent, _password_asked, _password_guard, _pending_login,
-    _post_connect_sent, _still_hidden_said.
+    Writes: _hidden_answers, _hidden_timeout_token, _input_masked, _lines_since_password_prompt,
+    _login, _login_phase_started, _mxp_login_armed, _mxp_login_sent, _password_asked,
+    _password_guard, _password_prompt_seen, _pending_login, _post_connect_sent,
+    _still_hidden_said.
 
     Reads: _clock, _diag, _post, _schedule, _send, _withdraw_option, connect_method, credentials,
-    log_commands, name, post_connect_commands, pueblo_enabled.
+    engine, log_commands, name, post_connect_commands, pueblo_enabled.
 
-    Calls: _speak_system, session_log (_log).
+    Calls: _speak_system, incoming_text (_unread_text_asks_for_password), session_log (_log).
 
     _mxp_login_armed is shared: autologin arms it; typed input disarms it.
     """
@@ -147,11 +152,23 @@ class AutologinMixin:
             self._send_post_connect()  # the login is done, so what follows can go
 
     def _dispatch_secret(self, text: str) -> None:
-        """Send what was typed while the server hides input (a password), exactly as typed.
+        """Send what was typed while the server hides input, keeping it out of sight.
 
-        The normal input path would rewrite or reroute it: auto-repeat swapped it for the
-        last command (the username), the separator split "abc;def" in two, ".2news" ran as
-        a speedwalk, and aliases, client commands and the breadcrumb trail all read it.
+        The normal input path would rewrite or reroute it: auto-repeat swapped a password for
+        the last command (the username), the separator split "abc;def" in two, ".2news" ran as
+        a speedwalk, and client commands and the breadcrumb trail read it. None of that happens
+        to a hidden line, and it is never shown or logged in the clear.
+
+        A password also stays away from every alias, which could read it or swallow it. A
+        hidden line is taken for one while a password prompt belongs to the hiding: the MUD's
+        last words before it began, or anything it has said since, so a password changed on a
+        busy MUD stays secret through the chatter that arrives before it is typed.
+
+        Without a password prompt, the soundpack's aliases and the player's own still get the
+        line, as they do in MUSHclient, which keeps running aliases while a MUD hides typing
+        and only stops showing it. Some MUDs hide typing at other times, or forget to stop,
+        and then Erion's soundpack commands went to the game instead (issue #132). Whatever
+        no alias takes goes out exactly as typed.
         """
         if text.strip():
             self._mxp_login_armed = False  # the user is answering the prompt themselves
@@ -164,7 +181,21 @@ class AutologinMixin:
         # only a line nobody asked for counts against the hiding.
         asked = self._password_asked
         self._password_asked = False
-        self._send(text)
+        if not self._password_prompt_seen and self._unread_text_asks_for_password():
+            self._password_prompt_seen = True  # a prompt not yet read as a line counts too
+        # A blank Enter answers a pager or a "press return" prompt, so it goes out as it is.
+        secret = self._password_prompt_seen or not text.strip()
+        if secret:
+            outgoing = [text]
+        else:
+            outgoing = self.engine.process_input(text, hidden=True)
+        for line in outgoing:
+            self._send(line)
+        if self._diag is not None:
+            # Which way the line went, never what it said.
+            self._diag.event(
+                "input.hidden_line", secret=secret, taken_by_alias=not outgoing,
+            )
         self._hidden_answers += 1
         if self._hidden_answers >= 2 and not asked and not self._still_hidden_said:
             # Once per hidden stretch, like Mudlet's box saying "still hidden" when it comes
@@ -192,10 +223,8 @@ class AutologinMixin:
     def _hidden_input_timed_out(self, token: int) -> None:
         if token != self._hidden_timeout_token or not self._input_masked:
             return
-        if self._diag is not None:
-            self._diag.event("input.unhidden", reason="timeout")
         self._withdraw_option(T.OPT_ECHO)  # so the MUD's next WILL ECHO is a fresh request
-        self.forget_hidden_input()
+        self.forget_hidden_input(reason="timeout")
         self._speak_system(
             "The MUD didn't say it had stopped hiding what you type, so genericMud stopped "
             "hiding it.",
@@ -206,31 +235,67 @@ class AutologinMixin:
         """Escape: treat typing as ordinary until the MUD hides it again (its next WILL ECHO)."""
         if not self._input_masked:
             return  # nothing hidden: Escape does nothing
-        self.forget_hidden_input()
+        self.forget_hidden_input(reason="escape")
         self._speak_system("Typing is no longer hidden.")
 
-    def forget_hidden_input(self) -> None:
+    def forget_hidden_input(self, reason: str = "connection") -> None:
         """Treat typing as ordinary again, for when no WONT ECHO is coming.
 
         The socket went away or was replaced (the window's Disconnect reports itself
         through on_connection_status too); a login prompt timed out; or the user pressed
-        Escape.
-        """
-        self._set_input_masked(False)
+        Escape. ``reason`` says which, in the diagnostic log.
 
-    def _set_input_masked(self, masked: bool) -> None:
+        A password prompt no hidden stretch has claimed goes too, even if nothing was hidden:
+        it was asked on a connection that is gone, or for typing that is now ordinary.
+        """
+        self._lines_since_password_prompt = None
+        self._set_input_masked(False, reason=reason)
+
+    def _set_input_masked(self, masked: bool, *, reason: str = "mud") -> None:
         """Track whether the server hides typed input; tell the renderer when that flips.
 
         The renderer keeps its own Up-arrow history, so it has to know as well, or the
         password is one keypress away for anyone at the keyboard.
+
+        Both flips go in the diagnostic log, the end with ``reason``: "mud", the usual way, for
+        its WONT ECHO, or what forget_hidden_input was told. A soundpack that stops hearing
+        commands is otherwise hard to tell apart from one that never got them.
         """
         if masked == self._input_masked:
             return
         self._input_masked = masked
         self._hidden_answers = 0
         self._still_hidden_said = False
+        # A password prompt the MUD showed just before hiding belongs to this hidden stretch,
+        # and to no other: once claimed it is gone, so the next hiding needs a prompt of its
+        # own. One that arrives during the stretch joins it as it comes.
+        self._password_prompt_seen = masked and self._lines_since_password_prompt is not None
+        if masked:
+            self._lines_since_password_prompt = None
         if not masked:
             # Hiding a prompt keeps a pending timeout: auto-login's password may have gone
             # out before the WILL ECHO for it arrived.
             self._hidden_timeout_token += 1
+        if self._diag is not None:
+            if masked:
+                self._diag.event("input.hidden", password_prompt=self._password_prompt_seen)
+            else:
+                self._diag.event("input.unhidden", reason=reason)
         self._post(protocol.input_masked(masked))
+
+    def _track_password_prompt(self, asks: bool, has_words: bool) -> None:
+        """Note one line from the MUD: whether it asked for a password, and whether it has words.
+
+        A prompt that arrives while typing is hidden joins that hidden stretch straight away
+        (ROM's "Password: " comes after its WILL ECHO), so a password changed on a busy MUD
+        stays secret through the chatter that arrives before it is typed. One that arrives in
+        the open waits for the hiding the MUD starts after it, for a few lines with words.
+        """
+        if asks and self._input_masked:
+            self._password_prompt_seen = True
+        elif asks:
+            self._lines_since_password_prompt = 0
+        elif has_words and self._lines_since_password_prompt is not None:
+            self._lines_since_password_prompt += 1
+            if self._lines_since_password_prompt > _PROMPT_LOOKBACK_LINES:
+                self._lines_since_password_prompt = None

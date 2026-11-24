@@ -20,7 +20,7 @@ from genericmud.protocol.marks import (
 )
 from genericmud.protocol.msp import SoundCue, parse_msp_line
 from genericmud.protocol.mxp import MxpParser, resolve_image_url
-from genericmud.render.ansi import kept_characters, parse_ansi
+from genericmud.render.ansi import kept_characters, parse_ansi, strip_ansi
 from genericmud.safepath import is_unsafe
 from genericmud.session.login import ASKS_FOR_A_PASSWORD
 from genericmud.sound.bus import DEFAULT_CATEGORY, MUSIC_CATEGORY
@@ -147,12 +147,12 @@ class IncomingTextMixin:
     _password_asked, _pending, _prompt_gen, _pueblo_image_noted, _pueblo_links_noted.
 
     Reads: _closed, _diag, _login, _mush_packs, _password_guard, _post, _pueblo, _raw_send,
-    _schedule, _walk, buffer, channels, codec, engine, images_url, interrupt_mode, media,
-    mxp_enabled, pueblo_enabled, sound, voice, word_index.
+    _schedule, _simulate_depth, _walk, buffer, channels, codec, engine, images_url,
+    interrupt_mode, media, mxp_enabled, pueblo_enabled, sound, voice, word_index.
 
-    Calls: autologin (_mxp_login, _send_post_connect, _set_input_masked), mud_data
-    (_dispatch_msdp_start, _handle_subnegotiation), server_media (_start_media, _stop_media),
-    session_log (_log).
+    Calls: autologin (_mxp_login, _send_post_connect, _set_input_masked, _track_password_prompt),
+    mud_data (_dispatch_msdp_start, _handle_subnegotiation), server_media (_start_media,
+    _stop_media), session_log (_log).
     """
 
     def on_telnet_event(self, event: T.Event) -> None:
@@ -188,10 +188,20 @@ class IncomingTextMixin:
             and event.command in (T.WILL, T.WONT)  # DO/DONT ask whether WE echo: not this
         ):
             # The server takes over echo (IAC WILL ECHO) right before a password prompt and
-            # releases it (WONT) afterward. While it holds echo, the input is a secret: keep
-            # it out of the session log, the command history, and the autoretype buffer, and
-            # send it exactly as typed (_dispatch_secret).
-            self._set_input_masked(event.command == T.WILL)
+            # releases it (WONT) afterward. While it holds echo, the input is hidden: keep it
+            # out of the session log, the command history, and the autoretype buffer, and send
+            # it as typed (_dispatch_secret says when aliases still see it).
+            self._set_input_masked(event.command == T.WILL, reason="mud")
+
+    def _unread_text_asks_for_password(self) -> bool:
+        """Whether text from the MUD that isn't a finished line yet asks for a password.
+
+        A "Password: " with no line ending waits for its GA or the idle flush, and an MXP
+        paragraph is gathered until it ends, so a quick typist (or a password manager) can
+        answer a prompt before it has been read as a line.
+        """
+        unread = strip_ansi(self._pending) + "\n" + self._mxp_join
+        return ASKS_FOR_A_PASSWORD.search(unread) is not None
 
     def _decode_server_bytes(self, data: bytes) -> str:
         """Decode server text in the world's encoding (see protocol/charset.py).
@@ -490,7 +500,12 @@ class IncomingTextMixin:
             self._log(line.plain_text)
         # Whatever the connect method, note whether the MUD's latest line asked for a password,
         # so typing that answers it isn't taken for typing the MUD forgot to stop hiding.
-        self._password_asked = ASKS_FOR_A_PASSWORD.search(line.plain_text) is not None
+        asks_for_password = ASKS_FOR_A_PASSWORD.search(line.plain_text) is not None
+        self._password_asked = asks_for_password
+        if not self._simulate_depth:
+            # A soundpack's Simulate is not the MUD asking: a pretend line saying "password"
+            # mustn't keep its commands from it, and pretend lines mustn't age a real prompt.
+            self._track_password_prompt(asks_for_password, bool(line.plain_text.strip()))
         if self._login is not None and not self._login.done:
             self._login.feed(line.plain_text)  # answer name/password prompts
             if self._login.done:

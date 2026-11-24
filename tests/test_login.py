@@ -181,13 +181,14 @@ def test_password_input_is_masked_in_the_log_while_server_echoes(tmp_path):
 
 
 def _app_at_a_password_prompt():
-    """An engine whose server has just taken over echo, the way it does for a password."""
+    """An engine whose server has asked for a password and taken over echo for it."""
     from genericmud.protocol import telnet as T
 
     sent: list[str] = []
     posted: list[dict] = []
     voice = VoiceRouter(RecordingBackend(), clock=lambda: 0.0)
     app = EngineApp(voice, send=sent.append, post=posted.append, keymap={})
+    app.on_telnet_event(DataReceived(b"Password:\r\n"))
     app.on_telnet_event(T.Negotiation(T.WILL, T.OPT_ECHO))
     return app, sent, posted
 

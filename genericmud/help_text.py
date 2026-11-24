@@ -74,6 +74,12 @@ wrote it.
 A world's details hold its username and password too, kept in your computer's
 own credential store, plus how that login is sent and any commands to type once
 you're connected.
+While the MUD hides what you type, your soundpack's commands and aliases still work.
+When it asks for a password as it starts hiding your typing, or while it hides it,
+what you type goes to it exactly as typed, unseen by any alias or soundpack, until
+it stops hiding. genericMud knows that question by the word for password in most
+European languages and Russian, or by PIN in capitals; at a prompt worded any other
+way, an alias that matches what you type will see it.
 Tab moves between the output box and the command box; typing while in the
 output box drops you back into the command box.
 

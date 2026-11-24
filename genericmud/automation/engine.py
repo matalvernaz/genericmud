@@ -1243,11 +1243,15 @@ class AutomationEngine:
                 stopped.add(rule.stop_scope)
         return line
 
-    def process_input(self, text: str) -> list[str]:
+    def process_input(self, text: str, *, hidden: bool = False) -> list[str]:
         """Run aliases against a user input line.
 
         Returns the lines to actually send: ``[text]`` when no alias matches, or
         ``[]`` when an alias consumes the input (its callback performs the sends).
+
+        ``hidden`` is for a line typed while the MUD hides typing: it might be a password
+        after all, so the diagnostic log never gets it, not even when a pattern runs out of
+        time on it.
         """
         stopped: set[str] = set()  # scopes an alias has stopped (see _Rule.stop_scope)
         consumed = False
@@ -1261,7 +1265,8 @@ class AutomationEngine:
                 rule.timed_out = True
                 if self.diag is not None:
                     self.diag.event("alias.timeout_disabled", source=rule.source or "?",
-                                    pattern=rule.pattern.pattern, line=text)
+                                    pattern=rule.pattern.pattern,
+                                    line="***" if hidden else text)
                 continue
             if match is None:
                 continue

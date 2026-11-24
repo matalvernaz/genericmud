@@ -43,10 +43,33 @@ DEFAULT_PASS_PROMPTS = (
     r"^\s*pass(?:word|phrase)\s*$",
     r"^\s*contrase(?:ñ|n)a\s*[:>?]?\s*$",
 )
-# A line that mentions a password at all, in the same two languages: what tells a hidden answer
-# the MUD asked for (a password, its retype) from one it didn't. Loose on purpose, since all it
-# ever does is keep a hint from being spoken.
-ASKS_FOR_A_PASSWORD = re.compile(r"\b(?:pass(?:word|phrase)s?|contrase(?:ñ|n)as?)\b", re.IGNORECASE)
+# A line that mentions a password at all, in the languages MUDs are most often written in. It
+# tells a hidden answer the MUD asked for (a password, its retype) from one it didn't, and it keeps
+# what is typed while a MUD hides typing for a password away from every alias (_dispatch_secret).
+# Loose on purpose: a wrong match only keeps a line secret, or a hint unspoken. PIN counts only in
+# capitals, since a pin is also something you pick up, and a lowercase match in a game's own text
+# would keep a soundpack's commands from it. Auto-login answers only DEFAULT_PASS_PROMPTS.
+_PASSWORD_WORDS = (
+    r"pass(?:word|phrase|code)s?",  # English
+    r"contrase(?:ñ|n)as?",  # Spanish
+    r"contraseny\w*",  # Catalan
+    r"senhas?",  # Portuguese
+    r"mots? de passe",  # French
+    r"(?:pass|kenn)w(?:o|ö|oe)rt\w*",  # German
+    r"wachtwoord\w*",  # Dutch
+    r"l(?:ö|o)senord\w*",  # Swedish
+    r"passord\w*",  # Norwegian
+    r"(?:adgangskode|kodeord)\w*",  # Danish
+    r"salasan\w*",  # Finnish
+    r"has(?:ł|l)(?:o|a|em|u|ach)",  # Polish
+    r"hesl(?:o|a|em|u|ech)",  # Czech and Slovak
+    r"парол\w*",  # Russian, Ukrainian, Bulgarian
+    r"(?:ş|s)ifre\w*",  # Turkish
+    r"jelsz\w*",  # Hungarian
+)
+ASKS_FOR_A_PASSWORD = re.compile(
+    r"(?i:\b(?:" + "|".join(_PASSWORD_WORDS) + r")\b)|\bPINs?\b"
+)
 _MAX_LINES_AFTER_USER = 6  # give up watching for the password prompt after this many lines
 # Watch for the name prompt only near connect: covers banners/menus without leaving the
 # credential armed for a later in-game "by what name..." line if the prompt never matched.

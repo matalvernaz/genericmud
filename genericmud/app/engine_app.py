@@ -318,6 +318,13 @@ class EngineApp(
         # Whether the MUD's latest line asked for a password: the next hidden line answers it,
         # and an answer that was asked for is no sign the hiding has outstayed its welcome.
         self._password_asked = False
+        # How many lines with words the MUD has sent since a password prompt that no hidden
+        # stretch has claimed yet, or None: the next hiding claims a prompt this recent
+        # (_track_password_prompt, _set_input_masked).
+        self._lines_since_password_prompt: int | None = None
+        # Whether a password prompt belongs to the current hidden stretch. While it does, every
+        # hidden line goes out exactly as typed and no alias sees it (_dispatch_secret).
+        self._password_prompt_seen = False
         self._still_hidden_said = False  # the hint, once per hidden stretch
         self._hidden_timeout_token = 0  # bumped to cancel a pending hidden-input timeout
         self._ticks_armed = False  # the OnPluginTick chain is scheduled at most once
