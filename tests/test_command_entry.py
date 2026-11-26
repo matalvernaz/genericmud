@@ -39,6 +39,7 @@ def _probe():
     from genericmud.config.keymap import load_keymap
     from genericmud.config.ui_prefs import UiPrefs
     from genericmud.config.worlds import World
+    from genericmud.protocol.telnet import DataReceived
     from genericmud.ui.command_buffer import CommandEntryCtrl
     from genericmud.ui.main_window import GenericMudFrame
     from genericmud.ui.session_panel import SessionPanel
@@ -345,6 +346,7 @@ def _probe():
         enter()
         enter()
         assert network == ["look", "south", "look", "south"]
+        alpha.app.on_telnet_event(DataReceived(b"Password:\r\n"))  # a password, not a command
         alpha.app._set_input_masked(True)
         alpha.input.WriteText("abc;def")
         enter()

@@ -34,9 +34,10 @@ class AutologinMixin:
     _still_hidden_said.
 
     Reads: _clock, _diag, _post, _schedule, _send, _withdraw_option, connect_method, credentials,
-    engine, log_commands, name, post_connect_commands, pueblo_enabled.
+    log_commands, name, post_connect_commands, pueblo_enabled.
 
-    Calls: _speak_system, incoming_text (_unread_text_asks_for_password), session_log (_log).
+    Calls: _speak_system, incoming_text (_unread_text_asks_for_password), session_log (_log),
+    typed_commands (_run_command, _typed_commands).
 
     _mxp_login_armed is shared: autologin arms it; typed input disarms it.
     """
@@ -154,21 +155,22 @@ class AutologinMixin:
     def _dispatch_secret(self, text: str) -> None:
         """Send what was typed while the server hides input, keeping it out of sight.
 
-        The normal input path would rewrite or reroute it: auto-repeat swapped a password for
-        the last command (the username), the separator split "abc;def" in two, ".2news" ran as
-        a speedwalk, and client commands and the breadcrumb trail read it. None of that happens
-        to a hidden line, and it is never shown or logged in the clear.
+        A hidden line is never shown, logged in the clear or kept for auto-repeat, and a blank
+        Enter goes out as it is, to answer a pager or a "press return" prompt.
 
-        A password also stays away from every alias, which could read it or swallow it. A
-        hidden line is taken for one while a password prompt belongs to the hiding: the MUD's
-        last words before it began, or anything it has said since, so a password changed on a
-        busy MUD stays secret through the chatter that arrives before it is typed.
+        A password goes out exactly as typed. The normal input path would rewrite or reroute
+        it: auto-repeat swapped a password for the last command (the username), the separator
+        split "abc;def" in two, ".2news" ran as a speedwalk, client commands and the
+        breadcrumb trail read it, and an alias could read it or swallow it. A hidden line is
+        taken for a password while a password prompt belongs to the hiding: the MUD's last
+        words before it began, or anything it has said since, so a password changed on a busy
+        MUD stays secret through the chatter that arrives before it is typed.
 
-        Without a password prompt, the soundpack's aliases and the player's own still get the
-        line, as they do in MUSHclient, which keeps running aliases while a MUD hides typing
-        and only stops showing it. Some MUDs hide typing at other times, or forget to stop,
-        and then Erion's soundpack commands went to the game instead (issue #132). Whatever
-        no alias takes goes out exactly as typed.
+        Without a password prompt, the line is ordinary typing that isn't shown, as in
+        MUSHclient, which keeps running aliases, speedwalks and command stacking while a MUD
+        hides typing and only stops showing it. Some MUDs hide typing at other times, or forget
+        to stop: on Erion, soundpack commands went to the game instead (issue #132), and so
+        did stacked commands, speedwalks and client commands.
         """
         if text.strip():
             self._mxp_login_armed = False  # the user is answering the prompt themselves
@@ -186,16 +188,15 @@ class AutologinMixin:
         # A blank Enter answers a pager or a "press return" prompt, so it goes out as it is.
         secret = self._password_prompt_seen or not text.strip()
         if secret:
-            outgoing = [text]
+            self._send(text)
+            handled = ["mud"]
         else:
-            outgoing = self.engine.process_input(text, hidden=True)
-        for line in outgoing:
-            self._send(line)
+            handled = [
+                self._run_command(command, hidden=True) for command in self._typed_commands(text)
+            ]
         if self._diag is not None:
             # Which way the line went, never what it said.
-            self._diag.event(
-                "input.hidden_line", secret=secret, taken_by_alias=not outgoing,
-            )
+            self._diag.event("input.hidden_line", secret=secret, handled=",".join(handled))
         self._hidden_answers += 1
         if self._hidden_answers >= 2 and not asked and not self._still_hidden_said:
             # Once per hidden stretch, like Mudlet's box saying "still hidden" when it comes

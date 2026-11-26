@@ -1,10 +1,11 @@
-"""Typing while a MUD hides it still reaches the soundpack, unless a password prompt is involved.
+"""Typing while a MUD hides it still works as usual, unless a password prompt is involved.
 
 Issue #132: Erion's soundpack commands ("volup", "sound music") sometimes went to the game, which
 answered "not a command", and the soundpack never heard them. While a MUD hides typing (IAC WILL
-ECHO), genericMud sent every typed line straight to the game, past every alias. MUSHclient, which
-these packs are written for, keeps running aliases while the MUD hides typing; it only stops
-showing what was typed. Now a hidden line skips the aliases only when a password prompt belongs to
+ECHO), genericMud sent every typed line straight to the game, past every alias, and never split it,
+walked it or ran it as a client command. MUSHclient, which these packs are written for, keeps
+running aliases, speedwalks and command stacking while the MUD hides typing; it only stops showing
+what was typed. Now a hidden line goes out exactly as typed only when a password prompt belongs to
 the hiding: the MUD's last words before it began, or anything it said since.
 """
 
@@ -90,14 +91,85 @@ def test_a_soundpack_command_typed_while_the_mud_hides_typing_reaches_the_soundp
     assert "Disabling music." in _shown(posted)
 
 
-def test_a_hidden_line_no_alias_takes_still_goes_out_exactly_as_typed():
+def test_stacked_commands_typed_while_the_mud_hides_typing_are_split():
     app, sent, posted = _with_soundpack()
     _hide(app)
-    for text in ("abc;def", ".2news", "..3n", "/map", "n"):
+    _type(app, "look;volup;score")
+    assert sent == ["look", "score"]  # each its own command, and the soundpack takes its own
+    assert "Increasing sound effects volume to 40." in _shown(posted)
+
+
+def test_a_speedwalk_typed_while_the_mud_hides_typing_walks():
+    app, sent, _posted = _app()
+    _hide(app)
+    _type(app, ".2n3w")
+    assert sent == ["n", "n", "w", "w", "w"]
+    assert app.nav.trail == ["n", "n", "w", "w", "w"]
+
+
+def test_a_client_command_typed_while_the_mud_hides_typing_runs_in_genericmud():
+    app, sent, _posted = _app()
+    _hide(app)
+    _type(app, "/alias greet = say hi;wave")
+    _type(app, "greet")
+    assert sent == ["say hi", "wave"]  # the alias was made, and works while hidden too
+
+
+def test_a_slash_command_genericmud_does_not_know_still_reaches_the_mud_while_hidden():
+    app, sent, _posted = _app()
+    _hide(app)
+    _type(app, "/who")
+    assert sent == ["/who"]  # some MUDs have slash commands of their own
+
+
+def test_a_direction_typed_while_the_mud_hides_typing_goes_on_the_breadcrumb_trail():
+    app, sent, _posted = _app()
+    _hide(app)
+    _type(app, "n")
+    assert sent == ["n"]
+    assert app.nav.trail == ["n"]
+
+
+def test_a_hidden_line_no_alias_takes_goes_out_as_typed():
+    app, sent, _posted = _with_soundpack()
+    _hide(app)
+    _type(app, "dance")
+    assert sent == ["dance"]
+
+
+def test_a_password_goes_out_exactly_as_typed_whatever_it_looks_like():
+    app, sent, posted = _with_soundpack()
+    _server(app, "Password:")
+    _hide(app)
+    for text in ("abc;def", ".2news", "..3n", "/alias a = b", "volup", "n"):
         _type(app, text)
-    assert sent == ["abc;def", ".2news", "..3n", "/map", "n"]  # not split, walked or run here
+    # Not split, walked, run as a client command or taken by the soundpack.
+    assert sent == ["abc;def", ".2news", "..3n", "/alias a = b", "volup", "n"]
     assert app.nav.trail == []
+    assert "Increasing sound effects volume to 40." not in _shown(posted)
     assert not any(line.startswith(">") for line in _shown(posted))  # and never shown
+
+
+def test_stacked_commands_typed_while_hidden_are_not_shown_and_log_as_one_line_of_stars(tmp_path):
+    app, sent, posted = _app(name="gw", log_dir=tmp_path)
+    app.echo_input = True
+    app._toggle_log()
+    _hide(app)
+    _type(app, "look;score")
+    assert sent == ["look", "score"]
+    assert not any(line.startswith(">") for line in _shown(posted))
+    log_text = next(tmp_path.glob("gw-*.log")).read_text(encoding="utf-8")
+    assert log_text.count("> ***") == 1  # one line typed, one line in the log
+    assert "look" not in log_text and "score" not in log_text
+
+
+def test_stacked_commands_count_as_one_line_typed_for_the_escape_reminder():
+    app, _sent, posted = _app()
+    _hide(app)
+    _type(app, "look;score")
+    assert not any("still hiding" in line for line in _shown(posted))  # one line so far
+    _type(app, "inventory")
+    assert sum("still hiding" in line for line in _shown(posted)) == 1
 
 
 def test_a_hidden_soundpack_command_is_not_kept_for_auto_repeat():
@@ -197,6 +269,8 @@ def test_the_diagnostic_log_records_the_hiding_but_never_what_was_typed():
     _hide(app)
     _type(app, "volup")
     _type(app, "dance")
+    _type(app, "volup;.2n")
+    _type(app, "/map")
     app.on_ws_message({"type": "key", "key": "escape"})
     hiding = [
         (stage, fields) for stage, fields in diag.events
@@ -204,11 +278,13 @@ def test_the_diagnostic_log_records_the_hiding_but_never_what_was_typed():
     ]
     assert hiding == [
         ("input.hidden", {"password_prompt": True}),
-        ("input.hidden_line", {"secret": True, "taken_by_alias": False}),
+        ("input.hidden_line", {"secret": True, "handled": "mud"}),
         ("input.unhidden", {"reason": "mud"}),
         ("input.hidden", {"password_prompt": False}),
-        ("input.hidden_line", {"secret": False, "taken_by_alias": True}),
-        ("input.hidden_line", {"secret": False, "taken_by_alias": False}),
+        ("input.hidden_line", {"secret": False, "handled": "alias"}),
+        ("input.hidden_line", {"secret": False, "handled": "mud"}),
+        ("input.hidden_line", {"secret": False, "handled": "alias,walk"}),
+        ("input.hidden_line", {"secret": False, "handled": "client"}),
         ("input.unhidden", {"reason": "escape"}),
     ]
     assert not any("hunter2" in repr(fields) for _stage, fields in diag.events)
@@ -292,6 +368,32 @@ def test_a_hidden_line_stays_out_of_the_log_when_an_alias_runs_out_of_time_on_it
     _hide(app)
     _type(app, "s3cret")
     assert sent == ["s3cret"]
+    assert diag.fields("alias.timeout_disabled")["line"] == "***"
+    assert not any("s3cret" in repr(fields) for _stage, fields in diag.events)
+
+
+class _RunawayOnSay(_RunawayPattern):
+    """Runs out of time only on a "say" line, which here only an alias makes."""
+
+    def search(self, text, **kwargs):
+        return self.match(text, **kwargs)
+
+    def match(self, text, **kwargs):
+        if text.startswith("say "):
+            raise TimeoutError("match budget exceeded")
+        return None
+
+
+def test_what_an_alias_makes_of_a_hidden_line_stays_out_of_the_log_too():
+    diag = RecordingDiag()
+    app, sent, _posted = _app(diag=diag)
+    _type(app, "/alias relay = say")
+    app.engine.add_alias("runaway", lambda ctx: None, name="runaway")
+    rule = next(rule for rule in app.engine._aliases if rule.name == "runaway")
+    rule.pattern = _RunawayOnSay()
+    _hide(app)
+    _type(app, "look;relay s3cret")
+    assert sent == ["look", "say s3cret"]
     assert diag.fields("alias.timeout_disabled")["line"] == "***"
     assert not any("s3cret" in repr(fields) for _stage, fields in diag.events)
 

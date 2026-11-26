@@ -189,8 +189,8 @@ class IncomingTextMixin:
         ):
             # The server takes over echo (IAC WILL ECHO) right before a password prompt and
             # releases it (WONT) afterward. While it holds echo, the input is hidden: keep it
-            # out of the session log, the command history, and the autoretype buffer, and send
-            # it as typed (_dispatch_secret says when aliases still see it).
+            # out of the session log, the command history, and the autoretype buffer
+            # (_dispatch_secret says when it goes out exactly as typed).
             self._set_input_masked(event.command == T.WILL, reason="mud")
 
     def _unread_text_asks_for_password(self) -> bool:

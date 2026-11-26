@@ -400,16 +400,18 @@ starts with the date and time. If you stop a log with Alt+Shift+L, it stays
 stopped until you close the tab. While the MUD is hiding your typing — which is
 how they ask for a password — the log records `***` instead of what you typed.
 
-Your soundpack's commands and your own aliases still work while the MUD hides
-your typing, as they do in MUSHclient, since some MUDs hide it at other times or
-forget to stop. When the MUD asks for a password as it starts hiding your typing,
-or while it is hiding it, everything you type until it stops goes to the MUD
-exactly as you typed it, and no alias or soundpack sees it. genericMud knows a
-password prompt by the word for password in English, Spanish, Catalan,
-Portuguese, French, German, Dutch, Swedish, Norwegian, Danish, Finnish, Polish,
-Czech, Slovak, Russian, Ukrainian, Turkish or Hungarian, or by PIN in capitals.
-At a prompt worded any other way, an alias that matches what you type will see
-it, as in MUSHclient.
+Everything you type still works while the MUD hides your typing, as it does in
+MUSHclient, since some MUDs hide it at other times or forget to stop: your
+soundpack's commands, your own aliases, stacked commands, speedwalks and slash
+commands. What you type just isn't echoed, and your log and command history leave
+it out. When the MUD asks for a password as it starts hiding your typing, or
+while it is hiding it, everything you type until it stops goes to the MUD
+exactly as you typed it: it isn't split, walked or run as a slash command, and
+no alias or soundpack sees it. genericMud knows a password prompt by the word for
+password in English, Spanish, Catalan, Portuguese, French, German, Dutch,
+Swedish, Norwegian, Danish, Finnish, Polish, Czech, Slovak, Russian, Ukrainian,
+Turkish or Hungarian, or by PIN in capitals. At a prompt worded any other way,
+what you type is handled like any other command, as in MUSHclient.
 
 A soundpack's own lines — a MUSHclient pack's `Note`, a VIPMud pack's `#Say` — are
 shown and spoken but stay out of the log unless you ask for them: **Keep soundpack

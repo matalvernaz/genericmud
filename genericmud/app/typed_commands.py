@@ -50,9 +50,7 @@ class TypedCommandsMixin:
                 # A blank line normally goes to the MUD as-is (pagers use it); with
                 # autoretype on, an empty Enter repeats the last typed input instead.
                 text = self._last_input
-            # A client command ("/alias x = a;b") must not be split on the separator.
-            commands = [text] if text.startswith(CLIENT_PREFIX) else self._split_commands(text)
-            for command in commands:
+            for command in self._typed_commands(text):
                 self._dispatch_command(command)
         elif kind == protocol.KEY:
             self._handle_key(message.get("key", ""))
@@ -97,6 +95,10 @@ class TypedCommandsMixin:
             self._client_error_spoken = True
             self.voice.speak(summary, channel=SYSTEM_CHANNEL, interrupt=False)
 
+    def _typed_commands(self, text: str) -> list[str]:
+        """The commands one typed line holds; a client command ("/alias x = a;b") stays whole."""
+        return [text] if text.startswith(CLIENT_PREFIX) else self._split_commands(text)
+
     def _split_commands(self, text: str) -> list[str]:
         """Split stacked input on the separator ("n;n;look"); an empty separator is off.
 
@@ -135,14 +137,25 @@ class TypedCommandsMixin:
                 self._log("> ***" if self._input_masked else f"> {text}")
             if self.echo_input and not self._input_masked:
                 self._echo_input(text)
+        self._run_command(text, allow_client=allow_client, hidden=self._input_masked)
+
+    def _run_command(self, text: str, *, allow_client: bool = True, hidden: bool = False) -> str:
+        """Run one command and say what took it: "client", "walk", "alias" or "mud".
+
+        A client command first, then a speedwalk, then the aliases; whatever no alias takes
+        goes to the MUD. ``hidden`` is for anything run while the MUD hides typing, what an
+        alias makes of a hidden line included, which the aliases keep out of the diagnostic log.
+        """
         if allow_client and self._client_command(text):
-            return
+            return "client"
         if self._safe_speedwalk(text) or self._speedwalk(text):
-            return
-        for line in self.engine.process_input(text):
+            return "walk"
+        outgoing = self.engine.process_input(text, hidden=hidden)
+        for line in outgoing:
             self._send(line)
             if self.nav.record(line):  # build the breadcrumb trail from manual walking
                 self._on_player_moved()
+        return "mud" if outgoing else "alias"
 
     def _echo_input(self, text: str) -> None:
         """Put what the player typed into the output too (the world's "echo input" setting).

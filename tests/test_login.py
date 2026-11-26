@@ -331,6 +331,7 @@ def test_escape_while_the_mud_hides_typing_makes_it_ordinary_again():
     # Mudlet's hidden-input box: Escape on it goes back to the ordinary command line until
     # the MUD hides input again. The way out when a MUD never sends WONT ECHO.
     app, _clock, sent, backend, _withdrawn = _timed_app()
+    app.on_telnet_event(DataReceived(b"Password:\r\n"))  # so hidden typing goes out unsplit
     _hide(app)
     app.on_ws_message({"type": "key", "key": "escape"})
     app.on_ws_message({"type": "input", "text": "look;look"})
@@ -354,6 +355,7 @@ def test_a_login_password_prompt_the_mud_never_ends_stops_hiding_after_a_minute(
     from genericmud.protocol import telnet as T
 
     app, clock, sent, backend, withdrawn = _timed_app()
+    app.on_telnet_event(DataReceived(b"Password:\r\n"))
     _hide(app)
     clock.advance(5)
     app.on_ws_message({"type": "input", "text": "hunter2"})
@@ -372,6 +374,7 @@ def test_a_password_prompt_later_in_the_session_never_times_out():
     # Changing a password in-game: only the MUD's WONT ECHO or Escape ends the hiding.
     app, clock, sent, _backend, withdrawn = _timed_app()
     clock.advance(400)
+    app.on_telnet_event(DataReceived(b"Old password:\r\n"))
     _hide(app)
     app.on_ws_message({"type": "input", "text": "old;pass"})
     clock.advance(3600)
